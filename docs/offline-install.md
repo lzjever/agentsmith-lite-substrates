@@ -110,6 +110,15 @@ validates:
 Then it writes `out/substrate.env` and `out/substrate.secrets.env`, validates the
 split contract, and clearly skips cluster mutation in `--dry-run`.
 
-Without `--dry-run`, live offline cluster mutation is not implemented yet. A P0
-skeleton fails immediately as not installable; a p1-real cache is validated but
-still not applied to a live k3s/CSI cluster by this script.
+Without `--dry-run`, a P0 skeleton fails immediately as not installable. A
+p1-real cache runs the cached `scripts/install-k3s.sh` with offline download
+guards, runs the cached `scripts/import-images.sh`, applies the cached namespace
+bootstrap with `bin/kubectl`, renders and applies the JuiceFS CSI Secret plus
+StorageClass/PVC contract, renders and applies PostgreSQL/MinIO manifests with
+digest-pinned image refs from `images/images.lock`, and finally runs
+`scripts/doctor.sh --offline-cache ...`.
+
+The p1-real installer still does not install the JuiceFS CSI driver chart, run
+`juicefs format`, initialize PostgreSQL databases, initialize MinIO buckets, or
+run a live RWX smoke. Doctor `partial` is allowed for those incomplete live
+checks; doctor `failed` still fails the install.

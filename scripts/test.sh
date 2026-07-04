@@ -33,6 +33,25 @@ assert_not_contains() {
   fi
 }
 
+first_line_number() {
+  local file="$1"
+  local needle="$2"
+  grep -Fn "${needle}" "${file}" | head -n 1 | cut -d: -f1 || true
+}
+
+assert_line_order() {
+  local file="$1"
+  shift
+  local previous=0
+  local needle line
+  for needle in "$@"; do
+    line="$(first_line_number "${file}" "${needle}")"
+    [[ -n "${line}" ]] || fail "expected ${file} to contain ordered line: ${needle}"
+    [[ "${line}" -gt "${previous}" ]] || fail "expected ${needle} to appear after previous call in ${file}"
+    previous="${line}"
+  done
+}
+
 write_valid_env_pair() {
   local dir="$1"
   mkdir -p "${dir}"
@@ -385,6 +404,17 @@ refresh_manifest_artifact_checksum() {
   mv "${tmp}" "${cache}/manifest.yaml"
 }
 
+refresh_cache_artifacts() {
+  local cache="$1"
+  shift
+  local path
+  for path in "$@"; do
+    refresh_checksum_entry "${cache}" "${path}"
+    refresh_manifest_artifact_checksum "${cache}" "${path}"
+  done
+  refresh_manifest_checksum_entry "${cache}"
+}
+
 remove_checksum_entry() {
   local cache="$1"
   local path="$2"
@@ -475,9 +505,114 @@ replace_images_lock_archive_and_sha() {
   mv "${tmp}" "${cache}/images/images.lock"
 }
 
+replace_images_lock_image_ref() {
+  local cache="$1"
+  local name="$2"
+  local image_ref="$3"
+  local tmp="${cache}/images/images.lock.tmp"
+  awk -v wanted="${name}" -v replacement="${image_ref}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", value)
+      in_wanted=(trim(value) == wanted)
+      print
+      next
+    }
+    in_wanted && /^[[:space:]]*image:[[:space:]]*/ {
+      sub(/image:[[:space:]]*.*/, "image: " replacement)
+      in_wanted=0
+      print
+      next
+    }
+    { print }
+  ' "${cache}/images/images.lock" >"${tmp}"
+  mv "${tmp}" "${cache}/images/images.lock"
+}
+
 file_url() {
   local file="$1"
   printf 'file://%s' "${file}"
+}
+
+write_p1_install_chain_fakes() {
+  local cache="$1"
+
+  cat >"${cache}/scripts/install-k3s.sh" <<'EOF_INSTALL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${CALL_LOG:?CALL_LOG is required}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cache_dir="$(cd "${script_dir}/.." && pwd)"
+{
+  printf 'install-k3s\n'
+  printf 'INSTALL_K3S_SKIP_DOWNLOAD=%s\n' "${INSTALL_K3S_SKIP_DOWNLOAD:-}"
+  printf 'INSTALL_K3S_EXEC=%s\n' "${INSTALL_K3S_EXEC:-}"
+  printf 'INSTALL_K3S_BIN_DIR=%s\n' "${INSTALL_K3S_BIN_DIR:-}"
+  printf 'K3S_BINARY_PATH=%s\n' "${K3S_BINARY_PATH:-}"
+} >>"${CALL_LOG}"
+[[ "${INSTALL_K3S_SKIP_DOWNLOAD:-}" == "true" ]] || exit 31
+[[ "${K3S_BINARY_PATH:-}" == "${cache_dir}/bin/k3s" ]] || exit 32
+case "${INSTALL_K3S_EXEC:-}" in
+  *"server --write-kubeconfig "*" --write-kubeconfig-mode 600"*) ;;
+  *) exit 33 ;;
+esac
+EOF_INSTALL
+
+  cat >"${cache}/scripts/import-images.sh" <<'EOF_IMPORT'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${CALL_LOG:?CALL_LOG is required}"
+printf 'import-images args=%s\n' "$*" >>"${CALL_LOG}"
+case " $* " in
+  *" --dry-run "*) exit 41 ;;
+esac
+EOF_IMPORT
+
+  cat >"${cache}/bin/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${CALL_LOG:?CALL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${CALL_LOG}"
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "-f" ]]; then
+    [[ -f "${arg}" ]] || exit 51
+  fi
+  previous="${arg}"
+done
+exit 0
+EOF_KUBECTL
+
+  chmod +x "${cache}/scripts/install-k3s.sh" "${cache}/scripts/import-images.sh" "${cache}/bin/kubectl"
+  refresh_cache_artifacts "${cache}" "scripts/install-k3s.sh" "scripts/import-images.sh" "bin/kubectl"
+}
+
+write_forbidden_path_bin() {
+  local dir="$1"
+  mkdir -p "${dir}"
+  local tool
+  for tool in kubectl curl wget docker helm; do
+    cat >"${dir}/${tool}" <<'EOF_FORBIDDEN'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${FORBIDDEN_LOG:?FORBIDDEN_LOG is required}"
+printf 'forbidden:%s\n' "$(basename "$0")" >>"${FORBIDDEN_LOG}"
+exit 99
+EOF_FORBIDDEN
+    chmod +x "${dir}/${tool}"
+  done
+
+  cat >"${dir}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${dir}/psql"
 }
 
 write_downloader_fixtures() {
@@ -748,6 +883,114 @@ test_p1_real_offline_cache_requires_artifacts_and_archive_sha() {
   assert_contains "${out}" "offline cache contract validated (p1-real)"
   assert_contains "${out}" "validated p1-real cache contract"
   pass "S5 p1-real offline-cache contract requires k3s, kubectl, airgap, CSI, dependency images, and archive sha"
+}
+
+test_p0_contract_offline_install_non_dry_run_still_fails() {
+  local cache="${TMP_DIR}/offline-cache-p0-live"
+  local config="${TMP_DIR}/substrates-p0-live.yaml"
+  local output="${TMP_DIR}/offline-p0-live-out"
+  local out="${TMP_DIR}/install-offline-p0-live.out"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline performed a non-dry-run install from a p0-contract cache"
+  fi
+  assert_contains "${out}" "cannot perform live offline install from a P0 static cache skeleton"
+  pass "P1 offline installer still rejects p0-contract caches outside dry-run"
+}
+
+test_p1_real_offline_install_dry_run_skips_cluster_mutation() {
+  local cache="${TMP_DIR}/offline-cache-p1-dry-run-no-mutate"
+  local config="${TMP_DIR}/substrates-p1-dry-run-no-mutate.yaml"
+  local output="${TMP_DIR}/offline-p1-dry-run-no-mutate-out"
+  local out="${TMP_DIR}/install-offline-p1-dry-run-no-mutate.out"
+  local call_log="${TMP_DIR}/p1-dry-run-call.log"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}"
+
+  CALL_LOG="${call_log}" "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1
+  if [[ -s "${call_log}" ]]; then
+    fail "p1-real dry-run called cached mutation artifacts"
+  fi
+  assert_contains "${out}" "dry-run: validated p1-real cache contract; skipped cluster mutation"
+  pass "P1 offline installer dry-run validates p1-real cache without cluster mutation"
+}
+
+test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
+  local cache="${TMP_DIR}/offline-cache-p1-live"
+  local config="${TMP_DIR}/substrates-p1-live.yaml"
+  local output="${TMP_DIR}/offline-p1-live-out"
+  local out="${TMP_DIR}/install-offline-p1-live.out"
+  local call_log="${TMP_DIR}/p1-live-call.log"
+  local forbidden_bin="${TMP_DIR}/p1-live-path-bin"
+  local forbidden_log="${TMP_DIR}/p1-live-forbidden.log"
+  local airgap_dir="${TMP_DIR}/p1-live-airgap"
+  local rendered="${output}/rendered/offline-install"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_forbidden_path_bin "${forbidden_bin}"
+  write_config "${config}"
+
+  CALL_LOG="${call_log}" \
+    FORBIDDEN_LOG="${forbidden_log}" \
+    K3S_AIRGAP_DIR="${airgap_dir}" \
+    PATH="${forbidden_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
+      printf '%s\n' "install-offline output:" >&2
+      sed -n '1,220p' "${out}" >&2
+      fail "p1-real non-dry-run install did not complete"
+    }
+
+  [[ ! -s "${forbidden_log}" ]] || fail "install-offline used a forbidden PATH/public-network tool: $(<"${forbidden_log}")"
+  test -f "${output}/substrate.env" || fail "install-offline did not write substrate.env"
+  test -f "${output}/substrate.secrets.env" || fail "install-offline did not write substrate.secrets.env"
+  test "$(stat -c '%a' "${output}/substrate.secrets.env")" = "600" || fail "install-offline did not chmod substrate.secrets.env to 0600"
+  test -f "${rendered}/juicefs-secret.yaml" || fail "install-offline did not render JuiceFS Secret"
+  test "$(stat -c '%a' "${rendered}/juicefs-secret.yaml")" = "600" || fail "install-offline did not keep rendered JuiceFS Secret owner-only"
+
+  assert_line_order "${call_log}" \
+    "install-k3s" \
+    "import-images args=" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-secret.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml"
+  assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
+  assert_contains "${call_log}" "INSTALL_K3S_EXEC=server --write-kubeconfig ${output}/kubeconfig --write-kubeconfig-mode 600"
+  assert_contains "${call_log}" "K3S_BINARY_PATH=${cache}/bin/k3s"
+  test -f "${airgap_dir}/k3s-airgap-images-amd64.tar.zst" || fail "install-offline did not copy k3s airgap archive into K3S_AIRGAP_DIR"
+  cmp -s "${cache}/images/k3s/k3s-airgap-images-amd64.tar.zst" "${airgap_dir}/k3s-airgap-images-amd64.tar.zst" \
+    || fail "copied k3s airgap archive differs from cached artifact"
+
+  assert_not_contains "${rendered}/postgres.yaml" "image: postgres:16"
+  assert_not_contains "${rendered}/minio.yaml" "image: minio/minio:"
+  assert_contains "${rendered}/postgres.yaml" "image: docker.io/library/postgres@sha256:"
+  assert_contains "${rendered}/minio.yaml" "image: quay.io/minio/minio@sha256:"
+  assert_contains "${out}" "doctor reported partial"
+  pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
+}
+
+test_p1_real_offline_install_rejects_invalid_cache_before_mutation() {
+  local cache="${TMP_DIR}/offline-cache-p1-invalid-before-mutate"
+  local config="${TMP_DIR}/substrates-p1-invalid-before-mutate.yaml"
+  local output="${TMP_DIR}/offline-p1-invalid-before-mutate-out"
+  local out="${TMP_DIR}/install-offline-p1-invalid-before-mutate.out"
+  local call_log="${TMP_DIR}/p1-invalid-before-mutate-call.log"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}"
+  replace_images_lock_image_ref "${cache}" "postgres" "docker.io/library/postgres:16"
+  refresh_cache_artifacts "${cache}" "images/images.lock"
+
+  if CALL_LOG="${call_log}" "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline accepted an invalid p1-real cache before non-dry-run mutation"
+  fi
+  [[ ! -s "${call_log}" ]] || fail "install-offline mutated before rejecting invalid p1-real cache"
+  assert_contains "${out}" "images.lock image is not digest-pinned"
+  pass "P1 offline installer rejects invalid cache before cached mutation chain starts"
 }
 
 test_p1_real_offline_cache_rejects_missing_image_archive_sha() {
@@ -1058,6 +1301,10 @@ test_p1_real_offline_cache_rejects_images_lock_archive_path_escape
 test_offline_cache_scans_urls_before_cache_mode_errors_without_leaking
 test_offline_cache_rejects_url_suffix_fields_with_file_urls
 test_p1_real_offline_cache_requires_artifacts_and_archive_sha
+test_p0_contract_offline_install_non_dry_run_still_fails
+test_p1_real_offline_install_dry_run_skips_cluster_mutation
+test_p1_real_offline_install_non_dry_run_runs_cached_chain
+test_p1_real_offline_install_rejects_invalid_cache_before_mutation
 test_p1_real_offline_cache_rejects_missing_image_archive_sha
 test_p1_real_offline_cache_rejects_public_download_references_in_images_lock
 test_p1_real_offline_cache_rejects_missing_bootstrap_artifact_entries

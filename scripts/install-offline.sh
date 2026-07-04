@@ -8,6 +8,8 @@ source "${ROOT_DIR}/scripts/lib/config.sh"
 source "${ROOT_DIR}/scripts/lib/env.sh"
 # shellcheck source=lib/offline.sh
 source "${ROOT_DIR}/scripts/lib/offline.sh"
+# shellcheck source=lib/offline_install.sh
+source "${ROOT_DIR}/scripts/lib/offline_install.sh"
 
 usage() {
   cat <<'EOF_USAGE'
@@ -17,7 +19,8 @@ Validates an offline substrate cache, writes the normalized env/secrets contract
 and validates the result. It never downloads from the public internet.
 
 In --dry-run mode this accepts either a P0 static contract skeleton or a p1-real
-cache. Without --dry-run, live offline cluster mutation is not implemented yet.
+cache and skips cluster mutation. Without --dry-run, only p1-real caches are
+installable.
 EOF_USAGE
 }
 
@@ -75,7 +78,7 @@ if [[ "${dry_run}" == "true" ]]; then
   fi
 else
   if [[ "${cache_mode}" == "p0-contract" ]]; then
-    die "cannot perform live offline install from a P0 static cache skeleton; provide cacheMode: p1-real and rerun when live mutation is implemented"
+    die "cannot perform live offline install from a P0 static cache skeleton; provide cacheMode: p1-real"
   fi
-  die "live offline cluster mutation is not implemented yet; p1-real cache was validated only"
+  run_p1_real_offline_install "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}"
 fi

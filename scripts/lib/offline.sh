@@ -145,6 +145,33 @@ require_image_lock_name() {
   fi
 }
 
+images_lock_image_ref() {
+  local lock_file="$1"
+  local name="$2"
+  awk -v wanted="${name}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", value)
+      in_wanted=(trim(value) == wanted)
+      next
+    }
+    in_wanted && /^[[:space:]]*image:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*image:[[:space:]]*/, "", value)
+      print trim(value)
+      found=1
+      exit 0
+    }
+    END { if (!found) exit 1 }
+  ' "${lock_file}"
+}
+
 validate_manifest_artifact_checksums() {
   local cache_dir="$1"
   local manifest_file path sha kind file actual

@@ -17,11 +17,15 @@ This first public-ready skeleton is validate-first:
   p1-real caches
 - validates p1-real manifest/checksum/images lock contracts, including required
   bootstrap/import artifacts
+- performs the p1-real non-dry-run offline chain with cached k3s installer,
+  cached OCI import helper, cached kubectl applies, and digest-pinned
+  PostgreSQL/MinIO manifests
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - runs a substrate-only doctor for static dry-run checks and partial live checks
 
-It does not yet mutate a cluster by installing k3s, PostgreSQL, MinIO, or
-JuiceFS CSI. Scripts say that clearly when they skip live mutation.
+It does not yet install the JuiceFS CSI driver chart, run `juicefs format`,
+initialize PostgreSQL databases, initialize MinIO buckets, or run a live RWX
+smoke. Doctor may report `partial` for those still-open live checks.
 
 ## Quick Start
 

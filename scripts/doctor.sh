@@ -112,17 +112,29 @@ juicefs_pvc_name="$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)"
 kubectl_args=()
 [[ -n "${kubeconfig_path}" ]] && kubectl_args+=(--kubeconfig "${kubeconfig_path}")
 [[ -n "${kube_context}" ]] && kubectl_args+=(--context "${kube_context}")
+kubectl_cmd=()
 kubectl_available=false
 cluster_reachable=false
 
 if [[ "${dry_run}" == "true" ]]; then
   add_check "k8s" "passed" "dry-run static: namespace is configured as ${namespace}"
 else
-  if ! command -v kubectl >/dev/null 2>&1; then
-    add_check "k8s" "partial" "kubectl not found; live namespace reachability was not verified"
-  else
+  if [[ -n "${KUBECTL_BIN:-}" ]]; then
+    if [[ -x "${KUBECTL_BIN}" ]]; then
+      kubectl_cmd=("${KUBECTL_BIN}")
+      kubectl_available=true
+    else
+      add_check "k8s" "failed" "configured KUBECTL_BIN is not executable"
+    fi
+  elif command -v kubectl >/dev/null 2>&1; then
+    kubectl_cmd=(kubectl)
     kubectl_available=true
-    if kubectl "${kubectl_args[@]}" get namespace "${namespace}" >/dev/null 2>&1; then
+  else
+    add_check "k8s" "partial" "kubectl not found; live namespace reachability was not verified"
+  fi
+
+  if [[ "${kubectl_available}" == "true" ]]; then
+    if "${kubectl_cmd[@]}" "${kubectl_args[@]}" get namespace "${namespace}" >/dev/null 2>&1; then
       cluster_reachable=true
       add_check "k8s" "passed" "namespace ${namespace} is reachable"
     else
@@ -169,9 +181,9 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
     elif [[ "${cluster_reachable}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "cluster namespace is not reachable; live JuiceFS resources were not verified" "substrate-csi-secret"
       add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
-    elif kubectl "${kubectl_args[@]}" get storageclass "${juicefs_storage_class}" >/dev/null 2>&1 \
-      && kubectl "${kubectl_args[@]}" -n "${namespace}" get secret "${juicefs_secret_name}" >/dev/null 2>&1 \
-      && kubectl "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" >/dev/null 2>&1; then
+    elif "${kubectl_cmd[@]}" "${kubectl_args[@]}" get storageclass "${juicefs_storage_class}" >/dev/null 2>&1 \
+      && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get secret "${juicefs_secret_name}" >/dev/null 2>&1 \
+      && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" >/dev/null 2>&1; then
       add_check "juicefs-csi" "passed" "live JuiceFS StorageClass, Secret, and PVC are present" "substrate-csi-secret"
       add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
     else

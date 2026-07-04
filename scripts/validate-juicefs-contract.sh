@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=lib/env.sh
-source "${ROOT_DIR}/scripts/lib/env.sh"
+# shellcheck source=lib/juicefs.sh
+source "${ROOT_DIR}/scripts/lib/juicefs.sh"
 
 usage() {
   cat <<'EOF_USAGE'
@@ -50,41 +50,9 @@ done
 [[ -n "${secrets_file}" ]] || die "--secrets is required"
 
 validate_env_contract "${env_file}" "${secrets_file}" >/dev/null
-need_dir "${manifest_dir}"
-need_file "${manifest_dir}/secret.example.yaml"
-need_file "${manifest_dir}/storageclass-pvc.yaml"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
-
-render_template() {
-  local input="$1"
-  local output="$2"
-  local content key value
-  content="$(<"${input}")"
-  for key in \
-    KUBE_NAMESPACE \
-    JUICEFS_VOLUME_NAME \
-    JUICEFS_BUCKET \
-    JUICEFS_SECRET_NAME \
-    JUICEFS_CSI_DRIVER \
-    JUICEFS_STORAGE_CLASS \
-    JUICEFS_PVC_NAME \
-    JUICEFS_META_URL \
-    S3_ACCESS_KEY \
-    S3_SECRET_KEY; do
-    value="$(env_value_or_empty "${env_file}" "${key}")"
-    if [[ -z "${value}" ]]; then
-      value="$(env_value_or_empty "${secrets_file}" "${key}")"
-    fi
-    content="${content//\$\{${key}\}/${value}}"
-  done
-  if grep -Eq '\$\{[A-Z0-9_]+\}' <<<"${content}"; then
-    die "JuiceFS manifest template has unresolved placeholders after rendering"
-  fi
-  umask 077
-  printf '%s\n' "${content}" >"${output}"
-}
 
 require_line() {
   local file="$1"
@@ -95,8 +63,9 @@ require_line() {
 
 secret_rendered="${tmp_dir}/secret.yaml"
 storage_rendered="${tmp_dir}/storageclass-pvc.yaml"
-render_template "${manifest_dir}/secret.example.yaml" "${secret_rendered}"
-render_template "${manifest_dir}/storageclass-pvc.yaml" "${storage_rendered}"
+render_juicefs_contract "${env_file}" "${secrets_file}" "${manifest_dir}" "${tmp_dir}"
+mv "${tmp_dir}/juicefs-secret.yaml" "${secret_rendered}"
+mv "${tmp_dir}/juicefs-storageclass-pvc.yaml" "${storage_rendered}"
 
 namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
 volume_name="$(env_value_or_empty "${env_file}" JUICEFS_VOLUME_NAME)"
