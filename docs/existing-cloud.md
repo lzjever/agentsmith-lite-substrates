@@ -24,3 +24,8 @@ The generated contract is the same as self-hosted mode. S3 and JuiceFS raw
 credentials remain substrate/CSI scoped. App deployment should render only the
 product-secret subset and should reference the existing PVC and CSI Secret by
 name.
+
+Existing-cloud mode does not create or mutate a self-hosted PostgreSQL Secret or
+StatefulSet. Live `doctor.sh` validates both `POSTGRES_APP_URL` and
+`JUICEFS_META_URL` with `psql` when it is available; otherwise those database
+checks are reported as `partial`, not passed.

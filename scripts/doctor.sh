@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/env.sh"
 # shellcheck source=lib/offline.sh
 source "${ROOT_DIR}/scripts/lib/offline.sh"
+# shellcheck source=lib/postgres.sh
+source "${ROOT_DIR}/scripts/lib/postgres.sh"
 
 usage() {
   cat <<'EOF_USAGE'
@@ -88,6 +90,50 @@ add_check() {
   printf '%s: %s - %s\n' "${name}" "${status}" "${message}"
 }
 
+doctor_check_postgres_url() {
+  local name="$1"
+  local key="$2"
+  local url="$3"
+  local passed_message="$4"
+  local failed_message="$5"
+  local partial_message="$6"
+  local prefix="doctor_${name//-/_}"
+
+  if [[ ! "${url}" =~ ^postgres(ql)?:// ]]; then
+    add_check "${name}" "failed" "${key} shape is invalid"
+    return 0
+  fi
+
+  if ! postgres_parse_url "${url}" "${key}" "${prefix}" >/dev/null 2>&1; then
+    add_check "${name}" "failed" "${key} is invalid or incomplete"
+    return 0
+  fi
+
+  if [[ "${dry_run}" == "true" ]]; then
+    add_check "${name}" "passed" "dry-run static: ${key} shape is valid; skipped live query"
+  elif command -v psql >/dev/null 2>&1; then
+    local password_var host_var port_var user_var database_var
+    local password host port user database
+    password_var="${prefix}_PASSWORD"
+    host_var="${prefix}_HOST"
+    port_var="${prefix}_PORT"
+    user_var="${prefix}_USER"
+    database_var="${prefix}_DATABASE"
+    password="${!password_var}"
+    host="${!host_var}"
+    port="${!port_var}"
+    user="${!user_var}"
+    database="${!database_var}"
+    if PGPASSWORD="${password}" psql -h "${host}" -p "${port}" -U "${user}" -d "${database}" -Atc 'select 1' >/dev/null 2>&1; then
+      add_check "${name}" "passed" "${passed_message}"
+    else
+      add_check "${name}" "failed" "${failed_message}"
+    fi
+  else
+    add_check "${name}" "partial" "${partial_message}"
+  fi
+}
+
 if validate_output="$(validate_env_contract "${env_file}" "${secrets_file}" 2>&1)"; then
   printf '%s\n' "${validate_output}"
   add_check "env/secrets" "passed" "split substrate env contract is valid; secret values are redacted" "substrate-secret-boundary"
@@ -143,21 +189,21 @@ else
   fi
 fi
 
-if [[ "${postgres_url}" =~ ^postgres(ql)?:// ]]; then
-  if [[ "${dry_run}" == "true" ]]; then
-    add_check "postgres" "passed" "dry-run static: POSTGRES_APP_URL shape is valid; skipped live query"
-  elif command -v psql >/dev/null 2>&1; then
-    if PGPASSWORD='' psql "${postgres_url}" -Atc 'select 1' >/dev/null 2>&1; then
-      add_check "postgres" "passed" "product database accepted a simple query"
-    else
-      add_check "postgres" "failed" "product database did not accept a simple query"
-    fi
-  else
-    add_check "postgres" "partial" "psql not found; product database connectivity was not verified"
-  fi
-else
-  add_check "postgres" "failed" "POSTGRES_APP_URL shape is invalid"
-fi
+doctor_check_postgres_url \
+  "postgres-app" \
+  "POSTGRES_APP_URL" \
+  "${postgres_url}" \
+  "app database accepted a simple query" \
+  "app database did not accept a simple query" \
+  "psql not found; app database connectivity was not verified"
+
+doctor_check_postgres_url \
+  "postgres-juicefs-meta" \
+  "JUICEFS_META_URL" \
+  "${juicefs_meta}" \
+  "JuiceFS metadata database accepted a simple query" \
+  "JuiceFS metadata database did not accept a simple query" \
+  "psql not found; JuiceFS metadata database connectivity was not verified"
 
 if [[ -n "${s3_endpoint}" && -n "${s3_bucket}" && -n "${s3_access}" && -n "${s3_secret}" ]]; then
   if [[ "${dry_run}" == "true" ]]; then

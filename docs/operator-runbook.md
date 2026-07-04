@@ -41,8 +41,9 @@ Current behavior is intentionally layered:
   namespace, PostgreSQL URL shape, S3 endpoint/bucket/key presence, rendered
   JuiceFS Secret/StorageClass/PVC, RWX access mode, and optional offline cache.
 - `doctor.sh` without `--dry-run` attempts live checks where implemented:
-  kubectl namespace reachability, PostgreSQL `select 1`, and Kubernetes
-  presence checks for JuiceFS StorageClass/Secret/PVC.
+  kubectl namespace reachability, PostgreSQL `select 1` for both
+  `POSTGRES_APP_URL` and `JUICEFS_META_URL`, and Kubernetes presence checks for
+  JuiceFS StorageClass/Secret/PVC.
 - Live S3 read/write/delete, full JuiceFS CSI behavior, and two-pod RWX smoke
   are not fully implemented in this repo yet. When those checks cannot be
   verified, doctor reports `partial` or `failed`; skipped live checks are not

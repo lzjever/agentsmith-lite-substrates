@@ -35,7 +35,10 @@ spec:
               name: postgres
           env:
             - name: POSTGRES_DB
-              value: agentsmith_lite
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: database
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
@@ -46,6 +49,11 @@ spec:
                 secretKeyRef:
                   name: agentsmith-lite-postgres
                   key: password
+            - name: JUICEFS_META_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: juicefsPassword
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data

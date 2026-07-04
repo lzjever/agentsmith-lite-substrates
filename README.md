@@ -20,12 +20,15 @@ This first public-ready skeleton is validate-first:
 - performs the p1-real non-dry-run offline chain with cached k3s installer,
   cached OCI import helper, cached kubectl applies, and digest-pinned
   PostgreSQL/MinIO manifests
+- renders the self-hosted PostgreSQL Secret, waits for `statefulset/postgres`,
+  and initializes/verifies the app DB plus JuiceFS metadata DB/user before any
+  future `juicefs format`
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - runs a substrate-only doctor for static dry-run checks and partial live checks
 
 It does not yet install the JuiceFS CSI driver chart, run `juicefs format`,
-initialize PostgreSQL databases, initialize MinIO buckets, or run a live RWX
-smoke. Doctor may report `partial` for those still-open live checks.
+initialize MinIO buckets, or run a live RWX smoke. Doctor may report `partial`
+for those still-open live checks.
 
 ## Quick Start
 
@@ -80,7 +83,8 @@ The product-secret subset is `POSTGRES_APP_URL`, `APP_SESSION_SECRET`,
 `BUILTIN_ADMIN_INITIAL_PASSWORD`, and OIDC/admin secrets when enabled.
 `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and `JUICEFS_META_URL` are substrate/CSI scoped
 only. They are used by substrate setup and doctor checks to create or validate
-the JuiceFS CSI Secret; they must not be projected into app workload env.
+the JuiceFS CSI Secret and metadata database; they must not be projected into
+app workload env.
 
 ## Main Commands
 

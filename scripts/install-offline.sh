@@ -67,6 +67,7 @@ done
 
 validate_offline_cache "${cache_dir}"
 cache_mode="$(offline_cache_mode "${cache_dir}")"
+install_mode="$(config_value "${config_file}" "mode" "self-hosted")"
 write_env_contract_from_config "${config_file}" "${output_dir}" "install-offline" "${force}"
 validate_env_contract "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env"
 
@@ -80,5 +81,15 @@ else
   if [[ "${cache_mode}" == "p0-contract" ]]; then
     die "cannot perform live offline install from a P0 static cache skeleton; provide cacheMode: p1-real"
   fi
-  run_p1_real_offline_install "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}"
+  case "${install_mode}" in
+    self-hosted)
+      run_p1_real_offline_install "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}"
+      ;;
+    existing-cloud)
+      run_p1_real_existing_cloud_validation "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}"
+      ;;
+    *)
+      die "mode must be self-hosted or existing-cloud"
+      ;;
+  esac
 fi

@@ -20,7 +20,7 @@ pass() {
 assert_contains() {
   local file="$1"
   local needle="$2"
-  if ! grep -Fq "${needle}" "${file}"; then
+  if ! grep -Fq -- "${needle}" "${file}"; then
     fail "expected ${file} to contain: ${needle}"
   fi
 }
@@ -28,7 +28,7 @@ assert_contains() {
 assert_not_contains() {
   local file="$1"
   local needle="$2"
-  if grep -Fq "${needle}" "${file}"; then
+  if grep -Fq -- "${needle}" "${file}"; then
     fail "expected ${file} to redact: ${needle}"
   fi
 }
@@ -36,7 +36,7 @@ assert_not_contains() {
 first_line_number() {
   local file="$1"
   local needle="$2"
-  grep -Fn "${needle}" "${file}" | head -n 1 | cut -d: -f1 || true
+  grep -Fn -- "${needle}" "${file}" | head -n 1 | cut -d: -f1 || true
 }
 
 assert_line_order() {
@@ -136,6 +136,38 @@ ingress:
   installDevIngress: true
 offline:
   registry: registry.local:5000
+EOF_CONFIG
+}
+
+write_existing_cloud_config() {
+  local file="$1"
+  cat >"${file}" <<'EOF_CONFIG'
+mode: existing-cloud
+kubernetes:
+  namespace: agentsmith
+  kubeconfigPath: out/kubeconfig
+  context: production
+postgres:
+  appUrlFromEnv: POSTGRES_APP_URL
+  juicefsMetaUrlFromEnv: JUICEFS_META_URL
+objectStorage:
+  provider: s3
+  endpoint: https://s3.us-east-1.amazonaws.com
+  region: us-east-1
+  bucket: agentsmith-lite-files
+  accessKeyFromEnv: S3_ACCESS_KEY
+  secretKeyFromEnv: S3_SECRET_KEY
+juicefs:
+  volumeName: agentsmith-lite-files
+  secretName: agentsmith-lite-juicefs
+  csiDriver: csi.juicefs.com
+  storageClass: agentsmith-lite-juicefs-rwx
+  pvcName: agentsmith-lite-files
+  mountRoot: /agentsmith-lite
+auth:
+  mode: builtin_admin
+ingress:
+  publicBaseUrl: https://agentsmith.example.com
 EOF_CONFIG
 }
 
@@ -579,6 +611,28 @@ EOF_IMPORT
 set -euo pipefail
 : "${CALL_LOG:?CALL_LOG is required}"
 printf 'kubectl %s\n' "$*" >>"${CALL_LOG}"
+case "$*" in
+  *postgresql://*|*postgres://*|*postgres-secret-value*|*juicefs-secret-value*) exit 54 ;;
+esac
+is_exec=false
+has_stdin=false
+for arg in "$@"; do
+  if [[ "${arg}" == "exec" ]]; then
+    is_exec=true
+  elif [[ "${arg}" == "-i" ]]; then
+    has_stdin=true
+  fi
+done
+if [[ "${is_exec}" == "true" && "${has_stdin}" == "true" ]]; then
+  : "${EXEC_STDIN_DIR:?EXEC_STDIN_DIR is required for kubectl exec -i fakes}"
+  mkdir -p "${EXEC_STDIN_DIR}"
+  umask 077
+  stdin_file="$(mktemp "${EXEC_STDIN_DIR}/kubectl-exec-stdin.XXXXXX.sql")"
+  cat >"${stdin_file}"
+  chmod 0600 "${stdin_file}"
+  bytes="$(wc -c <"${stdin_file}" | tr -d '[:space:]')"
+  printf 'kubectl exec stdin bytes=%s file=%s\n' "${bytes}" "${stdin_file}" >>"${CALL_LOG}"
+fi
 previous=""
 for arg in "$@"; do
   if [[ "${previous}" == "-f" ]]; then
@@ -927,6 +981,8 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   local forbidden_bin="${TMP_DIR}/p1-live-path-bin"
   local forbidden_log="${TMP_DIR}/p1-live-forbidden.log"
   local airgap_dir="${TMP_DIR}/p1-live-airgap"
+  local exec_stdin_dir="${TMP_DIR}/p1-live-exec-stdin"
+  local report="${output}/doctor-report.json"
   local rendered="${output}/rendered/offline-install"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
@@ -934,8 +990,11 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   write_config "${config}"
 
   CALL_LOG="${call_log}" \
+    EXEC_STDIN_DIR="${exec_stdin_dir}" \
     FORBIDDEN_LOG="${forbidden_log}" \
     K3S_AIRGAP_DIR="${airgap_dir}" \
+    POSTGRES_PASSWORD="postgres-secret-value" \
+    JUICEFS_META_PASSWORD="juicefs-secret-value" \
     PATH="${forbidden_bin}:${PATH}" \
     "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
       printf '%s\n' "install-offline output:" >&2
@@ -949,6 +1008,15 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   test "$(stat -c '%a' "${output}/substrate.secrets.env")" = "600" || fail "install-offline did not chmod substrate.secrets.env to 0600"
   test -f "${rendered}/juicefs-secret.yaml" || fail "install-offline did not render JuiceFS Secret"
   test "$(stat -c '%a' "${rendered}/juicefs-secret.yaml")" = "600" || fail "install-offline did not keep rendered JuiceFS Secret owner-only"
+  test -f "${rendered}/postgres-secret.yaml" || fail "install-offline did not render Postgres Secret"
+  test "$(stat -c '%a' "${rendered}/postgres-secret.yaml")" = "600" || fail "install-offline did not keep rendered Postgres Secret owner-only"
+  assert_contains "${rendered}/postgres-secret.yaml" "name: agentsmith-lite-postgres"
+  assert_contains "${rendered}/postgres-secret.yaml" "username:"
+  assert_contains "${rendered}/postgres-secret.yaml" "password:"
+  assert_contains "${rendered}/postgres-secret.yaml" "database:"
+  assert_contains "${rendered}/postgres-secret.yaml" "juicefsUsername:"
+  assert_contains "${rendered}/postgres-secret.yaml" "juicefsPassword:"
+  assert_contains "${rendered}/postgres-secret.yaml" "juicefsDatabase:"
 
   assert_line_order "${call_log}" \
     "install-k3s" \
@@ -956,11 +1024,38 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/postgres --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith exec -i statefulset/postgres -- sh -c psql -v ON_ERROR_STOP=1 -U \"\${POSTGRES_USER}\" -d postgres" \
+    "kubectl exec stdin bytes=" \
+    "POSTGRES_PASSWORD postgres.agentsmith.svc.cluster.local 5432 agentsmith agentsmith_lite" \
+    "JUICEFS_META_PASSWORD postgres.agentsmith.svc.cluster.local 5432 juicefs juicefs_meta" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml"
+  assert_contains "${call_log}" "-Atc \"select 1\""
   assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
   assert_contains "${call_log}" "INSTALL_K3S_EXEC=server --write-kubeconfig ${output}/kubeconfig --write-kubeconfig-mode 600"
   assert_contains "${call_log}" "K3S_BINARY_PATH=${cache}/bin/k3s"
+  local exec_stdin_files=()
+  local exec_stdin_file bootstrap_stdin_file=""
+  mapfile -t exec_stdin_files < <(find "${exec_stdin_dir}" -type f -name 'kubectl-exec-stdin.*.sql' -print | sort)
+  [[ "${#exec_stdin_files[@]}" -eq 3 ]] || fail "expected bootstrap plus app/JuiceFS database verification exec stdin captures, got ${#exec_stdin_files[@]}"
+  for exec_stdin_file in "${exec_stdin_files[@]}"; do
+    test "$(stat -c '%a' "${exec_stdin_file}")" = "600" || fail "captured exec stdin SQL was not owner-only"
+    assert_not_contains "${exec_stdin_file}" "postgresql://"
+    assert_not_contains "${exec_stdin_file}" "postgres://"
+    if grep -Fq "CREATE DATABASE" "${exec_stdin_file}"; then
+      bootstrap_stdin_file="${exec_stdin_file}"
+    else
+      test "$(stat -c '%s' "${exec_stdin_file}")" = "0" || fail "database verification exec stdin should not carry SQL or secrets"
+    fi
+  done
+  [[ -n "${bootstrap_stdin_file}" ]] || fail "kubectl exec -i did not receive bootstrap SQL on stdin"
+  assert_contains "${bootstrap_stdin_file}" "CREATE DATABASE"
+  assert_contains "${bootstrap_stdin_file}" "agentsmith_lite"
+  assert_contains "${bootstrap_stdin_file}" "juicefs_meta"
+  assert_contains "${bootstrap_stdin_file}" "postgres-secret-value"
+  assert_contains "${bootstrap_stdin_file}" "juicefs-secret-value"
   test -f "${airgap_dir}/k3s-airgap-images-amd64.tar.zst" || fail "install-offline did not copy k3s airgap archive into K3S_AIRGAP_DIR"
   cmp -s "${cache}/images/k3s/k3s-airgap-images-amd64.tar.zst" "${airgap_dir}/k3s-airgap-images-amd64.tar.zst" \
     || fail "copied k3s airgap archive differs from cached artifact"
@@ -968,8 +1063,18 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${rendered}/postgres.yaml" "image: postgres:16"
   assert_not_contains "${rendered}/minio.yaml" "image: minio/minio:"
   assert_contains "${rendered}/postgres.yaml" "image: docker.io/library/postgres@sha256:"
+  assert_contains "${rendered}/postgres.yaml" "name: JUICEFS_META_PASSWORD"
+  assert_contains "${rendered}/postgres.yaml" "key: juicefsPassword"
   assert_contains "${rendered}/minio.yaml" "image: quay.io/minio/minio@sha256:"
   assert_contains "${out}" "doctor reported partial"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "postgresql://"
+  assert_not_contains "${call_log}" "postgres://"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
 }
 
@@ -991,6 +1096,94 @@ test_p1_real_offline_install_rejects_invalid_cache_before_mutation() {
   [[ ! -s "${call_log}" ]] || fail "install-offline mutated before rejecting invalid p1-real cache"
   assert_contains "${out}" "images.lock image is not digest-pinned"
   pass "P1 offline installer rejects invalid cache before cached mutation chain starts"
+}
+
+test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation() {
+  local cache="${TMP_DIR}/offline-cache-p1-mismatched-postgres"
+  local config="${TMP_DIR}/substrates-p1-mismatched-postgres.yaml"
+  local output="${TMP_DIR}/offline-p1-mismatched-postgres-out"
+  local out="${TMP_DIR}/install-offline-p1-mismatched-postgres.out"
+  local call_log="${TMP_DIR}/p1-mismatched-postgres-call.log"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}"
+
+  if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@postgres.agentsmith.svc.cluster.local:5432/agentsmith_lite" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@other-postgres.agentsmith.svc.cluster.local:5432/juicefs_meta" \
+    CALL_LOG="${call_log}" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline accepted mismatched self-hosted Postgres URL hosts"
+  fi
+  [[ ! -s "${call_log}" ]] || fail "install-offline mutated before rejecting mismatched Postgres URLs"
+  assert_contains "${out}" "self-hosted Postgres URLs must use the same host"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  pass "P1 offline installer rejects mismatched self-hosted Postgres URLs before mutation"
+}
+
+test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation() {
+  local cache="${TMP_DIR}/offline-cache-p1-invalid-postgres-url"
+  local config="${TMP_DIR}/substrates-p1-invalid-postgres-url.yaml"
+  local output="${TMP_DIR}/offline-p1-invalid-postgres-url-out"
+  local out="${TMP_DIR}/install-offline-p1-invalid-postgres-url.out"
+  local call_log="${TMP_DIR}/p1-invalid-postgres-url-call.log"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}"
+
+  if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@postgres.agentsmith.svc.cluster.local:5432" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta" \
+    CALL_LOG="${call_log}" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline accepted an invalid self-hosted Postgres URL"
+  fi
+  [[ ! -s "${call_log}" ]] || fail "install-offline mutated before rejecting invalid Postgres URL"
+  assert_contains "${out}" "invalid self-hosted POSTGRES_APP_URL"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  pass "P1 offline installer rejects invalid self-hosted Postgres URLs before mutation"
+}
+
+test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres() {
+  local cache="${TMP_DIR}/offline-cache-existing-cloud"
+  local config="${TMP_DIR}/substrates-existing-cloud.yaml"
+  local output="${TMP_DIR}/offline-existing-cloud-out"
+  local out="${TMP_DIR}/install-offline-existing-cloud.out"
+  local call_log="${TMP_DIR}/existing-cloud-call.log"
+  local stub_bin="${TMP_DIR}/existing-cloud-bin"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_existing_cloud_config "${config}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/psql"
+
+  POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
+    S3_ACCESS_KEY="existing-access-key" \
+    S3_SECRET_KEY="existing-secret-value" \
+    CALL_LOG="${call_log}" \
+    K3S_AIRGAP_DIR="${TMP_DIR}/existing-cloud-airgap" \
+    PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
+      printf '%s\n' "install-offline output:" >&2
+      sed -n '1,220p' "${out}" >&2
+      fail "existing-cloud p1-real validation did not complete"
+    }
+
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_not_contains "${call_log}" "rollout status statefulset/postgres"
+  assert_not_contains "${call_log}" "exec -i statefulset/postgres"
+  assert_contains "${out}" "doctor reported partial"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  pass "existing-cloud p1-real install validates without mutating self-hosted Postgres"
 }
 
 test_p1_real_offline_cache_rejects_missing_image_archive_sha() {
@@ -1206,7 +1399,8 @@ test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
   assert_contains "${report}" '"overallStatus": "passed"'
   assert_contains "${report}" '"scope": "substrate-only"'
   assert_contains "${report}" '"k8s"'
-  assert_contains "${report}" '"postgres"'
+  assert_contains "${report}" '"postgres-app"'
+  assert_contains "${report}" '"postgres-juicefs-meta"'
   assert_contains "${report}" '"s3"'
   assert_contains "${report}" '"juicefs-csi"'
   assert_contains "${report}" '"rwx"'
@@ -1225,6 +1419,7 @@ test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified() {
   local stub_bin="${TMP_DIR}/doctor-live-bin"
   local report="${TMP_DIR}/doctor-live-report.json"
   local out="${TMP_DIR}/doctor-live.out"
+  local psql_log="${TMP_DIR}/doctor-live-psql.log"
   local status
   write_valid_env_pair "${env_dir}"
   mkdir -p "${stub_bin}"
@@ -1234,23 +1429,87 @@ exit 0
 EOF_KUBECTL
   cat >"${stub_bin}/psql" <<'EOF_PSQL'
 #!/usr/bin/env bash
+: "${PSQL_LOG:?PSQL_LOG is required}"
+printf 'psql %s\n' "$*" >>"${PSQL_LOG}"
+case "$*" in
+  *agentsmith_lite*) [[ "${PGPASSWORD:-}" == "postgres-secret-value" ]] || exit 18 ;;
+  *juicefs_meta*) [[ "${PGPASSWORD:-}" == "juicefs-secret-value" ]] || exit 19 ;;
+esac
 exit 0
 EOF_PSQL
   chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
 
   set +e
-  PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
   status=$?
   set -e
   [[ "${status}" -eq 2 ]] || fail "doctor live mode should exit 2 for partial checks, got ${status}"
   assert_contains "${report}" '"dryRun": false'
   assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${report}" '"postgres-app"'
+  assert_contains "${report}" '"postgres-juicefs-meta"'
+  assert_contains "${report}" "app database accepted a simple query"
+  assert_contains "${report}" "JuiceFS metadata database accepted a simple query"
   assert_contains "${report}" '"status": "partial"'
   assert_contains "${report}" "live S3 read/write/delete probe is not implemented"
   assert_contains "${report}" "RWX was not verified"
   assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${report}" "minio-secret-value"
+  assert_contains "${psql_log}" "-h postgres.agentsmith.svc.cluster.local -p 5432 -U agentsmith -d agentsmith_lite"
+  assert_contains "${psql_log}" "-h postgres.agentsmith.svc.cluster.local -p 5432 -U juicefs -d juicefs_meta"
+  assert_not_contains "${psql_log}" "postgres-secret-value"
+  assert_not_contains "${psql_log}" "juicefs-secret-value"
+  assert_not_contains "${psql_log}" "postgresql://"
+  assert_not_contains "${psql_log}" "postgres://"
+  assert_not_contains "${out}" "postgresql://"
+  assert_not_contains "${report}" "postgresql://"
   pass "S7 doctor live mode is not falsely green when S3/RWX live checks are unverified"
+}
+
+test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails() {
+  local env_dir="${TMP_DIR}/doctor-live-meta-fail-env"
+  local stub_bin="${TMP_DIR}/doctor-live-meta-fail-bin"
+  local report="${TMP_DIR}/doctor-live-meta-fail-report.json"
+  local out="${TMP_DIR}/doctor-live-meta-fail.out"
+  local psql_log="${TMP_DIR}/doctor-live-meta-fail-psql.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${PSQL_LOG:?PSQL_LOG is required}"
+printf 'psql %s\n' "$*" >>"${PSQL_LOG}"
+case "$*" in
+  *"juicefs_meta"*) exit 17 ;;
+esac
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when JuiceFS metadata query fails, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"postgres-app"'
+  assert_contains "${report}" "app database accepted a simple query"
+  assert_contains "${report}" '"postgres-juicefs-meta"'
+  assert_contains "${report}" "JuiceFS metadata database did not accept a simple query"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${psql_log}" "postgres-secret-value"
+  assert_not_contains "${psql_log}" "juicefs-secret-value"
+  assert_not_contains "${psql_log}" "postgresql://"
+  assert_not_contains "${psql_log}" "postgres://"
+  pass "S7 doctor live mode fails when JuiceFS metadata database query fails"
 }
 
 test_juicefs_csi_contract() {
@@ -1305,6 +1564,9 @@ test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
+test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation
+test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation
+test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres
 test_p1_real_offline_cache_rejects_missing_image_archive_sha
 test_p1_real_offline_cache_rejects_public_download_references_in_images_lock
 test_p1_real_offline_cache_rejects_missing_bootstrap_artifact_entries
@@ -1317,6 +1579,7 @@ test_download_online_rejects_mutable_image_ref
 test_download_online_rejects_missing_required_key
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified
+test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails
 test_juicefs_csi_contract
 test_juicefs_csi_contract_renders_custom_env_names
 test_forbidden_copy_guard

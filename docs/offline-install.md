@@ -114,11 +114,13 @@ Without `--dry-run`, a P0 skeleton fails immediately as not installable. A
 p1-real cache runs the cached `scripts/install-k3s.sh` with offline download
 guards, runs the cached `scripts/import-images.sh`, applies the cached namespace
 bootstrap with `bin/kubectl`, renders and applies the JuiceFS CSI Secret plus
-StorageClass/PVC contract, renders and applies PostgreSQL/MinIO manifests with
-digest-pinned image refs from `images/images.lock`, and finally runs
+StorageClass/PVC contract, renders and applies the self-hosted PostgreSQL
+Secret before the PostgreSQL StatefulSet, waits for `statefulset/postgres`,
+initializes/verifies the app DB and JuiceFS metadata DB/user through
+`kubectl exec -i ... psql` stdin SQL, applies MinIO, and finally runs
 `scripts/doctor.sh --offline-cache ...`.
 
 The p1-real installer still does not install the JuiceFS CSI driver chart, run
-`juicefs format`, initialize PostgreSQL databases, initialize MinIO buckets, or
-run a live RWX smoke. Doctor `partial` is allowed for those incomplete live
-checks; doctor `failed` still fails the install.
+`juicefs format`, initialize MinIO buckets, or run a live RWX smoke. Doctor
+`partial` is allowed for those incomplete live checks; doctor `failed` still
+fails the install.
