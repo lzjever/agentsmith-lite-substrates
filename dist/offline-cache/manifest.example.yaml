@@ -4,6 +4,9 @@ artifacts:
   - path: scripts/import-images.sh
     sha256: "<sha256>"
     kind: script
+  - path: manifests/namespace-bootstrap/namespace.yaml
+    sha256: "<sha256>"
+    kind: manifest
   - path: images/images.lock
     sha256: "<sha256>"
     kind: images-lock

@@ -11,7 +11,12 @@ This first public-ready skeleton is validate-first:
 
 - writes and validates split `substrate.env` and `substrate.secrets.env`
 - validates secret redaction and owner-only secret file permissions
-- validates P0 offline-cache skeletons and p1-real manifest/checksum/images lock contracts
+- writes P0 offline-cache skeletons for contract-only dry-runs
+- produces `cacheMode: p1-real` offline caches from a non-secret artifact lock
+- includes namespace bootstrap and offline image import helper artifacts in
+  p1-real caches
+- validates p1-real manifest/checksum/images lock contracts, including required
+  bootstrap/import artifacts
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - runs a substrate-only doctor for static dry-run checks and partial live checks
 
@@ -41,12 +46,23 @@ scripts/doctor.sh \
 For an offline contract skeleton dry-run:
 
 ```bash
-scripts/download-online.sh --output dist/offline-cache --force
+scripts/download-online.sh --contract-only --output dist/offline-cache --force
 scripts/install-offline.sh \
   --cache dist/offline-cache \
   --config config/substrates.self-hosted.example.yaml \
   --output out \
   --dry-run \
+  --force
+```
+
+For a real offline cache artifact set:
+
+```bash
+cp config/offline-artifacts.example.env config/offline-artifacts.env
+# Fill config/offline-artifacts.env with pinned URLs, sha256 values, and image digests.
+scripts/download-online.sh \
+  --artifacts config/offline-artifacts.env \
+  --output dist/offline-cache \
   --force
 ```
 
@@ -65,7 +81,8 @@ the JuiceFS CSI Secret; they must not be projected into app workload env.
 ## Main Commands
 
 ```bash
-scripts/download-online.sh --output dist/offline-cache --force  # P0 contract skeleton generation, not a real offline install cache
+scripts/download-online.sh --contract-only --output dist/offline-cache --force
+scripts/download-online.sh --artifacts config/offline-artifacts.env --output dist/offline-cache --force
 scripts/install-online.sh --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/install-offline.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.secrets.env

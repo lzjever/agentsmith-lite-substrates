@@ -179,21 +179,25 @@ EOF_SUMS
 write_p1_offline_cache() {
   local dir="$1"
   local variant="${2:-valid}"
-  mkdir -p "${dir}/bin" "${dir}/charts" "${dir}/images/k3s" "${dir}/images/oci" "${dir}/scripts"
+  mkdir -p "${dir}/bin" "${dir}/charts" "${dir}/images/k3s" "${dir}/images/oci" "${dir}/manifests/namespace-bootstrap" "${dir}/scripts"
   printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/bin/k3s"
   printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/bin/kubectl"
   printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/scripts/install-k3s.sh"
-  chmod +x "${dir}/bin/k3s" "${dir}/bin/kubectl" "${dir}/scripts/install-k3s.sh"
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf "import-images dry-run\\n"\n' >"${dir}/scripts/import-images.sh"
+  chmod +x "${dir}/bin/k3s" "${dir}/bin/kubectl" "${dir}/scripts/install-k3s.sh" "${dir}/scripts/import-images.sh"
+  printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: agentsmith\n' >"${dir}/manifests/namespace-bootstrap/namespace.yaml"
   printf 'k3s airgap archive fixture\n' >"${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst"
   printf 'juicefs csi chart fixture\n' >"${dir}/charts/juicefs-csi.tgz"
   printf 'postgres oci archive fixture\n' >"${dir}/images/oci/postgres.tar"
   printf 'minio oci archive fixture\n' >"${dir}/images/oci/minio.tar"
   printf 'juicefs csi oci archive fixture\n' >"${dir}/images/oci/juicefs-csi.tar"
 
-  local k3s_sum kubectl_sum install_sum airgap_sum csi_chart_sum postgres_sum minio_sum juicefs_sum lock_sum manifest_sum
+  local k3s_sum kubectl_sum install_sum import_sum namespace_sum airgap_sum csi_chart_sum postgres_sum minio_sum juicefs_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   kubectl_sum="$(sha256_file "${dir}/bin/kubectl")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
+  import_sum="$(sha256_file "${dir}/scripts/import-images.sh")"
+  namespace_sum="$(sha256_file "${dir}/manifests/namespace-bootstrap/namespace.yaml")"
   airgap_sum="$(sha256_file "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")"
   csi_chart_sum="$(sha256_file "${dir}/charts/juicefs-csi.tgz")"
   postgres_sum="$(sha256_file "${dir}/images/oci/postgres.tar")"
@@ -252,6 +256,12 @@ artifacts:
   - path: bin/kubectl
     sha256: ${kubectl_sum}
     kind: kubectl-binary
+  - path: scripts/import-images.sh
+    sha256: ${import_sum}
+    kind: script
+  - path: manifests/namespace-bootstrap/namespace.yaml
+    sha256: ${namespace_sum}
+    kind: manifest
   - path: images/images.lock
     sha256: ${lock_sum}
     kind: images-lock
@@ -275,12 +285,263 @@ ${k3s_sum}  bin/k3s
 ${install_sum}  scripts/install-k3s.sh
 ${airgap_sum}  images/k3s/k3s-airgap-images-amd64.tar.zst
 ${kubectl_sum}  bin/kubectl
+${import_sum}  scripts/import-images.sh
+${namespace_sum}  manifests/namespace-bootstrap/namespace.yaml
 ${lock_sum}  images/images.lock
 ${csi_chart_sum}  charts/juicefs-csi.tgz
 ${postgres_sum}  images/oci/postgres.tar
 ${minio_sum}  images/oci/minio.tar
 ${juicefs_sum}  images/oci/juicefs-csi.tar
 EOF_SUMS
+}
+
+remove_manifest_artifact_entry() {
+  local manifest_file="$1"
+  local path="$2"
+  local tmp="${manifest_file}.tmp"
+  awk -v unwanted="${path}" '
+    function flush() {
+      if (block != "") {
+        if (index(block, "path: " unwanted) == 0) {
+          printf "%s", block
+        }
+        block=""
+      }
+    }
+    /^[[:space:]]*-[[:space:]]*path:[[:space:]]*/ {
+      flush()
+      block=$0 "\n"
+      next
+    }
+    block != "" {
+      block=block $0 "\n"
+      next
+    }
+    { print }
+    END { flush() }
+  ' "${manifest_file}" >"${tmp}"
+  mv "${tmp}" "${manifest_file}"
+}
+
+refresh_manifest_checksum_entry() {
+  local cache="$1"
+  local manifest_sum tmp
+  manifest_sum="$(sha256_file "${cache}/manifest.yaml")"
+  tmp="${cache}/checksums.txt.tmp"
+  awk -v sum="${manifest_sum}" '
+    $2 == "manifest.yaml" {
+      print sum "  manifest.yaml"
+      next
+    }
+    { print }
+  ' "${cache}/checksums.txt" >"${tmp}"
+  mv "${tmp}" "${cache}/checksums.txt"
+}
+
+refresh_checksum_entry() {
+  local cache="$1"
+  local path="$2"
+  local sum tmp
+  sum="$(sha256_file "${cache}/${path}")"
+  tmp="${cache}/checksums.txt.tmp"
+  awk -v wanted="${path}" -v sum="${sum}" '
+    $2 == wanted {
+      print sum "  " wanted
+      next
+    }
+    { print }
+  ' "${cache}/checksums.txt" >"${tmp}"
+  mv "${tmp}" "${cache}/checksums.txt"
+}
+
+refresh_manifest_artifact_checksum() {
+  local cache="$1"
+  local path="$2"
+  local sum tmp
+  sum="$(sha256_file "${cache}/${path}")"
+  tmp="${cache}/manifest.yaml.tmp"
+  awk -v wanted="${path}" -v sum="${sum}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    /^[[:space:]]*-[[:space:]]*path:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*path:[[:space:]]*/, "", value)
+      in_wanted=(trim(value) == wanted)
+      print
+      next
+    }
+    in_wanted && /^[[:space:]]*sha256:[[:space:]]*/ {
+      sub(/sha256:[[:space:]]*.*/, "sha256: " sum)
+      in_wanted=0
+      print
+      next
+    }
+    { print }
+  ' "${cache}/manifest.yaml" >"${tmp}"
+  mv "${tmp}" "${cache}/manifest.yaml"
+}
+
+remove_checksum_entry() {
+  local cache="$1"
+  local path="$2"
+  local tmp="${cache}/checksums.txt.tmp"
+  awk -v unwanted="${path}" '$2 != unwanted { print }' "${cache}/checksums.txt" >"${tmp}"
+  mv "${tmp}" "${cache}/checksums.txt"
+}
+
+replace_manifest_cache_mode() {
+  local cache="$1"
+  local mode="$2"
+  local tmp="${cache}/manifest.yaml.tmp"
+  awk -v mode="${mode}" '
+    /^[[:space:]]*cacheMode:[[:space:]]*/ {
+      print "cacheMode: " mode
+      next
+    }
+    { print }
+  ' "${cache}/manifest.yaml" >"${tmp}"
+  mv "${tmp}" "${cache}/manifest.yaml"
+}
+
+replace_manifest_artifact_path_and_sha() {
+  local cache="$1"
+  local old_path="$2"
+  local new_path="$3"
+  local new_sha="$4"
+  local tmp="${cache}/manifest.yaml.tmp"
+  awk -v old_path="${old_path}" -v new_path="${new_path}" -v new_sha="${new_sha}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    /^[[:space:]]*-[[:space:]]*path:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*path:[[:space:]]*/, "", value)
+      in_wanted=(trim(value) == old_path)
+      if (in_wanted) {
+        sub(/path:[[:space:]]*.*/, "path: " new_path)
+      }
+      print
+      next
+    }
+    in_wanted && /^[[:space:]]*sha256:[[:space:]]*/ {
+      sub(/sha256:[[:space:]]*.*/, "sha256: " new_sha)
+      in_wanted=0
+      print
+      next
+    }
+    { print }
+  ' "${cache}/manifest.yaml" >"${tmp}"
+  mv "${tmp}" "${cache}/manifest.yaml"
+}
+
+replace_images_lock_archive_and_sha() {
+  local cache="$1"
+  local old_archive="$2"
+  local new_archive="$3"
+  local new_sha="$4"
+  local tmp="${cache}/images/images.lock.tmp"
+  awk -v old_archive="${old_archive}" -v new_archive="${new_archive}" -v new_sha="${new_sha}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    /^[[:space:]]*archive:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*archive:[[:space:]]*/, "", value)
+      in_wanted=(trim(value) == old_archive)
+      if (in_wanted) {
+        sub(/archive:[[:space:]]*.*/, "archive: " new_archive)
+      }
+      print
+      next
+    }
+    in_wanted && /^[[:space:]]*sha256:[[:space:]]*/ {
+      sub(/sha256:[[:space:]]*.*/, "sha256: " new_sha)
+      in_wanted=0
+      print
+      next
+    }
+    { print }
+  ' "${cache}/images/images.lock" >"${tmp}"
+  mv "${tmp}" "${cache}/images/images.lock"
+}
+
+file_url() {
+  local file="$1"
+  printf 'file://%s' "${file}"
+}
+
+write_downloader_fixtures() {
+  local dir="$1"
+  mkdir -p "${dir}"
+  printf '#!/usr/bin/env sh\nprintf "k3s fixture\\n"\n' >"${dir}/k3s"
+  printf '#!/usr/bin/env sh\nprintf "install k3s fixture\\n"\n' >"${dir}/install-k3s.sh"
+  printf 'k3s airgap archive fixture from downloader\n' >"${dir}/k3s-airgap-images-amd64.tar.zst"
+  printf '#!/usr/bin/env sh\nprintf "kubectl fixture\\n"\n' >"${dir}/kubectl"
+  printf 'juicefs csi chart fixture from downloader\n' >"${dir}/juicefs-csi.tgz"
+  printf 'postgres oci archive fixture from downloader\n' >"${dir}/postgres.tar"
+  printf 'minio oci archive fixture from downloader\n' >"${dir}/minio.tar"
+  printf 'juicefs csi oci archive fixture from downloader\n' >"${dir}/juicefs-csi.tar"
+}
+
+write_artifact_lock() {
+  local fixtures="$1"
+  local lock_file="$2"
+  local variant="${3:-valid}"
+  local k3s_sha install_sha airgap_sha kubectl_sha csi_chart_sha postgres_sha minio_sha juicefs_sha
+  k3s_sha="$(sha256_file "${fixtures}/k3s")"
+  install_sha="$(sha256_file "${fixtures}/install-k3s.sh")"
+  airgap_sha="$(sha256_file "${fixtures}/k3s-airgap-images-amd64.tar.zst")"
+  kubectl_sha="$(sha256_file "${fixtures}/kubectl")"
+  csi_chart_sha="$(sha256_file "${fixtures}/juicefs-csi.tgz")"
+  postgres_sha="$(sha256_file "${fixtures}/postgres.tar")"
+  minio_sha="$(sha256_file "${fixtures}/minio.tar")"
+  juicefs_sha="$(sha256_file "${fixtures}/juicefs-csi.tar")"
+
+  local postgres_image="docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  if [[ "${variant}" == "mutable-image" ]]; then
+    postgres_image="docker.io/library/postgres:16"
+  fi
+  if [[ "${variant}" == "sha-mismatch" ]]; then
+    k3s_sha="0000000000000000000000000000000000000000000000000000000000000000"
+  fi
+
+  cat >"${lock_file}" <<EOF_LOCK
+K3S_BINARY_URL=$(file_url "${fixtures}/k3s")
+K3S_BINARY_SHA256=${k3s_sha}
+K3S_INSTALL_SCRIPT_URL=$(file_url "${fixtures}/install-k3s.sh")
+K3S_INSTALL_SCRIPT_SHA256=${install_sha}
+K3S_AIRGAP_IMAGES_URL=$(file_url "${fixtures}/k3s-airgap-images-amd64.tar.zst")
+K3S_AIRGAP_IMAGES_SHA256=${airgap_sha}
+KUBECTL_BINARY_URL=$(file_url "${fixtures}/kubectl")
+KUBECTL_BINARY_SHA256=${kubectl_sha}
+JUICEFS_CSI_ARTIFACT_URL=$(file_url "${fixtures}/juicefs-csi.tgz")
+JUICEFS_CSI_ARTIFACT_SHA256=${csi_chart_sha}
+POSTGRES_IMAGE=${postgres_image}
+POSTGRES_ARCHIVE_URL=$(file_url "${fixtures}/postgres.tar")
+POSTGRES_ARCHIVE_SHA256=${postgres_sha}
+MINIO_IMAGE=quay.io/minio/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+MINIO_ARCHIVE_URL=$(file_url "${fixtures}/minio.tar")
+MINIO_ARCHIVE_SHA256=${minio_sha}
+JUICEFS_CSI_IMAGE=docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+JUICEFS_CSI_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi.tar")
+JUICEFS_CSI_ARCHIVE_SHA256=${juicefs_sha}
+EOF_LOCK
+
+  if [[ "${variant}" == "missing-key" ]]; then
+    local tmp="${lock_file}.tmp"
+    grep -v '^KUBECTL_BINARY_SHA256=' "${lock_file}" >"${tmp}"
+    mv "${tmp}" "${lock_file}"
+  fi
 }
 
 test_validate_env_split_and_redaction() {
@@ -345,14 +606,135 @@ test_offline_cache_rejects_public_download_contract() {
   local config="${TMP_DIR}/substrates-public.yaml"
   local output="${TMP_DIR}/offline-public-out"
   local out="${TMP_DIR}/install-offline-public.out"
+  local leaked_url="https://registry-1.docker.io/v2/"
   write_offline_cache "${cache}"
   write_config "${config}"
-  printf '\npublicDownloadUrl: https://registry-1.docker.io/v2/\n' >>"${cache}/manifest.yaml"
+  printf '\npublicDownloadUrl: %s\n' "${leaked_url}" >>"${cache}/manifest.yaml"
   if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
     fail "install-offline accepted a public download URL in offline cache manifest"
   fi
   assert_contains "${out}" "public download references are not allowed"
+  assert_contains "${out}" "manifest.yaml"
+  assert_not_contains "${out}" "${leaked_url}"
   pass "S2 offline-cache contract rejects public download references"
+}
+
+test_offline_cache_rejects_public_download_references_in_checksums() {
+  local cache="${TMP_DIR}/offline-cache-checksums-url"
+  local config="${TMP_DIR}/substrates-checksums-url.yaml"
+  local output="${TMP_DIR}/offline-checksums-url-out"
+  local out="${TMP_DIR}/install-offline-checksums-url.out"
+  local leaked_url="https://downloads.example.invalid/offline-cache.tgz"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  %s\n' "${leaked_url}" >>"${cache}/checksums.txt"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a public download URL in offline cache checksums"
+  fi
+  assert_contains "${out}" "public download references are not allowed"
+  assert_contains "${out}" "checksums.txt"
+  assert_not_contains "${out}" "${leaked_url}"
+  pass "S2 offline-cache contract rejects public download references in checksums.txt"
+}
+
+test_offline_cache_rejects_manifest_artifact_path_escape_without_reading_outside() {
+  local cache="${TMP_DIR}/offline-cache-manifest-path-escape"
+  local outside="${TMP_DIR}/outside.txt"
+  local out="${TMP_DIR}/manifest-path-escape.out"
+  local outside_sum
+  write_offline_cache "${cache}"
+  printf 'outside cache sentinel\n' >"${outside}"
+  outside_sum="$(sha256_file "${outside}")"
+  replace_manifest_artifact_path_and_sha "${cache}" "images/oci/minio.tar" "../outside.txt" "${outside_sum}"
+
+  if bash -c 'set -euo pipefail; source "$1/scripts/lib/offline.sh"; validate_manifest_artifact_checksums "$2"' _ "${ROOT_DIR}" "${cache}" >"${out}" 2>&1; then
+    fail "offline manifest artifact checksum validation read a cache-escaped artifact"
+  fi
+  assert_contains "${out}" "manifest artifact path"
+  pass "S2 offline-cache contract rejects manifest artifact path escape before reading outside cache"
+}
+
+test_offline_cache_rejects_checksums_path_escape() {
+  local cache="${TMP_DIR}/offline-cache-checksums-path-escape"
+  local config="${TMP_DIR}/substrates-checksums-path-escape.yaml"
+  local output="${TMP_DIR}/offline-checksums-path-escape-out"
+  local outside="${TMP_DIR}/outside.txt"
+  local out="${TMP_DIR}/install-offline-checksums-path-escape.out"
+  local outside_sum
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  printf 'outside checksum sentinel\n' >"${outside}"
+  outside_sum="$(sha256_file "${outside}")"
+  printf '%s  ../outside.txt\n' "${outside_sum}" >>"${cache}/checksums.txt"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a checksums.txt path escape"
+  fi
+  assert_contains "${out}" "checksums path"
+  pass "S2 offline-cache contract rejects checksums.txt path escape"
+}
+
+test_p1_real_offline_cache_rejects_images_lock_archive_path_escape() {
+  local cache="${TMP_DIR}/offline-cache-p1-images-lock-path-escape"
+  local config="${TMP_DIR}/substrates-p1-images-lock-path-escape.yaml"
+  local output="${TMP_DIR}/offline-p1-images-lock-path-escape-out"
+  local outside="${TMP_DIR}/outside.tar"
+  local out="${TMP_DIR}/install-offline-p1-images-lock-path-escape.out"
+  local outside_sum
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  printf 'outside archive sentinel\n' >"${outside}"
+  outside_sum="$(sha256_file "${outside}")"
+  replace_images_lock_archive_and_sha "${cache}" "images/oci/minio.tar" "../outside.tar" "${outside_sum}"
+  refresh_checksum_entry "${cache}" "images/images.lock"
+  refresh_manifest_artifact_checksum "${cache}" "images/images.lock"
+  refresh_manifest_checksum_entry "${cache}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted an images.lock archive path escape"
+  fi
+  assert_contains "${out}" "images.lock archive path"
+  pass "S5 p1-real offline-cache contract rejects images.lock archive path escape"
+}
+
+test_offline_cache_scans_urls_before_cache_mode_errors_without_leaking() {
+  local cache="${TMP_DIR}/offline-cache-cachemode-url"
+  local config="${TMP_DIR}/substrates-cachemode-url.yaml"
+  local output="${TMP_DIR}/offline-cachemode-url-out"
+  local out="${TMP_DIR}/install-offline-cachemode-url.out"
+  local leaked_url="https://downloads.example.invalid/cache-mode"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  replace_manifest_cache_mode "${cache}" "${leaked_url}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a URL-valued cacheMode"
+  fi
+  assert_contains "${out}" "public download references are not allowed"
+  assert_contains "${out}" "manifest.yaml"
+  assert_not_contains "${out}" "${leaked_url}"
+  pass "S2 offline-cache contract scans URLs before cacheMode errors and redacts URL values"
+}
+
+test_offline_cache_rejects_url_suffix_fields_with_file_urls() {
+  local cache="${TMP_DIR}/offline-cache-artifact-url"
+  local config="${TMP_DIR}/substrates-artifact-url.yaml"
+  local output="${TMP_DIR}/offline-artifact-url-out"
+  local out="${TMP_DIR}/install-offline-artifact-url.out"
+  local leaked_url="file:///tmp/x"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  printf '\nartifactUrl: %s\n' "${leaked_url}" >>"${cache}/manifest.yaml"
+  refresh_manifest_checksum_entry "${cache}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted an artifactUrl field in offline cache manifest"
+  fi
+  assert_contains "${out}" "URL fields are not allowed"
+  assert_contains "${out}" "manifest.yaml"
+  assert_not_contains "${out}" "${leaked_url}"
+  pass "S2 offline-cache contract rejects URL-suffix fields even when values are file URLs"
 }
 
 test_p1_real_offline_cache_requires_artifacts_and_archive_sha() {
@@ -380,6 +762,193 @@ test_p1_real_offline_cache_rejects_missing_image_archive_sha() {
   fi
   assert_contains "${out}" "images.lock archive entry is missing sha256"
   pass "S5 p1-real offline-cache contract rejects archives without images.lock sha256"
+}
+
+test_p1_real_offline_cache_rejects_public_download_references_in_images_lock() {
+  local cache="${TMP_DIR}/offline-cache-p1-images-lock-url"
+  local config="${TMP_DIR}/substrates-p1-images-lock-url.yaml"
+  local output="${TMP_DIR}/offline-p1-images-lock-url-out"
+  local out="${TMP_DIR}/install-offline-p1-images-lock-url.out"
+  local leaked_url="https://registry-1.docker.io/v2/library/postgres"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  printf '    sourceUrl: %s\n' "${leaked_url}" >>"${cache}/images/images.lock"
+  refresh_checksum_entry "${cache}" "images/images.lock"
+  refresh_manifest_artifact_checksum "${cache}" "images/images.lock"
+  refresh_manifest_checksum_entry "${cache}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a public download URL in p1-real images.lock"
+  fi
+  assert_contains "${out}" "public download references are not allowed"
+  assert_contains "${out}" "images/images.lock"
+  assert_not_contains "${out}" "${leaked_url}"
+  pass "S5 p1-real offline-cache contract rejects public download references in images.lock"
+}
+
+test_p1_real_offline_cache_rejects_missing_bootstrap_artifact_entries() {
+  local config="${TMP_DIR}/substrates-p1-missing-bootstrap.yaml"
+  local spec path kind label cache output out
+  write_config "${config}"
+
+  for spec in \
+    "scripts/import-images.sh|script|import-script" \
+    "manifests/namespace-bootstrap/namespace.yaml|manifest|namespace-bootstrap"
+  do
+    IFS='|' read -r path kind label <<<"${spec}"
+    cache="${TMP_DIR}/offline-cache-p1-missing-${label}"
+    output="${TMP_DIR}/offline-p1-missing-${label}-out"
+    out="${TMP_DIR}/install-offline-p1-missing-${label}.out"
+    write_p1_offline_cache "${cache}"
+    remove_manifest_artifact_entry "${cache}/manifest.yaml" "${path}"
+    refresh_manifest_checksum_entry "${cache}"
+
+    if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+      fail "install-offline accepted a p1-real cache missing ${path} from manifest artifacts"
+    fi
+    assert_contains "${out}" "missing required p1-real artifact ${path} with kind ${kind}"
+  done
+
+  pass "S5 p1-real offline-cache contract rejects missing namespace bootstrap and import script artifact entries"
+}
+
+test_offline_cache_rejects_manifest_artifact_missing_from_checksums() {
+  local cache="${TMP_DIR}/offline-cache-missing-artifact-checksum"
+  local config="${TMP_DIR}/substrates-missing-artifact-checksum.yaml"
+  local output="${TMP_DIR}/offline-missing-artifact-checksum-out"
+  local out="${TMP_DIR}/install-offline-missing-artifact-checksum.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  remove_checksum_entry "${cache}" "scripts/import-images.sh"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a cache whose checksums.txt omitted scripts/import-images.sh"
+  fi
+  assert_contains "${out}" "checksums.txt is missing required entry: scripts/import-images.sh"
+  pass "S5 offline-cache contract requires checksums.txt to cover every manifest artifact"
+}
+
+test_p1_real_offline_cache_rejects_missing_dependency_oci_manifest_entry() {
+  local cache="${TMP_DIR}/offline-cache-p1-missing-oci-manifest"
+  local config="${TMP_DIR}/substrates-p1-missing-oci-manifest.yaml"
+  local output="${TMP_DIR}/offline-p1-missing-oci-manifest-out"
+  local out="${TMP_DIR}/install-offline-p1-missing-oci-manifest.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  remove_manifest_artifact_entry "${cache}/manifest.yaml" "images/oci/minio.tar"
+  refresh_manifest_checksum_entry "${cache}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a p1-real cache missing dependency OCI archive from manifest artifacts"
+  fi
+  assert_contains "${out}" "missing required p1-real artifact images/oci/minio.tar with kind oci-archive"
+  pass "S5 p1-real offline-cache contract requires dependency OCI archives in manifest artifacts"
+}
+
+test_download_online_generates_p1_real_cache_from_artifact_lock() {
+  local fixtures="${TMP_DIR}/download-fixtures"
+  local lock_file="${TMP_DIR}/offline-artifacts.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache"
+  local config="${TMP_DIR}/downloaded-substrates.yaml"
+  local output="${TMP_DIR}/downloaded-offline-out"
+  local download_out="${TMP_DIR}/download-online-p1.out"
+  local install_out="${TMP_DIR}/install-downloaded-p1.out"
+  local import_out="${TMP_DIR}/import-downloaded-p1.out"
+  local doctor_out="${TMP_DIR}/doctor-downloaded-p1.out"
+  local report="${TMP_DIR}/doctor-downloaded-p1.json"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}"
+  write_config "${config}"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${download_out}" 2>&1
+  assert_contains "${download_out}" "offline cache contract validated (p1-real)"
+  assert_contains "${download_out}" "wrote p1-real offline cache"
+  assert_contains "${cache}/manifest.yaml" "cacheMode: p1-real"
+  assert_contains "${cache}/manifest.yaml" "path: scripts/import-images.sh"
+  assert_contains "${cache}/manifest.yaml" "path: manifests/namespace-bootstrap/namespace.yaml"
+  assert_contains "${cache}/checksums.txt" "scripts/import-images.sh"
+  assert_contains "${cache}/checksums.txt" "manifests/namespace-bootstrap/namespace.yaml"
+  assert_contains "${cache}/images/images.lock" "image: docker.io/library/postgres@sha256:"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/postgres.tar"
+  test -x "${cache}/scripts/import-images.sh" || fail "download-online did not write executable scripts/import-images.sh"
+  test -f "${cache}/manifests/namespace-bootstrap/namespace.yaml" || fail "download-online did not write namespace bootstrap manifest"
+  "${cache}/scripts/import-images.sh" --dry-run >"${import_out}" 2>&1
+  assert_contains "${import_out}" "images/images.lock"
+  assert_contains "${import_out}" "images/oci/postgres.tar"
+
+  "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${install_out}" 2>&1
+  assert_contains "${install_out}" "validated p1-real cache contract"
+
+  "${ROOT_DIR}/scripts/doctor.sh" --env "${output}/substrate.env" --secrets "${output}/substrate.secrets.env" --offline-cache "${cache}" --dry-run --report "${report}" >"${doctor_out}" 2>&1
+  assert_contains "${report}" '"overallStatus": "passed"'
+  assert_contains "${report}" 'p1-real offline cache contract is complete'
+  pass "P1 downloader builds a p1-real offline cache from file:// artifact lock and dry-run consumers accept it"
+}
+
+test_download_online_import_helper_rejects_archive_path_escape_in_dry_run() {
+  local fixtures="${TMP_DIR}/download-fixtures-import-path-escape"
+  local lock_file="${TMP_DIR}/offline-artifacts-import-path-escape.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-import-path-escape"
+  local download_out="${TMP_DIR}/download-online-import-path-escape.out"
+  local import_out="${TMP_DIR}/import-downloaded-path-escape.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${download_out}" 2>&1
+  replace_images_lock_archive_and_sha "${cache}" "images/oci/postgres.tar" "../outside.tar" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  if "${cache}/scripts/import-images.sh" --dry-run >"${import_out}" 2>&1; then
+    fail "generated import-images.sh dry-run accepted an images.lock archive path escape"
+  fi
+  assert_contains "${import_out}" "images.lock archive path"
+  pass "P1 downloader import-images helper rejects archive path escape during dry-run"
+}
+
+test_download_online_rejects_sha_mismatch() {
+  local fixtures="${TMP_DIR}/download-fixtures-sha"
+  local lock_file="${TMP_DIR}/offline-artifacts-sha.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-sha"
+  local out="${TMP_DIR}/download-online-sha.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "sha-mismatch"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted an artifact whose sha256 did not match"
+  fi
+  assert_contains "${out}" "sha256 mismatch"
+  assert_contains "${out}" "K3S_BINARY_URL"
+  pass "P1 downloader rejects artifact sha256 mismatches"
+}
+
+test_download_online_rejects_mutable_image_ref() {
+  local fixtures="${TMP_DIR}/download-fixtures-mutable"
+  local lock_file="${TMP_DIR}/offline-artifacts-mutable.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-mutable"
+  local out="${TMP_DIR}/download-online-mutable.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "mutable-image"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted a mutable image reference"
+  fi
+  assert_contains "${out}" "POSTGRES_IMAGE must be digest-pinned"
+  assert_not_contains "${out}" "postgres:16"
+  pass "P1 downloader rejects mutable image references"
+}
+
+test_download_online_rejects_missing_required_key() {
+  local fixtures="${TMP_DIR}/download-fixtures-missing"
+  local lock_file="${TMP_DIR}/offline-artifacts-missing.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-missing"
+  local out="${TMP_DIR}/download-online-missing.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "missing-key"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted an artifact lock with a missing required key"
+  fi
+  assert_contains "${out}" "artifact lock is missing required key KUBECTL_BINARY_SHA256"
+  pass "P1 downloader rejects artifact locks missing required keys"
 }
 
 test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
@@ -482,8 +1051,23 @@ test_validate_env_rejects_secret_leak
 test_validate_env_rejects_loose_secret_mode
 test_offline_install_validates_cache_without_network
 test_offline_cache_rejects_public_download_contract
+test_offline_cache_rejects_public_download_references_in_checksums
+test_offline_cache_rejects_manifest_artifact_path_escape_without_reading_outside
+test_offline_cache_rejects_checksums_path_escape
+test_p1_real_offline_cache_rejects_images_lock_archive_path_escape
+test_offline_cache_scans_urls_before_cache_mode_errors_without_leaking
+test_offline_cache_rejects_url_suffix_fields_with_file_urls
 test_p1_real_offline_cache_requires_artifacts_and_archive_sha
 test_p1_real_offline_cache_rejects_missing_image_archive_sha
+test_p1_real_offline_cache_rejects_public_download_references_in_images_lock
+test_p1_real_offline_cache_rejects_missing_bootstrap_artifact_entries
+test_offline_cache_rejects_manifest_artifact_missing_from_checksums
+test_p1_real_offline_cache_rejects_missing_dependency_oci_manifest_entry
+test_download_online_generates_p1_real_cache_from_artifact_lock
+test_download_online_import_helper_rejects_archive_path_escape_in_dry_run
+test_download_online_rejects_sha_mismatch
+test_download_online_rejects_mutable_image_ref
+test_download_online_rejects_missing_required_key
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified
 test_juicefs_csi_contract

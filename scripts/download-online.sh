@@ -4,31 +4,49 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/common.sh
 source "${ROOT_DIR}/scripts/lib/common.sh"
+# shellcheck source=lib/download.sh
+source "${ROOT_DIR}/scripts/lib/download.sh"
 # shellcheck source=lib/offline.sh
 source "${ROOT_DIR}/scripts/lib/offline.sh"
 
 usage() {
   cat <<'EOF_USAGE'
-Usage: scripts/download-online.sh --output dist/offline-cache [--force]
+Usage:
+  scripts/download-online.sh --output dist/offline-cache [--force] [--contract-only]
+  scripts/download-online.sh --artifacts config/offline-artifacts.env --output dist/offline-cache --force
 
-Writes the P0 offline cache contract skeleton. This is intentionally not a real
-offline install cache: it has no k3s binary, k3s airgap archive, kubectl binary,
-or JuiceFS CSI artifact. p1-real caches are validated by install-offline.sh and
-doctor.sh when supplied, but full mirroring is not implemented here yet.
+Without --artifacts this writes the P0 offline cache contract skeleton.
+
+With --artifacts this reads a non-secret KEY=VALUE artifact lock, downloads and
+sha256-verifies the referenced files, and writes a cacheMode: p1-real offline
+cache. This producer does not include app images, Botified runner images, or app
+secrets, and it does not perform a live cluster install.
 EOF_USAGE
 }
 
 output_dir="dist/offline-cache"
 force=false
+artifact_lock=""
+contract_only=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output)
+      [[ $# -ge 2 ]] || die "--output requires a path"
       output_dir="${2:-}"
+      shift 2
+      ;;
+    --artifacts)
+      [[ $# -ge 2 ]] || die "--artifacts requires a path"
+      artifact_lock="${2:-}"
       shift 2
       ;;
     --force)
       force=true
+      shift
+      ;;
+    --contract-only)
+      contract_only=true
       shift
       ;;
     -h|--help)
@@ -41,32 +59,44 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -e "${output_dir}/manifest.yaml" && "${force}" != "true" ]]; then
-  die "${output_dir}/manifest.yaml already exists; rerun with --force to overwrite"
+[[ -n "${output_dir}" ]] || die "--output must not be empty"
+if [[ -n "${artifact_lock}" && "${contract_only}" == "true" ]]; then
+  die "--artifacts and --contract-only are mutually exclusive"
 fi
 
-safe_remove_dir "${output_dir}"
-mkdir -p "${output_dir}/images/oci" "${output_dir}/manifests/namespace-bootstrap" "${output_dir}/scripts" "${output_dir}/bin" "${output_dir}/charts"
+prepare_output_dir() {
+  local dir="$1"
+  if [[ -e "${dir}/manifest.yaml" && "${force}" != "true" ]]; then
+    die "${dir}/manifest.yaml already exists; rerun with --force to overwrite"
+  fi
+  safe_remove_dir "${dir}"
+  mkdir -p "${dir}/images/oci" "${dir}/manifests/namespace-bootstrap" "${dir}/scripts" "${dir}/bin" "${dir}/charts"
+}
 
-cat >"${output_dir}/scripts/import-images.sh" <<'EOF_IMPORT'
+write_p0_contract_cache() {
+  local dir="$1"
+  prepare_output_dir "${dir}"
+
+  cat >"${dir}/scripts/import-images.sh" <<'EOF_IMPORT'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'P0 contract skeleton has no OCI archives to import and is not a real offline install cache.\n'
 EOF_IMPORT
-chmod +x "${output_dir}/scripts/import-images.sh"
+  chmod +x "${dir}/scripts/import-images.sh"
 
-cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${output_dir}/manifests/namespace-bootstrap/namespace.yaml"
+  cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
 
-cat >"${output_dir}/images/images.lock" <<'EOF_LOCK'
+  cat >"${dir}/images/images.lock" <<'EOF_LOCK'
 schemaVersion: agentsmith-lite.substrate.images/v1
 images: []
 EOF_LOCK
 
-import_sum="$(sha256_file "${output_dir}/scripts/import-images.sh")"
-namespace_sum="$(sha256_file "${output_dir}/manifests/namespace-bootstrap/namespace.yaml")"
-lock_sum="$(sha256_file "${output_dir}/images/images.lock")"
+  local import_sum namespace_sum lock_sum manifest_sum
+  import_sum="$(sha256_file "${dir}/scripts/import-images.sh")"
+  namespace_sum="$(sha256_file "${dir}/manifests/namespace-bootstrap/namespace.yaml")"
+  lock_sum="$(sha256_file "${dir}/images/images.lock")"
 
-cat >"${output_dir}/manifest.yaml" <<EOF_MANIFEST
+  cat >"${dir}/manifest.yaml" <<EOF_MANIFEST
 schemaVersion: agentsmith-lite.substrate.offline-cache/v1
 cacheMode: p0-contract
 note: "P0 static contract skeleton only; not a real offline install cache"
@@ -82,14 +112,313 @@ artifacts:
     kind: images-lock
 EOF_MANIFEST
 
-manifest_sum="$(sha256_file "${output_dir}/manifest.yaml")"
-cat >"${output_dir}/checksums.txt" <<EOF_SUMS
+  manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
+  cat >"${dir}/checksums.txt" <<EOF_SUMS
 ${manifest_sum}  manifest.yaml
 ${import_sum}  scripts/import-images.sh
 ${namespace_sum}  manifests/namespace-bootstrap/namespace.yaml
 ${lock_sum}  images/images.lock
 EOF_SUMS
 
-validate_offline_cache "${output_dir}"
-info "wrote P0 offline cache contract skeleton: ${output_dir}"
-info "note: this cache is not a real offline install cache; p1-real requires k3s, kubectl, k3s airgap images, dependency OCI archives, and a JuiceFS CSI artifact"
+  validate_offline_cache "${dir}"
+  info "wrote P0 offline cache contract skeleton: ${dir}"
+  info "note: this cache is not a real offline install cache; p1-real requires k3s, kubectl, k3s airgap images, dependency OCI archives, and a JuiceFS CSI artifact"
+}
+
+write_p1_real_cache() {
+  local lock_file="$1"
+  local dir="$2"
+
+  artifact_lock_validate_syntax "${lock_file}"
+
+  local k3s_url k3s_sha install_url install_sha airgap_url airgap_sha kubectl_url kubectl_sha
+  local csi_chart_url csi_chart_sha postgres_image postgres_url postgres_sha minio_image minio_url minio_sha
+  local juicefs_image juicefs_url juicefs_sha
+  k3s_url="$(artifact_lock_required_url "${lock_file}" "K3S_BINARY_URL")"
+  k3s_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_BINARY_SHA256")"
+  install_url="$(artifact_lock_required_url "${lock_file}" "K3S_INSTALL_SCRIPT_URL")"
+  install_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_INSTALL_SCRIPT_SHA256")"
+  airgap_url="$(artifact_lock_required_url "${lock_file}" "K3S_AIRGAP_IMAGES_URL")"
+  airgap_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_AIRGAP_IMAGES_SHA256")"
+  kubectl_url="$(artifact_lock_required_url "${lock_file}" "KUBECTL_BINARY_URL")"
+  kubectl_sha="$(artifact_lock_required_sha256 "${lock_file}" "KUBECTL_BINARY_SHA256")"
+  csi_chart_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_ARTIFACT_URL")"
+  csi_chart_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_ARTIFACT_SHA256")"
+  postgres_image="$(artifact_lock_required_digest_image "${lock_file}" "POSTGRES_IMAGE")"
+  postgres_url="$(artifact_lock_required_url "${lock_file}" "POSTGRES_ARCHIVE_URL")"
+  postgres_sha="$(artifact_lock_required_sha256 "${lock_file}" "POSTGRES_ARCHIVE_SHA256")"
+  minio_image="$(artifact_lock_required_digest_image "${lock_file}" "MINIO_IMAGE")"
+  minio_url="$(artifact_lock_required_url "${lock_file}" "MINIO_ARCHIVE_URL")"
+  minio_sha="$(artifact_lock_required_sha256 "${lock_file}" "MINIO_ARCHIVE_SHA256")"
+  juicefs_image="$(artifact_lock_required_digest_image "${lock_file}" "JUICEFS_CSI_IMAGE")"
+  juicefs_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_ARCHIVE_URL")"
+  juicefs_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_ARCHIVE_SHA256")"
+
+  prepare_output_dir "${dir}"
+
+  download_verified_artifact "K3S_BINARY_URL" "${k3s_url}" "${k3s_sha}" "${dir}/bin/k3s"
+  download_verified_artifact "K3S_INSTALL_SCRIPT_URL" "${install_url}" "${install_sha}" "${dir}/scripts/install-k3s.sh"
+  download_verified_artifact "K3S_AIRGAP_IMAGES_URL" "${airgap_url}" "${airgap_sha}" "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst"
+  download_verified_artifact "KUBECTL_BINARY_URL" "${kubectl_url}" "${kubectl_sha}" "${dir}/bin/kubectl"
+  download_verified_artifact "JUICEFS_CSI_ARTIFACT_URL" "${csi_chart_url}" "${csi_chart_sha}" "${dir}/charts/juicefs-csi.tgz"
+  download_verified_artifact "POSTGRES_ARCHIVE_URL" "${postgres_url}" "${postgres_sha}" "${dir}/images/oci/postgres.tar"
+  download_verified_artifact "MINIO_ARCHIVE_URL" "${minio_url}" "${minio_sha}" "${dir}/images/oci/minio.tar"
+  download_verified_artifact "JUICEFS_CSI_ARCHIVE_URL" "${juicefs_url}" "${juicefs_sha}" "${dir}/images/oci/juicefs-csi.tar"
+  chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl"
+
+  cat >"${dir}/scripts/import-images.sh" <<'EOF_IMPORT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF_USAGE'
+Usage: scripts/import-images.sh [--dry-run] [--containerd-namespace k8s.io]
+
+Imports OCI archives listed in images/images.lock from this offline cache into
+the local containerd store with ctr. It performs no network access.
+EOF_USAGE
+}
+
+containerd_namespace="${CONTAINERD_NAMESPACE:-k8s.io}"
+dry_run=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --containerd-namespace)
+      [[ $# -ge 2 ]] || {
+        printf 'error: --containerd-namespace requires a value\n' >&2
+        exit 2
+      }
+      containerd_namespace="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'error: unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cache_dir="$(cd "${script_dir}/.." && pwd)"
+lock_file="${cache_dir}/images/images.lock"
+
+[[ -f "${lock_file}" ]] || {
+  printf 'error: images.lock not found at %s\n' "${lock_file}" >&2
+  exit 1
+}
+
+cache_relative_archive_path() {
+  local archive="$1"
+  local cache_root parent_rel base parent_abs full_path resolved
+
+  [[ -n "${archive}" ]] || {
+    printf 'error: invalid images.lock archive path: empty paths are not allowed\n' >&2
+    exit 1
+  }
+  [[ "${archive}" != /* ]] || {
+    printf 'error: invalid images.lock archive path: absolute paths are not allowed\n' >&2
+    exit 1
+  }
+  [[ "${archive}" != *"://"* ]] || {
+    printf 'error: invalid images.lock archive path: URL-like paths are not allowed\n' >&2
+    exit 1
+  }
+  case "${archive}" in
+    ..|../*|*/..|*/../*)
+      printf 'error: invalid images.lock archive path: parent traversal is not allowed\n' >&2
+      exit 1
+      ;;
+  esac
+
+  cache_root="$(cd "${cache_dir}" && pwd -P)" || {
+    printf 'error: cache directory is not readable\n' >&2
+    exit 1
+  }
+  parent_rel="$(dirname -- "${archive}")"
+  base="$(basename -- "${archive}")"
+  if [[ "${parent_rel}" == "." ]]; then
+    parent_abs="${cache_root}"
+  else
+    parent_abs="$(cd "${cache_root}/${parent_rel}" && pwd -P)" || {
+      printf 'error: archive directory is not inside this offline cache\n' >&2
+      exit 1
+    }
+  fi
+
+  case "${parent_abs}/" in
+    "${cache_root}/"*) ;;
+    *)
+      printf 'error: images.lock archive path escapes this offline cache\n' >&2
+      exit 1
+      ;;
+  esac
+
+  full_path="${parent_abs}/${base}"
+  if [[ -e "${full_path}" ]]; then
+    resolved="$(realpath "${full_path}" 2>/dev/null || readlink -f "${full_path}" 2>/dev/null || true)"
+    if [[ -n "${resolved}" ]]; then
+      case "${resolved}" in
+        "${cache_root}"|"${cache_root}/"*) ;;
+        *)
+          printf 'error: images.lock archive path escapes this offline cache\n' >&2
+          exit 1
+          ;;
+      esac
+      full_path="${resolved}"
+    fi
+  fi
+
+  printf '%s\n' "${full_path}"
+}
+
+mapfile -t archives < <(awk '
+  /^[[:space:]]*archive:[[:space:]]*/ {
+    value=$0
+    sub(/^[[:space:]]*archive:[[:space:]]*/, "", value)
+    gsub(/^"|"$/, "", value)
+    gsub(/^\047|\047$/, "", value)
+    print value
+  }
+' "${lock_file}")
+
+archive_paths=()
+for archive in "${archives[@]}"; do
+  archive_paths+=("$(cache_relative_archive_path "${archive}")")
+done
+
+if [[ "${#archives[@]}" -eq 0 ]]; then
+  printf 'No OCI archives listed in %s\n' "${lock_file}"
+  exit 0
+fi
+
+if [[ "${dry_run}" == "true" ]]; then
+  printf 'Would import %d OCI archive(s) from %s into containerd namespace %s:\n' "${#archives[@]}" "${lock_file}" "${containerd_namespace}"
+  for archive_path in "${archive_paths[@]}"; do
+    printf '  %s\n' "${archive_path}"
+  done
+  exit 0
+fi
+
+command -v ctr >/dev/null 2>&1 || {
+  printf 'error: ctr is required to import OCI archives. Run this after k3s/containerd is installed, or rerun with --dry-run.\n' >&2
+  exit 1
+}
+
+for archive_path in "${archive_paths[@]}"; do
+  [[ -f "${archive_path}" ]] || {
+    printf 'error: archive not found: %s\n' "${archive_path}" >&2
+    exit 1
+  }
+  printf 'Importing %s into containerd namespace %s\n' "${archive_path}" "${containerd_namespace}"
+  ctr -n "${containerd_namespace}" images import "${archive_path}"
+done
+EOF_IMPORT
+  chmod +x "${dir}/scripts/import-images.sh"
+
+  cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
+
+  local k3s_sum install_sum airgap_sum kubectl_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum juicefs_sum lock_sum manifest_sum
+  k3s_sum="$(sha256_file "${dir}/bin/k3s")"
+  install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
+  airgap_sum="$(sha256_file "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")"
+  kubectl_sum="$(sha256_file "${dir}/bin/kubectl")"
+  import_sum="$(sha256_file "${dir}/scripts/import-images.sh")"
+  namespace_sum="$(sha256_file "${dir}/manifests/namespace-bootstrap/namespace.yaml")"
+  csi_chart_sum="$(sha256_file "${dir}/charts/juicefs-csi.tgz")"
+  postgres_sum="$(sha256_file "${dir}/images/oci/postgres.tar")"
+  minio_sum="$(sha256_file "${dir}/images/oci/minio.tar")"
+  juicefs_sum="$(sha256_file "${dir}/images/oci/juicefs-csi.tar")"
+
+  cat >"${dir}/images/images.lock" <<EOF_LOCK
+schemaVersion: agentsmith-lite.substrate.images/v1
+images:
+  - name: postgres
+    image: ${postgres_image}
+    archive: images/oci/postgres.tar
+    sha256: ${postgres_sum}
+  - name: minio
+    image: ${minio_image}
+    archive: images/oci/minio.tar
+    sha256: ${minio_sum}
+  - name: juicefs-csi
+    image: ${juicefs_image}
+    archive: images/oci/juicefs-csi.tar
+    sha256: ${juicefs_sum}
+EOF_LOCK
+  lock_sum="$(sha256_file "${dir}/images/images.lock")"
+
+  cat >"${dir}/manifest.yaml" <<EOF_MANIFEST
+schemaVersion: agentsmith-lite.substrate.offline-cache/v1
+cacheMode: p1-real
+artifacts:
+  - path: bin/k3s
+    sha256: ${k3s_sum}
+    kind: k3s-binary
+  - path: scripts/install-k3s.sh
+    sha256: ${install_sum}
+    kind: k3s-install-script
+  - path: images/k3s/k3s-airgap-images-amd64.tar.zst
+    sha256: ${airgap_sum}
+    kind: k3s-airgap-images
+  - path: bin/kubectl
+    sha256: ${kubectl_sum}
+    kind: kubectl-binary
+  - path: scripts/import-images.sh
+    sha256: ${import_sum}
+    kind: script
+  - path: manifests/namespace-bootstrap/namespace.yaml
+    sha256: ${namespace_sum}
+    kind: manifest
+  - path: images/images.lock
+    sha256: ${lock_sum}
+    kind: images-lock
+  - path: charts/juicefs-csi.tgz
+    sha256: ${csi_chart_sum}
+    kind: juicefs-csi-artifact
+  - path: images/oci/postgres.tar
+    sha256: ${postgres_sum}
+    kind: oci-archive
+  - path: images/oci/minio.tar
+    sha256: ${minio_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi.tar
+    sha256: ${juicefs_sum}
+    kind: oci-archive
+EOF_MANIFEST
+  manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
+
+  cat >"${dir}/checksums.txt" <<EOF_SUMS
+${manifest_sum}  manifest.yaml
+${k3s_sum}  bin/k3s
+${install_sum}  scripts/install-k3s.sh
+${airgap_sum}  images/k3s/k3s-airgap-images-amd64.tar.zst
+${kubectl_sum}  bin/kubectl
+${import_sum}  scripts/import-images.sh
+${namespace_sum}  manifests/namespace-bootstrap/namespace.yaml
+${lock_sum}  images/images.lock
+${csi_chart_sum}  charts/juicefs-csi.tgz
+${postgres_sum}  images/oci/postgres.tar
+${minio_sum}  images/oci/minio.tar
+${juicefs_sum}  images/oci/juicefs-csi.tar
+EOF_SUMS
+
+  validate_offline_cache "${dir}"
+  info "wrote p1-real offline cache: ${dir}"
+  info "note: live offline cluster mutation is still not implemented by install-offline.sh"
+}
+
+if [[ -n "${artifact_lock}" ]]; then
+  write_p1_real_cache "${artifact_lock}" "${output_dir}"
+else
+  write_p0_contract_cache "${output_dir}"
+fi
