@@ -1,0 +1,31 @@
+mode: existing-cloud
+kubernetes:
+  namespace: agentsmith
+  kubeconfigPath: /secure/path/kubeconfig
+  context: production
+postgres:
+  appUrlFromEnv: POSTGRES_APP_URL
+  juicefsMetaUrlFromEnv: JUICEFS_META_URL
+objectStorage:
+  provider: s3
+  endpoint: https://s3.us-east-1.amazonaws.com
+  region: us-east-1
+  bucket: agentsmith-lite-files
+  accessKeyFromEnv: S3_ACCESS_KEY
+  secretKeyFromEnv: S3_SECRET_KEY
+juicefs:
+  volumeName: agentsmith-lite-files
+  secretName: agentsmith-lite-juicefs
+  csiDriver: csi.juicefs.com
+  storageClass: agentsmith-lite-juicefs-rwx
+  pvcName: agentsmith-lite-files
+  mountRoot: /agentsmith-lite
+auth:
+  mode: oidc
+  issuerUrl: https://idp.example.com/
+  clientId: agentsmith-lite
+  clientSecretFromEnv: OIDC_CLIENT_SECRET
+ingress:
+  publicBaseUrl: https://agentsmith.example.com
+  ingressClass: ""
+  tlsSecretName: ""

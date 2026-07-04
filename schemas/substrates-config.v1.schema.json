@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsmith-lite.local/schemas/substrates-config.v1.schema.json",
+  "title": "AgentSmith Lite substrates config v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["mode", "kubernetes", "objectStorage", "juicefs", "auth", "ingress"],
+  "properties": {
+    "mode": { "enum": ["self-hosted", "existing-cloud"] },
+    "kubernetes": {
+      "type": "object",
+      "required": ["namespace"],
+      "properties": {
+        "distribution": { "type": "string" },
+        "namespace": { "type": "string", "minLength": 1 },
+        "kubeconfigOutput": { "type": "string" },
+        "kubeconfigPath": { "type": "string" },
+        "context": { "type": "string" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "storageClass": { "type": "string" },
+        "appDatabase": { "type": "string" },
+        "juicefsDatabase": { "type": "string" },
+        "appUrlFromEnv": { "type": "string" },
+        "juicefsMetaUrlFromEnv": { "type": "string" }
+      }
+    },
+    "objectStorage": {
+      "type": "object",
+      "required": ["bucket"],
+      "properties": {
+        "provider": { "enum": ["minio", "s3"] },
+        "endpoint": { "type": "string" },
+        "region": { "type": "string" },
+        "bucket": { "type": "string", "minLength": 1 },
+        "forcePathStyle": { "type": "boolean" },
+        "accessKeyFromEnv": { "type": "string" },
+        "secretKeyFromEnv": { "type": "string" }
+      }
+    },
+    "juicefs": {
+      "type": "object",
+      "required": ["storageClass", "pvcName"],
+      "properties": {
+        "volumeName": { "type": "string" },
+        "bucket": { "type": "string" },
+        "secretName": { "type": "string" },
+        "csiDriver": { "const": "csi.juicefs.com" },
+        "storageClass": { "type": "string" },
+        "pvcName": { "type": "string" },
+        "mountRoot": { "type": "string" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["builtin_admin", "oidc"] },
+        "issuerUrl": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientSecretFromEnv": { "type": "string" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "required": ["publicBaseUrl"],
+      "properties": {
+        "publicBaseUrl": { "type": "string" },
+        "ingressClass": { "type": "string" },
+        "tlsSecretName": { "type": "string" },
+        "installDevIngress": { "type": "boolean" }
+      }
+    }
+  }
+}

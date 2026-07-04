@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentsmith
+  labels:
+    app.kubernetes.io/name: agentsmith-lite
+    app.kubernetes.io/part-of: agentsmith-lite-substrate

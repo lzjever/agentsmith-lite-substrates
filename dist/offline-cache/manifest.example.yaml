@@ -1,0 +1,9 @@
+schemaVersion: agentsmith-lite.substrate.offline-cache/v1
+cacheMode: example
+artifacts:
+  - path: scripts/import-images.sh
+    sha256: "<sha256>"
+    kind: script
+  - path: images/images.lock
+    sha256: "<sha256>"
+    kind: images-lock

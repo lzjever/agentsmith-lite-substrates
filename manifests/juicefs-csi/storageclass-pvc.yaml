@@ -1,0 +1,28 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: agentsmith-lite-juicefs-rwx
+provisioner: csi.juicefs.com
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: agentsmith-lite-juicefs
+  csi.storage.k8s.io/provisioner-secret-namespace: agentsmith
+  csi.storage.k8s.io/node-publish-secret-name: agentsmith-lite-juicefs
+  csi.storage.k8s.io/node-publish-secret-namespace: agentsmith
+mountOptions:
+  - cache-size=1024
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentsmith-lite-files
+  namespace: agentsmith
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: agentsmith-lite-juicefs-rwx
+  resources:
+    requests:
+      storage: 100Gi

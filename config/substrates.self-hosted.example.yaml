@@ -1,0 +1,31 @@
+mode: self-hosted
+kubernetes:
+  distribution: k3s
+  namespace: agentsmith
+  kubeconfigOutput: out/kubeconfig
+postgres:
+  storageClass: local-path
+  appDatabase: agentsmith_lite
+  juicefsDatabase: juicefs_meta
+objectStorage:
+  provider: minio
+  endpoint: http://minio.agentsmith.svc.cluster.local:9000
+  region: us-east-1
+  bucket: agentsmith-lite-files
+juicefs:
+  volumeName: agentsmith-lite-files
+  secretName: agentsmith-lite-juicefs
+  csiDriver: csi.juicefs.com
+  storageClass: agentsmith-lite-juicefs-rwx
+  pvcName: agentsmith-lite-files
+  mountRoot: /agentsmith-lite
+auth:
+  mode: builtin_admin
+  issuerUrl: ""
+  clientId: agentsmith-lite
+ingress:
+  publicBaseUrl: http://localhost:3000
+  ingressClass: ""
+  tlsSecretName: ""
+offline:
+  registry: registry.local:5000
