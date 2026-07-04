@@ -15,6 +15,9 @@ Usage: scripts/install-offline.sh --cache dist/offline-cache --config config/sub
 
 Validates an offline substrate cache, writes the normalized env/secrets contract,
 and validates the result. It never downloads from the public internet.
+
+In --dry-run mode this accepts either a P0 static contract skeleton or a p1-real
+cache. Without --dry-run, live offline cluster mutation is not implemented yet.
 EOF_USAGE
 }
 
@@ -60,11 +63,19 @@ done
 [[ -n "${config_file}" ]] || die "--config is required"
 
 validate_offline_cache "${cache_dir}"
+cache_mode="$(offline_cache_mode "${cache_dir}")"
 write_env_contract_from_config "${config_file}" "${output_dir}" "install-offline" "${force}"
 validate_env_contract "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env"
 
 if [[ "${dry_run}" == "true" ]]; then
-  info "dry-run: skipped cluster mutation"
+  if [[ "${cache_mode}" == "p0-contract" ]]; then
+    info "dry-run: validated P0 static cache skeleton only; this is not a real offline install cache"
+  else
+    info "dry-run: validated p1-real cache contract; skipped cluster mutation"
+  fi
 else
-  info "validate-first: offline cluster mutation is intentionally not implemented in this P0 skeleton"
+  if [[ "${cache_mode}" == "p0-contract" ]]; then
+    die "cannot perform live offline install from a P0 static cache skeleton; provide cacheMode: p1-real and rerun when live mutation is implemented"
+  fi
+  die "live offline cluster mutation is not implemented yet; p1-real cache was validated only"
 fi

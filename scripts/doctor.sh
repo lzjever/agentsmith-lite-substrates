@@ -15,6 +15,10 @@ Substrate-only checks:
   K8s reachability/namespace, PostgreSQL URL/connectivity, S3 credential presence/probe,
   JuiceFS CSI/StorageClass/PVC/RWX contract, and offline cache completeness.
 
+--dry-run proves static contracts only. Live mode marks unverifiable kubectl,
+cluster, psql, S3, JuiceFS, or RWX checks partial or failed; skipped live checks
+are never treated as a full pass.
+
 This script does not check app delivery smoke.
 EOF_USAGE
 }
@@ -65,6 +69,7 @@ fi
 
 checks_json=()
 failed=false
+partial=false
 
 add_check() {
   local name="$1"
@@ -72,7 +77,14 @@ add_check() {
   local message="$3"
   local boundary="${4:-substrate}"
   checks_json+=("    {\"name\": \"$(json_escape "${name}")\", \"status\": \"$(json_escape "${status}")\", \"boundary\": \"$(json_escape "${boundary}")\", \"message\": \"$(json_escape "${message}")\"}")
-  [[ "${status}" == "failed" ]] && failed=true
+  case "${status}" in
+    failed)
+      failed=true
+      ;;
+    partial)
+      partial=true
+      ;;
+  esac
   printf '%s: %s - %s\n' "${name}" "${status}" "${message}"
 }
 
@@ -88,20 +100,30 @@ namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
 kubeconfig_path="$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
 kube_context="$(env_value_or_empty "${env_file}" KUBE_CONTEXT)"
 postgres_url="$(env_value_or_empty "${secrets_file}" POSTGRES_APP_URL)"
+s3_endpoint="$(env_value_or_empty "${env_file}" S3_ENDPOINT)"
+s3_bucket="$(env_value_or_empty "${env_file}" S3_BUCKET)"
 s3_access="$(env_value_or_empty "${secrets_file}" S3_ACCESS_KEY)"
 s3_secret="$(env_value_or_empty "${secrets_file}" S3_SECRET_KEY)"
 juicefs_meta="$(env_value_or_empty "${secrets_file}" JUICEFS_META_URL)"
+juicefs_secret_name="$(env_value_or_empty "${env_file}" JUICEFS_SECRET_NAME)"
+juicefs_storage_class="$(env_value_or_empty "${env_file}" JUICEFS_STORAGE_CLASS)"
+juicefs_pvc_name="$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)"
+
+kubectl_args=()
+[[ -n "${kubeconfig_path}" ]] && kubectl_args+=(--kubeconfig "${kubeconfig_path}")
+[[ -n "${kube_context}" ]] && kubectl_args+=(--context "${kube_context}")
+kubectl_available=false
+cluster_reachable=false
 
 if [[ "${dry_run}" == "true" ]]; then
-  add_check "k8s" "skipped" "dry-run: skipped live kubectl namespace checks for ${namespace}"
+  add_check "k8s" "passed" "dry-run static: namespace is configured as ${namespace}"
 else
   if ! command -v kubectl >/dev/null 2>&1; then
-    add_check "k8s" "failed" "kubectl not found; rerun with --dry-run for static checks only"
+    add_check "k8s" "partial" "kubectl not found; live namespace reachability was not verified"
   else
-    kubectl_args=()
-    [[ -n "${kubeconfig_path}" ]] && kubectl_args+=(--kubeconfig "${kubeconfig_path}")
-    [[ -n "${kube_context}" ]] && kubectl_args+=(--context "${kube_context}")
+    kubectl_available=true
     if kubectl "${kubectl_args[@]}" get namespace "${namespace}" >/dev/null 2>&1; then
+      cluster_reachable=true
       add_check "k8s" "passed" "namespace ${namespace} is reachable"
     else
       add_check "k8s" "failed" "namespace ${namespace} is not reachable"
@@ -111,7 +133,7 @@ fi
 
 if [[ "${postgres_url}" =~ ^postgres(ql)?:// ]]; then
   if [[ "${dry_run}" == "true" ]]; then
-    add_check "postgres" "skipped" "dry-run: URL shape is valid; skipped live connection"
+    add_check "postgres" "passed" "dry-run static: POSTGRES_APP_URL shape is valid; skipped live query"
   elif command -v psql >/dev/null 2>&1; then
     if PGPASSWORD='' psql "${postgres_url}" -Atc 'select 1' >/dev/null 2>&1; then
       add_check "postgres" "passed" "product database accepted a simple query"
@@ -119,42 +141,66 @@ if [[ "${postgres_url}" =~ ^postgres(ql)?:// ]]; then
       add_check "postgres" "failed" "product database did not accept a simple query"
     fi
   else
-    add_check "postgres" "failed" "psql not found; cannot verify product database connectivity"
+    add_check "postgres" "partial" "psql not found; product database connectivity was not verified"
   fi
 else
   add_check "postgres" "failed" "POSTGRES_APP_URL shape is invalid"
 fi
 
-if [[ -n "${s3_access}" && -n "${s3_secret}" ]]; then
+if [[ -n "${s3_endpoint}" && -n "${s3_bucket}" && -n "${s3_access}" && -n "${s3_secret}" ]]; then
   if [[ "${dry_run}" == "true" ]]; then
-    add_check "s3" "skipped" "dry-run: S3 key presence confirmed; skipped read/write/delete probe" "substrate-csi-secret"
+    add_check "s3" "passed" "dry-run static: S3 endpoint, bucket, and key presence are valid; skipped read/write/delete probe" "substrate-csi-secret"
   else
-    add_check "s3" "skipped" "live S3 probe is not implemented in this P0 script; credentials remain redacted" "substrate-csi-secret"
+    add_check "s3" "partial" "live S3 read/write/delete probe is not implemented; credentials remain redacted" "substrate-csi-secret"
   fi
 else
-  add_check "s3" "failed" "S3_ACCESS_KEY and S3_SECRET_KEY must be present" "substrate-csi-secret"
+  add_check "s3" "failed" "S3 endpoint, bucket, S3_ACCESS_KEY, and S3_SECRET_KEY must be present" "substrate-csi-secret"
 fi
 
-if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]] \
-  && [[ "$(env_value_or_empty "${env_file}" JUICEFS_CSI_DRIVER)" == "csi.juicefs.com" ]] \
-  && [[ -n "$(env_value_or_empty "${env_file}" JUICEFS_STORAGE_CLASS)" ]] \
-  && [[ -n "$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)" ]]; then
-  if [[ "${dry_run}" == "true" ]]; then
-    add_check "juicefs-csi" "skipped" "dry-run: config present; skipped live CSI/StorageClass/PVC checks" "substrate-csi-secret"
-    add_check "rwx" "skipped" "dry-run: skipped two-pod ReadWriteMany smoke"
+if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
+  if juicefs_output="$("${ROOT_DIR}/scripts/validate-juicefs-contract.sh" --env "${env_file}" --secrets "${secrets_file}" 2>&1)"; then
+    printf '%s\n' "${juicefs_output}"
+    if [[ "${dry_run}" == "true" ]]; then
+      add_check "juicefs-csi" "passed" "dry-run static: rendered JuiceFS Secret, StorageClass, and PVC contract is valid" "substrate-csi-secret"
+      add_check "rwx" "passed" "dry-run static: PVC contract requests ReadWriteMany; skipped two-pod RWX smoke"
+    elif [[ "${kubectl_available}" != "true" ]]; then
+      add_check "juicefs-csi" "partial" "kubectl not found; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
+      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
+    elif [[ "${cluster_reachable}" != "true" ]]; then
+      add_check "juicefs-csi" "partial" "cluster namespace is not reachable; live JuiceFS resources were not verified" "substrate-csi-secret"
+      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
+    elif kubectl "${kubectl_args[@]}" get storageclass "${juicefs_storage_class}" >/dev/null 2>&1 \
+      && kubectl "${kubectl_args[@]}" -n "${namespace}" get secret "${juicefs_secret_name}" >/dev/null 2>&1 \
+      && kubectl "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" >/dev/null 2>&1; then
+      add_check "juicefs-csi" "passed" "live JuiceFS StorageClass, Secret, and PVC are present" "substrate-csi-secret"
+      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
+    else
+      add_check "juicefs-csi" "failed" "live JuiceFS StorageClass, Secret, or PVC is missing" "substrate-csi-secret"
+      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
+    fi
   else
-    add_check "juicefs-csi" "skipped" "live JuiceFS CSI validation is not implemented in this P0 script" "substrate-csi-secret"
-    add_check "rwx" "skipped" "live RWX smoke is not implemented in this P0 script"
+    printf '%s\n' "${juicefs_output}" >&2
+    add_check "juicefs-csi" "failed" "rendered JuiceFS CSI static contract is invalid" "substrate-csi-secret"
+    add_check "rwx" "failed" "RWX cannot be checked without a valid JuiceFS PVC contract"
   fi
 else
-  add_check "juicefs-csi" "failed" "JuiceFS CSI config is incomplete" "substrate-csi-secret"
+  add_check "juicefs-csi" "failed" "JUICEFS_META_URL shape is invalid" "substrate-csi-secret"
   add_check "rwx" "failed" "RWX cannot be checked without complete JuiceFS config"
 fi
 
 if [[ -n "${offline_cache}" ]]; then
   if offline_output="$(validate_offline_cache "${offline_cache}" 2>&1)"; then
     printf '%s\n' "${offline_output}"
-    add_check "offline-cache" "passed" "offline cache has manifest, checksums, and digest-pinned image lock"
+    cache_mode="$(offline_cache_mode "${offline_cache}")"
+    if [[ "${cache_mode}" == "p0-contract" ]]; then
+      if [[ "${dry_run}" == "true" ]]; then
+        add_check "offline-cache" "passed" "P0 static cache skeleton is valid; it is not a real offline install cache"
+      else
+        add_check "offline-cache" "partial" "P0 static cache skeleton is valid but cannot support a real offline install"
+      fi
+    else
+      add_check "offline-cache" "passed" "p1-real offline cache contract is complete and archive checksums were verified"
+    fi
   else
     printf '%s\n' "${offline_output}" >&2
     add_check "offline-cache" "failed" "offline cache contract is invalid"
@@ -167,6 +213,8 @@ mkdir -p "$(dirname "${report_file}")"
 overall="passed"
 if [[ "${failed}" == "true" ]]; then
   overall="failed"
+elif [[ "${partial}" == "true" ]]; then
+  overall="partial"
 fi
 
 {
@@ -189,4 +237,14 @@ fi
 } >"${report_file}"
 
 info "doctor report written: ${report_file}"
-[[ "${overall}" == "passed" ]] || exit 1
+case "${overall}" in
+  passed)
+    exit 0
+    ;;
+  partial)
+    exit 2
+    ;;
+  failed)
+    exit 1
+    ;;
+esac

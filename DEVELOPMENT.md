@@ -14,6 +14,13 @@ The current test slices are:
 - S2: substrate-only doctor and offline cache validation
 - S3: JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - S4: guard against copied legacy governance/reference surfaces
+- S5: `cacheMode: p1-real` offline cache contract, including k3s binary,
+  install script, k3s airgap archive, kubectl binary, dependency OCI archives,
+  JuiceFS CSI artifact, and `images.lock` archive sha256 validation
+- S6: rendered JuiceFS CSI contract, cross-checking env-rendered namespace,
+  secretName, storageClass, pvcName, ReadWriteMany, and bucket URL
+- S7: doctor dry-run/live layering; dry-run proves static contracts, while live
+  unverifiable kubectl/cluster/psql/S3/JuiceFS/RWX checks are partial or failed
 
 ## Shell Style
 
@@ -30,3 +37,9 @@ The current test slices are:
 - Live cluster mutation is intentionally not implemented in this P0 skeleton.
   Scripts report validate-first or dry-run behavior instead of pretending a
   cluster was changed.
+- The default `download-online.sh` output is still a P0 static contract
+  skeleton. It is useful for contract generation and dry-run validation only.
+- A p1-real offline cache must be supplied with all required artifacts and
+  checksums before it can satisfy the p1-real contract. Even then,
+  `install-offline.sh` currently validates only; it does not perform live k3s or
+  CSI installation.

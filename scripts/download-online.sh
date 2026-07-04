@@ -11,9 +11,10 @@ usage() {
   cat <<'EOF_USAGE'
 Usage: scripts/download-online.sh --output dist/offline-cache [--force]
 
-Writes the P0 offline cache contract structure. Full binary/image mirroring is
-not implemented yet; this script creates a network-free manifest/checksum/image
-lock skeleton that install-offline.sh and doctor.sh can validate.
+Writes the P0 offline cache contract skeleton. This is intentionally not a real
+offline install cache: it has no k3s binary, k3s airgap archive, kubectl binary,
+or JuiceFS CSI artifact. p1-real caches are validated by install-offline.sh and
+doctor.sh when supplied, but full mirroring is not implemented here yet.
 EOF_USAGE
 }
 
@@ -50,7 +51,7 @@ mkdir -p "${output_dir}/images/oci" "${output_dir}/manifests/namespace-bootstrap
 cat >"${output_dir}/scripts/import-images.sh" <<'EOF_IMPORT'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'P0 cache has no OCI archives to import.\n'
+printf 'P0 contract skeleton has no OCI archives to import and is not a real offline install cache.\n'
 EOF_IMPORT
 chmod +x "${output_dir}/scripts/import-images.sh"
 
@@ -68,6 +69,7 @@ lock_sum="$(sha256_file "${output_dir}/images/images.lock")"
 cat >"${output_dir}/manifest.yaml" <<EOF_MANIFEST
 schemaVersion: agentsmith-lite.substrate.offline-cache/v1
 cacheMode: p0-contract
+note: "P0 static contract skeleton only; not a real offline install cache"
 artifacts:
   - path: scripts/import-images.sh
     sha256: ${import_sum}
@@ -89,5 +91,5 @@ ${lock_sum}  images/images.lock
 EOF_SUMS
 
 validate_offline_cache "${output_dir}"
-info "wrote P0 offline cache contract: ${output_dir}"
-info "note: full k3s/kubectl/JuiceFS/Postgres/MinIO artifact mirroring remains a P1 implementation item"
+info "wrote P0 offline cache contract skeleton: ${output_dir}"
+info "note: this cache is not a real offline install cache; p1-real requires k3s, kubectl, k3s airgap images, dependency OCI archives, and a JuiceFS CSI artifact"

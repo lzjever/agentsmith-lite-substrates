@@ -11,9 +11,9 @@ This first public-ready skeleton is validate-first:
 
 - writes and validates split `substrate.env` and `substrate.secrets.env`
 - validates secret redaction and owner-only secret file permissions
-- validates the offline cache manifest/checksum/images lock contract
-- validates the static JuiceFS CSI Secret, StorageClass, and RWX PVC contract
-- runs a substrate-only doctor for K8s, Postgres, S3, JuiceFS, RWX, and optional offline cache
+- validates P0 offline-cache skeletons and p1-real manifest/checksum/images lock contracts
+- validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
+- runs a substrate-only doctor for static dry-run checks and partial live checks
 
 It does not yet mutate a cluster by installing k3s, PostgreSQL, MinIO, or
 JuiceFS CSI. Scripts say that clearly when they skip live mutation.
@@ -38,7 +38,7 @@ scripts/doctor.sh \
   --dry-run
 ```
 
-For an offline contract skeleton:
+For an offline contract skeleton dry-run:
 
 ```bash
 scripts/download-online.sh --output dist/offline-cache --force
@@ -65,11 +65,11 @@ the JuiceFS CSI Secret; they must not be projected into app workload env.
 ## Main Commands
 
 ```bash
-scripts/download-online.sh --output dist/offline-cache
-scripts/install-online.sh --config config/substrates.self-hosted.example.yaml --output out/
-scripts/install-offline.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/
+scripts/download-online.sh --output dist/offline-cache --force  # P0 contract skeleton generation, not a real offline install cache
+scripts/install-online.sh --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
+scripts/install-offline.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.secrets.env
 scripts/validate-juicefs-contract.sh --env out/substrate.env --secrets out/substrate.secrets.env
-scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env
+scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env --dry-run
 scripts/reset-dev.sh --config config/substrates.self-hosted.example.yaml --destroy-data
 ```

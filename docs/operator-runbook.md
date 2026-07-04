@@ -35,6 +35,22 @@ cluster mutation is enabled:
 App images, app API health, sandbox behavior, and task runtime smoke belong to
 the app repo.
 
+Current behavior is intentionally layered:
+
+- `doctor.sh --dry-run` proves static contracts: split env/secrets, configured
+  namespace, PostgreSQL URL shape, S3 endpoint/bucket/key presence, rendered
+  JuiceFS Secret/StorageClass/PVC, RWX access mode, and optional offline cache.
+- `doctor.sh` without `--dry-run` attempts live checks where implemented:
+  kubectl namespace reachability, PostgreSQL `select 1`, and Kubernetes
+  presence checks for JuiceFS StorageClass/Secret/PVC.
+- Live S3 read/write/delete, full JuiceFS CSI behavior, and two-pod RWX smoke
+  are not fully implemented in this repo yet. When those checks cannot be
+  verified, doctor reports `partial` or `failed`; skipped live checks are not
+  treated as a green pass.
+
+In an environment without a working kubectl context, live doctor should not be
+green. Use `--dry-run` for static contract validation.
+
 ## Secret Handling
 
 Generated `out/substrate.secrets.env` must be mode `0600`.

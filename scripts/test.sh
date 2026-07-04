@@ -74,6 +74,21 @@ EOF_SECRETS
   chmod 0600 "${dir}/substrate.secrets.env"
 }
 
+replace_env_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp="${file}.tmp"
+  awk -v wanted="${key}" -v replacement="${value}" '
+    index($0, wanted "=") == 1 {
+      print wanted "=" replacement
+      next
+    }
+    { print }
+  ' "${file}" >"${tmp}"
+  mv "${tmp}" "${file}"
+}
+
 write_config() {
   local file="$1"
   cat >"${file}" <<'EOF_CONFIG'
@@ -136,7 +151,7 @@ EOF_LOCK
   lock_sum="$(sha256_file "${dir}/images/images.lock")"
   cat >"${dir}/manifest.yaml" <<EOF_MANIFEST
 schemaVersion: agentsmith-lite.substrate.offline-cache/v1
-cacheMode: test
+cacheMode: p0-contract
 artifacts:
   - path: scripts/import-images.sh
     sha256: ${import_sum}
@@ -158,6 +173,113 @@ ${import_sum}  scripts/import-images.sh
 ${namespace_sum}  manifests/namespace-bootstrap/namespace.yaml
 ${lock_sum}  images/images.lock
 ${image_sum}  images/oci/minio.tar
+EOF_SUMS
+}
+
+write_p1_offline_cache() {
+  local dir="$1"
+  local variant="${2:-valid}"
+  mkdir -p "${dir}/bin" "${dir}/charts" "${dir}/images/k3s" "${dir}/images/oci" "${dir}/scripts"
+  printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/bin/k3s"
+  printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/bin/kubectl"
+  printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/scripts/install-k3s.sh"
+  chmod +x "${dir}/bin/k3s" "${dir}/bin/kubectl" "${dir}/scripts/install-k3s.sh"
+  printf 'k3s airgap archive fixture\n' >"${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst"
+  printf 'juicefs csi chart fixture\n' >"${dir}/charts/juicefs-csi.tgz"
+  printf 'postgres oci archive fixture\n' >"${dir}/images/oci/postgres.tar"
+  printf 'minio oci archive fixture\n' >"${dir}/images/oci/minio.tar"
+  printf 'juicefs csi oci archive fixture\n' >"${dir}/images/oci/juicefs-csi.tar"
+
+  local k3s_sum kubectl_sum install_sum airgap_sum csi_chart_sum postgres_sum minio_sum juicefs_sum lock_sum manifest_sum
+  k3s_sum="$(sha256_file "${dir}/bin/k3s")"
+  kubectl_sum="$(sha256_file "${dir}/bin/kubectl")"
+  install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
+  airgap_sum="$(sha256_file "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")"
+  csi_chart_sum="$(sha256_file "${dir}/charts/juicefs-csi.tgz")"
+  postgres_sum="$(sha256_file "${dir}/images/oci/postgres.tar")"
+  minio_sum="$(sha256_file "${dir}/images/oci/minio.tar")"
+  juicefs_sum="$(sha256_file "${dir}/images/oci/juicefs-csi.tar")"
+
+  if [[ "${variant}" == "missing-image-sha" ]]; then
+    cat >"${dir}/images/images.lock" <<EOF_LOCK
+schemaVersion: agentsmith-lite.substrate.images/v1
+images:
+  - name: postgres
+    image: docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    archive: images/oci/postgres.tar
+    sha256: ${postgres_sum}
+  - name: minio
+    image: quay.io/minio/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    archive: images/oci/minio.tar
+  - name: juicefs-csi
+    image: docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    archive: images/oci/juicefs-csi.tar
+    sha256: ${juicefs_sum}
+EOF_LOCK
+  else
+    cat >"${dir}/images/images.lock" <<EOF_LOCK
+schemaVersion: agentsmith-lite.substrate.images/v1
+images:
+  - name: postgres
+    image: docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    archive: images/oci/postgres.tar
+    sha256: ${postgres_sum}
+  - name: minio
+    image: quay.io/minio/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    archive: images/oci/minio.tar
+    sha256: ${minio_sum}
+  - name: juicefs-csi
+    image: docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    archive: images/oci/juicefs-csi.tar
+    sha256: ${juicefs_sum}
+EOF_LOCK
+  fi
+  lock_sum="$(sha256_file "${dir}/images/images.lock")"
+
+  cat >"${dir}/manifest.yaml" <<EOF_MANIFEST
+schemaVersion: agentsmith-lite.substrate.offline-cache/v1
+cacheMode: p1-real
+artifacts:
+  - path: bin/k3s
+    sha256: ${k3s_sum}
+    kind: k3s-binary
+  - path: scripts/install-k3s.sh
+    sha256: ${install_sum}
+    kind: k3s-install-script
+  - path: images/k3s/k3s-airgap-images-amd64.tar.zst
+    sha256: ${airgap_sum}
+    kind: k3s-airgap-images
+  - path: bin/kubectl
+    sha256: ${kubectl_sum}
+    kind: kubectl-binary
+  - path: images/images.lock
+    sha256: ${lock_sum}
+    kind: images-lock
+  - path: charts/juicefs-csi.tgz
+    sha256: ${csi_chart_sum}
+    kind: juicefs-csi-artifact
+  - path: images/oci/postgres.tar
+    sha256: ${postgres_sum}
+    kind: oci-archive
+  - path: images/oci/minio.tar
+    sha256: ${minio_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi.tar
+    sha256: ${juicefs_sum}
+    kind: oci-archive
+EOF_MANIFEST
+  manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
+  cat >"${dir}/checksums.txt" <<EOF_SUMS
+${manifest_sum}  manifest.yaml
+${k3s_sum}  bin/k3s
+${install_sum}  scripts/install-k3s.sh
+${airgap_sum}  images/k3s/k3s-airgap-images-amd64.tar.zst
+${kubectl_sum}  bin/kubectl
+${lock_sum}  images/images.lock
+${csi_chart_sum}  charts/juicefs-csi.tgz
+${postgres_sum}  images/oci/postgres.tar
+${minio_sum}  images/oci/minio.tar
+${juicefs_sum}  images/oci/juicefs-csi.tar
 EOF_SUMS
 }
 
@@ -214,7 +336,7 @@ test_offline_install_validates_cache_without_network() {
   test -f "${output}/substrate.secrets.env" || fail "install-offline did not write substrate.secrets.env"
   test "$(stat -c '%a' "${output}/substrate.secrets.env")" = "600" || fail "install-offline did not chmod substrate.secrets.env to 0600"
   assert_contains "${out}" "offline cache contract validated"
-  assert_contains "${out}" "dry-run: skipped cluster mutation"
+  assert_contains "${out}" "P0 static cache skeleton"
   pass "S2 substrate offline path validates cache and writes env contract without network"
 }
 
@@ -233,6 +355,33 @@ test_offline_cache_rejects_public_download_contract() {
   pass "S2 offline-cache contract rejects public download references"
 }
 
+test_p1_real_offline_cache_requires_artifacts_and_archive_sha() {
+  local cache="${TMP_DIR}/offline-cache-p1"
+  local config="${TMP_DIR}/substrates-p1.yaml"
+  local output="${TMP_DIR}/offline-p1-out"
+  local out="${TMP_DIR}/install-offline-p1.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1
+  assert_contains "${out}" "offline cache contract validated (p1-real)"
+  assert_contains "${out}" "validated p1-real cache contract"
+  pass "S5 p1-real offline-cache contract requires k3s, kubectl, airgap, CSI, dependency images, and archive sha"
+}
+
+test_p1_real_offline_cache_rejects_missing_image_archive_sha() {
+  local cache="${TMP_DIR}/offline-cache-p1-missing-sha"
+  local config="${TMP_DIR}/substrates-p1-missing-sha.yaml"
+  local output="${TMP_DIR}/offline-p1-missing-sha-out"
+  local out="${TMP_DIR}/install-offline-p1-missing-sha.out"
+  write_p1_offline_cache "${cache}" "missing-image-sha"
+  write_config "${config}"
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a p1-real images.lock archive without sha256"
+  fi
+  assert_contains "${out}" "images.lock archive entry is missing sha256"
+  pass "S5 p1-real offline-cache contract rejects archives without images.lock sha256"
+}
+
 test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
   local env_dir="${TMP_DIR}/doctor-env"
   local cache="${TMP_DIR}/doctor-cache"
@@ -242,20 +391,54 @@ test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
   write_offline_cache "${cache}"
   "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --dry-run --report "${report}" >"${out}" 2>&1
   assert_contains "${report}" '"dryRun": true'
+  assert_contains "${report}" '"overallStatus": "passed"'
   assert_contains "${report}" '"scope": "substrate-only"'
   assert_contains "${report}" '"k8s"'
   assert_contains "${report}" '"postgres"'
   assert_contains "${report}" '"s3"'
   assert_contains "${report}" '"juicefs-csi"'
   assert_contains "${report}" '"rwx"'
-  assert_contains "${report}" '"status": "skipped"'
+  assert_contains "${report}" '"status": "passed"'
   assert_contains "${report}" '"offline-cache"'
   assert_contains "${report}" 'raw credentials are substrate/CSI scoped'
   assert_not_contains "${report}" "app-images"
   assert_not_contains "${report}" "botified"
   assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${report}" "minio-secret-value"
-  pass "S2 substrate-only doctor reports skipped live checks, offline-cache, and redaction"
+  pass "S7 substrate-only doctor dry-run proves static contracts, offline-cache, and redaction"
+}
+
+test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified() {
+  local env_dir="${TMP_DIR}/doctor-live-env"
+  local stub_bin="${TMP_DIR}/doctor-live-bin"
+  local report="${TMP_DIR}/doctor-live-report.json"
+  local out="${TMP_DIR}/doctor-live.out"
+  local status
+  write_valid_env_pair "${env_dir}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 2 ]] || fail "doctor live mode should exit 2 for partial checks, got ${status}"
+  assert_contains "${report}" '"dryRun": false'
+  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${report}" '"status": "partial"'
+  assert_contains "${report}" "live S3 read/write/delete probe is not implemented"
+  assert_contains "${report}" "RWX was not verified"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "minio-secret-value"
+  pass "S7 doctor live mode is not falsely green when S3/RWX live checks are unverified"
 }
 
 test_juicefs_csi_contract() {
@@ -267,6 +450,24 @@ test_juicefs_csi_contract() {
   assert_contains "${out}" "not app workload env"
   assert_not_contains "${out}" "juicefs-secret-value"
   pass "S3 JuiceFS CSI contract validates secret shape, RWX, and redaction boundary"
+}
+
+test_juicefs_csi_contract_renders_custom_env_names() {
+  local env_dir="${TMP_DIR}/juicefs-custom-env"
+  local out="${TMP_DIR}/juicefs-custom.out"
+  write_valid_env_pair "${env_dir}"
+  replace_env_value "${env_dir}/substrate.env" "KUBE_NAMESPACE" "custom-ns"
+  replace_env_value "${env_dir}/substrate.env" "S3_BUCKET" "custom-bucket"
+  replace_env_value "${env_dir}/substrate.env" "JUICEFS_VOLUME_NAME" "custom-volume"
+  replace_env_value "${env_dir}/substrate.env" "JUICEFS_BUCKET" "s3://custom-bucket/custom-prefix/"
+  replace_env_value "${env_dir}/substrate.env" "JUICEFS_SECRET_NAME" "custom-juicefs-secret"
+  replace_env_value "${env_dir}/substrate.env" "JUICEFS_STORAGE_CLASS" "custom-juicefs-rwx"
+  replace_env_value "${env_dir}/substrate.env" "JUICEFS_PVC_NAME" "custom-files-pvc"
+  "${ROOT_DIR}/scripts/validate-juicefs-contract.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --manifests "${ROOT_DIR}/manifests/juicefs-csi" >"${out}" 2>&1
+  assert_contains "${out}" "storageClass=custom-juicefs-rwx"
+  assert_contains "${out}" "pvc=custom-files-pvc"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  pass "S6 JuiceFS CSI contract renders custom namespace, secretName, storageClass, PVC, RWX, and bucket URL"
 }
 
 test_forbidden_copy_guard() {
@@ -281,8 +482,12 @@ test_validate_env_rejects_secret_leak
 test_validate_env_rejects_loose_secret_mode
 test_offline_install_validates_cache_without_network
 test_offline_cache_rejects_public_download_contract
+test_p1_real_offline_cache_requires_artifacts_and_archive_sha
+test_p1_real_offline_cache_rejects_missing_image_archive_sha
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
+test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified
 test_juicefs_csi_contract
+test_juicefs_csi_contract_renders_custom_env_names
 test_forbidden_copy_guard
 
 printf '1..%d\n' "${pass_count}"
