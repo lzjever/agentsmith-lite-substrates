@@ -13,6 +13,10 @@ This first public-ready skeleton is validate-first:
 - validates secret redaction and owner-only secret file permissions
 - writes P0 offline-cache skeletons for contract-only dry-runs
 - produces `cacheMode: p1-real` offline caches from a non-secret artifact lock
+- provides `scripts/prepare-offline-cache.sh` as a thin one-command helper that
+  downloads fixed-version substrate artifacts, resolves/export images with
+  `skopeo`, writes `out/artifacts/offline-artifacts.env`, and delegates to the
+  p1-real producer
 - includes namespace bootstrap and offline image import helper artifacts in
   p1-real caches
 - validates p1-real manifest/checksum/images lock contracts, including required
@@ -87,8 +91,16 @@ scripts/install-offline.sh \
 For a real offline cache artifact set:
 
 ```bash
-cp config/offline-artifacts.example.env config/offline-artifacts.env
-# Fill config/offline-artifacts.env with pinned URLs, sha256 values, and image digests.
+scripts/prepare-offline-cache.sh \
+  --artifacts-dir out/artifacts \
+  --output dist/offline-cache \
+  --force
+```
+
+The generated `out/artifacts/offline-artifacts.env` lock is local output and
+should not be committed. To supply a hand-maintained lock instead:
+
+```bash
 scripts/download-online.sh \
   --artifacts config/offline-artifacts.env \
   --output dist/offline-cache \
@@ -163,6 +175,7 @@ not be projected into app workload env.
 ## Main Commands
 
 ```bash
+scripts/prepare-offline-cache.sh --artifacts-dir out/artifacts --output dist/offline-cache --force
 scripts/download-online.sh --contract-only --output dist/offline-cache --force
 scripts/download-online.sh --artifacts config/offline-artifacts.env --output dist/offline-cache --force
 scripts/install-online.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run

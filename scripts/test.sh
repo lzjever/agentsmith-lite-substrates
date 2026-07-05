@@ -1183,6 +1183,325 @@ EOF_LOCK
   fi
 }
 
+write_prepare_offline_cache_fixtures() {
+  local dir="$1"
+  mkdir -p "${dir}"
+  printf '#!/usr/bin/env sh\nprintf "k3s prepared fixture\\n"\n' >"${dir}/k3s"
+  printf '#!/usr/bin/env sh\nprintf "install k3s prepared fixture\\n"\n' >"${dir}/install-k3s.sh"
+  printf 'k3s airgap prepared fixture\n' >"${dir}/k3s-airgap-images-amd64.tar.zst"
+  printf '#!/usr/bin/env sh\nprintf "kubectl prepared fixture\\n"\n' >"${dir}/kubectl"
+  printf 'helm tarball fixture - should not be locked as bin/helm\n' >"${dir}/helm.tar.gz"
+  printf '#!/usr/bin/env sh\nprintf "helm prepared binary\\n"\n' >"${dir}/helm-binary"
+  printf 'juicefs csi chart prepared fixture\n' >"${dir}/juicefs-csi-driver-0.31.10.tgz"
+}
+
+write_prepare_tool_path() {
+  local dir="$1"
+  local omit="${2:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in awk basename bash cat chmod cmp cp cut dirname env find grep head mkdir mktemp mv pwd realpath readlink rm sed sha256sum sort stat tail tr wc; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" && "${tool_path}" == /* ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  [[ -x "${dir}/bash" ]] || fail "prepare-offline-cache test PATH is missing bash"
+  [[ -x "${dir}/sha256sum" ]] || fail "prepare-offline-cache test PATH is missing sha256sum"
+
+  if [[ "${omit}" != "curl" ]]; then
+    cat >"${dir}/curl" <<'EOF_PREPARE_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${PREPARE_FIXTURES:?PREPARE_FIXTURES is required}"
+out=""
+url=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--output)
+      out="${2:-}"
+      shift 2
+      ;;
+    --output=*)
+      out="${1#--output=}"
+      shift
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+  esac
+done
+[[ -n "${out}" && -n "${url}" ]] || {
+  printf 'curl fixture requires --output and URL\n' >&2
+  exit 2
+}
+mkdir -p "$(dirname "${out}")"
+case "${url}" in
+  */k3s)
+    cp "${PREPARE_FIXTURES}/k3s" "${out}"
+    ;;
+  */install.sh)
+    cp "${PREPARE_FIXTURES}/install-k3s.sh" "${out}"
+    ;;
+  *k3s-airgap-images-amd64.tar.zst)
+    cp "${PREPARE_FIXTURES}/k3s-airgap-images-amd64.tar.zst" "${out}"
+    ;;
+  */kubectl)
+    cp "${PREPARE_FIXTURES}/kubectl" "${out}"
+    ;;
+  *helm-*.tar.gz)
+    cp "${PREPARE_FIXTURES}/helm.tar.gz" "${out}"
+    ;;
+  *juicefs-csi-driver-0.31.10.tgz)
+    cp "${PREPARE_FIXTURES}/juicefs-csi-driver-0.31.10.tgz" "${out}"
+    ;;
+  *)
+    printf 'unexpected curl fixture URL: %s\n' "${url}" >&2
+    exit 3
+    ;;
+esac
+EOF_PREPARE_CURL
+    chmod +x "${dir}/curl"
+  fi
+
+  if [[ "${omit}" != "tar" ]]; then
+    cat >"${dir}/tar" <<'EOF_PREPARE_TAR'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${PREPARE_FIXTURES:?PREPARE_FIXTURES is required}"
+dest=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C)
+      dest="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "${dest}" ]] || {
+  printf 'tar fixture requires -C\n' >&2
+  exit 2
+}
+mkdir -p "${dest}/linux-amd64"
+cp "${PREPARE_FIXTURES}/helm-binary" "${dest}/linux-amd64/helm"
+EOF_PREPARE_TAR
+    chmod +x "${dir}/tar"
+  fi
+
+  if [[ "${omit}" != "skopeo" ]]; then
+    cat >"${dir}/skopeo" <<'EOF_PREPARE_SKOPEO'
+#!/usr/bin/env bash
+set -euo pipefail
+require_override_flags() {
+  local saw_os=false
+  local saw_arch=false
+  local previous=""
+  local arg
+  for arg in "$@"; do
+    if [[ "${previous}" == "--override-os" && "${arg}" == "linux" ]]; then
+      saw_os=true
+    fi
+    if [[ "${previous}" == "--override-arch" && "${arg}" == "amd64" ]]; then
+      saw_arch=true
+    fi
+    previous="${arg}"
+  done
+  [[ "${saw_os}" == "true" && "${saw_arch}" == "true" ]] || {
+    printf 'skopeo fixture requires --override-os linux --override-arch amd64\n' >&2
+    exit 7
+  }
+}
+
+digest_for_ref() {
+  case "$1" in
+    docker.io/library/postgres:16) printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
+    docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z) printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' ;;
+    docker.io/minio/mc:RELEASE.2025-08-13T08-35-41Z) printf 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n' ;;
+    docker.io/juicedata/juicefs-csi-driver:v0.31.10) printf 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n' ;;
+    registry.k8s.io/sig-storage/livenessprobe:v2.12.0) printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n' ;;
+    registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n' ;;
+    registry.k8s.io/sig-storage/csi-provisioner:v2.2.2) printf 'sha256:1111111111111111111111111111111111111111111111111111111111111111\n' ;;
+    registry.k8s.io/sig-storage/csi-resizer:v1.9.0) printf 'sha256:2222222222222222222222222222222222222222222222222222222222222222\n' ;;
+    docker.io/library/busybox:1.36.1) printf 'sha256:3333333333333333333333333333333333333333333333333333333333333333\n' ;;
+    *)
+      printf 'unexpected skopeo fixture ref: %s\n' "$1" >&2
+      exit 4
+      ;;
+  esac
+}
+
+cmd="${1:-}"
+shift || true
+if [[ -n "${PREPARE_SKOPEO_LOG:-}" ]]; then
+  printf 'skopeo %s %s\n' "${cmd}" "$*" >>"${PREPARE_SKOPEO_LOG}"
+fi
+case "${cmd}" in
+  inspect)
+    require_override_flags "$@"
+    ref=""
+    for arg in "$@"; do
+      if [[ "${arg}" == docker://* ]]; then
+        ref="${arg}"
+      fi
+    done
+    [[ -n "${ref}" ]] || {
+      printf 'skopeo inspect fixture requires docker:// source\n' >&2
+      exit 8
+    }
+    ref="${ref#docker://}"
+    digest_for_ref "${ref}"
+    ;;
+  copy)
+    require_override_flags "$@"
+    src=""
+    dest=""
+    for arg in "$@"; do
+      if [[ "${arg}" == docker://* ]]; then
+        src="${arg}"
+      elif [[ "${arg}" == docker-archive:* ]]; then
+        dest="${arg}"
+      fi
+    done
+    [[ "${src}" == docker://* && "${dest}" == docker-archive:* ]] || {
+      printf 'unexpected skopeo copy args: %s %s\n' "${src}" "${dest}" >&2
+      exit 5
+    }
+    image_ref="${src#docker://}"
+    [[ "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]] || {
+      printf 'skopeo copy fixture requires digest-pinned source: %s\n' "${image_ref}" >&2
+      exit 9
+    }
+    source_repo="${image_ref%@sha256:*}"
+    source_last="${source_repo##*/}"
+    [[ "${source_last}" != *:* ]] || {
+      printf 'skopeo copy fixture rejects source with both tag and digest: %s\n' "${image_ref}" >&2
+      exit 11
+    }
+    dest_payload="${dest#docker-archive:}"
+    [[ "${dest_payload}" == *:* ]] || {
+      printf 'skopeo copy fixture requires tagged docker-archive destination: %s\n' "${dest}" >&2
+      exit 12
+    }
+    archive="${dest_payload%%:*}"
+    repo_tag="${dest_payload#*:}"
+    repo_last="${repo_tag##*/}"
+    [[ -n "${archive}" && "${repo_last}" == *:* ]] || {
+      printf 'skopeo copy fixture requires docker-archive:archive:repo:tag destination: %s\n' "${dest}" >&2
+      exit 13
+    }
+    [[ "${source_repo}" == "${repo_tag%:*}" ]] || {
+      printf 'skopeo copy fixture source repo does not match archive tag: %s %s\n' "${source_repo}" "${repo_tag}" >&2
+      exit 14
+    }
+    expected_digest="$(digest_for_ref "${repo_tag}")"
+    [[ "${image_ref##*@}" == "${expected_digest}" ]] || {
+      printf 'skopeo copy fixture digest does not match inspect digest: %s\n' "${image_ref}" >&2
+      exit 10
+    }
+    mkdir -p "$(dirname "${archive}")"
+    printf 'oci archive fixture for %s as %s\n' "${image_ref}" "${repo_tag}" >"${archive}"
+    ;;
+  *)
+    printf 'unexpected skopeo command: %s\n' "${cmd}" >&2
+    exit 6
+    ;;
+esac
+EOF_PREPARE_SKOPEO
+    chmod +x "${dir}/skopeo"
+  fi
+}
+
+test_prepare_offline_cache_generates_lock_and_p1_cache() {
+  local fixtures="${TMP_DIR}/prepare-fixtures"
+  local stub_bin="${TMP_DIR}/prepare-bin"
+  local artifacts="${TMP_DIR}/prepare-artifacts"
+  local cache="${TMP_DIR}/prepare-cache"
+  local out="${TMP_DIR}/prepare-offline-cache.out"
+  local skopeo_log="${TMP_DIR}/prepare-skopeo.log"
+  local lock_file="${artifacts}/offline-artifacts.env"
+  write_prepare_offline_cache_fixtures "${fixtures}"
+  write_prepare_tool_path "${stub_bin}"
+
+  PREPARE_FIXTURES="${fixtures}" \
+    PREPARE_SKOPEO_LOG="${skopeo_log}" \
+    PATH="${stub_bin}" \
+    "${ROOT_DIR}/scripts/prepare-offline-cache.sh" \
+      --artifacts-dir "${artifacts}" \
+      --output "${cache}" \
+      --force >"${out}" 2>&1
+
+  assert_contains "${out}" "wrote artifact lock"
+  assert_contains "${out}" "wrote p1-real offline cache"
+  assert_contains "${skopeo_log}" "skopeo inspect --override-os linux --override-arch amd64 --format {{.Digest}} docker://docker.io/library/postgres:16"
+  assert_contains "${skopeo_log}" "skopeo copy --override-os linux --override-arch amd64 docker://docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb docker-archive:${artifacts}/images/oci/postgres.tar:docker.io/library/postgres:16"
+  test -f "${lock_file}" || fail "prepare-offline-cache did not write offline-artifacts.env"
+  assert_contains "${lock_file}" "K3S_BINARY_URL=file://${artifacts}/bin/k3s"
+  assert_contains "${lock_file}" "KUBECTL_BINARY_URL=file://${artifacts}/bin/kubectl"
+  assert_contains "${lock_file}" "HELM_BINARY_URL=file://${artifacts}/bin/helm"
+  assert_contains "${lock_file}" "JUICEFS_CSI_ARTIFACT_URL=file://${artifacts}/charts/juicefs-csi.tgz"
+  assert_contains "${lock_file}" "POSTGRES_IMAGE=docker.io/library/postgres:16@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  assert_contains "${lock_file}" "MINIO_IMAGE=docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  assert_contains "${lock_file}" "MINIO_CLIENT_IMAGE=docker.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  assert_contains "${lock_file}" "JUICEFS_CSI_IMAGE=docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  assert_contains "${lock_file}" "JUICEFS_CSI_LIVENESS_PROBE_IMAGE=registry.k8s.io/sig-storage/livenessprobe:v2.12.0@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  assert_contains "${lock_file}" "RWX_SMOKE_IMAGE=docker.io/library/busybox:1.36.1@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  assert_contains "${lock_file}" "POSTGRES_ARCHIVE_SHA256=$(sha256_file "${artifacts}/images/oci/postgres.tar")"
+  assert_not_contains "${lock_file}" "POSTGRES_ARCHIVE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  cmp -s "${fixtures}/helm-binary" "${artifacts}/bin/helm" || fail "prepare-offline-cache did not extract Helm binary"
+  if cmp -s "${fixtures}/helm.tar.gz" "${artifacts}/bin/helm"; then
+    fail "prepare-offline-cache locked the Helm tarball instead of the binary"
+  fi
+
+  assert_contains "${cache}/manifest.yaml" "cacheMode: p1-real"
+  assert_contains "${cache}/manifest.yaml" "path: bin/helm"
+  assert_contains "${cache}/images/images.lock" "image: docker.io/library/postgres:16@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  assert_contains "${cache}/images/images.lock" "image: docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  assert_contains "${cache}/images/images.lock" "image: docker.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  assert_contains "${cache}/images/images.lock" "image: docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  assert_contains "${cache}/images/images.lock" "image: docker.io/library/busybox:1.36.1@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  cmp -s "${fixtures}/helm-binary" "${cache}/bin/helm" || fail "prepare-offline-cache did not put Helm binary in p1-real cache"
+  pass "P1 prepare-offline-cache writes artifact lock and p1-real cache with digest-pinned required images"
+}
+
+test_prepare_offline_cache_fails_closed_when_required_tools_missing() {
+  local fixtures="${TMP_DIR}/prepare-missing-tools-fixtures"
+  local artifacts="${TMP_DIR}/prepare-missing-tools-artifacts"
+  local cache="${TMP_DIR}/prepare-missing-tools-cache"
+  local out="${TMP_DIR}/prepare-missing-curl.out"
+  local stub_bin="${TMP_DIR}/prepare-missing-curl-bin"
+  write_prepare_offline_cache_fixtures "${fixtures}"
+  write_prepare_tool_path "${stub_bin}" "curl"
+
+  if PREPARE_FIXTURES="${fixtures}" PATH="${stub_bin}" \
+    "${ROOT_DIR}/scripts/prepare-offline-cache.sh" \
+      --artifacts-dir "${artifacts}" \
+      --output "${cache}" \
+      --force >"${out}" 2>&1; then
+    fail "prepare-offline-cache accepted a PATH without curl"
+  fi
+  assert_contains "${out}" "curl is required"
+
+  out="${TMP_DIR}/prepare-missing-skopeo.out"
+  stub_bin="${TMP_DIR}/prepare-missing-skopeo-bin"
+  write_prepare_tool_path "${stub_bin}" "skopeo"
+  if PREPARE_FIXTURES="${fixtures}" PATH="${stub_bin}" \
+    "${ROOT_DIR}/scripts/prepare-offline-cache.sh" \
+      --artifacts-dir "${artifacts}" \
+      --output "${cache}" \
+      --force >"${out}" 2>&1; then
+    fail "prepare-offline-cache accepted a PATH without skopeo"
+  fi
+  assert_contains "${out}" "skopeo is required"
+  pass "P1 prepare-offline-cache fails closed when required tools are unavailable"
+}
+
 test_validate_env_split_and_redaction() {
   local dir="${TMP_DIR}/env-ok"
   local out="${TMP_DIR}/validate-ok.out"
@@ -1493,6 +1812,8 @@ scripts/validate-juicefs-contract.sh|--manifests|--env|
 scripts/reset-dev.sh|--config|--destroy-data|
 scripts/reset-dev.sh|--output|--destroy-data|
 scripts/reset-dev.sh|--cache|--destroy-data|
+scripts/prepare-offline-cache.sh|--artifacts-dir|--force|
+scripts/prepare-offline-cache.sh|--output|--force|
 scripts/download-online.sh|--output|--artifacts|/nonexistent-artifact-lock
 scripts/download-online.sh|--artifacts|--force|
 scripts/preflight.sh|--env|--dry-run|
@@ -4677,6 +4998,8 @@ test_download_online_rejects_mutable_csi_sidecar_image_ref
 test_download_online_requires_rwx_smoke_artifact_lock
 test_download_online_rejects_mutable_rwx_smoke_image_ref
 test_download_online_rejects_untagged_helm_consumed_image_ref
+test_prepare_offline_cache_generates_lock_and_p1_cache
+test_prepare_offline_cache_fails_closed_when_required_tools_missing
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias
 test_substrate_doctor_report_context_marks_invalid_cache_without_copying_raw_mode

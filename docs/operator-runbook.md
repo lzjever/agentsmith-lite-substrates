@@ -9,18 +9,22 @@ cluster mutation is enabled:
 | --- | --- |
 | Kubernetes | k3s-compatible Kubernetes 1.30+ |
 | kubectl | matching the target cluster minor when possible |
-| JuiceFS CSI | `csi.juicefs.com`, version to be pinned in the offline manifest |
+| JuiceFS CSI | `csi.juicefs.com`, default chart/image version `0.31.10` |
 | PostgreSQL | 16-compatible product database |
 | Object storage | S3-compatible endpoint; MinIO for self-hosted dev |
 
 ## Bring-Up
 
 1. Choose a config example from `config/`.
-2. Run an installer in validate-first mode.
-3. Run `validate-env.sh`.
-4. Run `validate-juicefs-contract.sh`.
-5. Run `preflight.sh` or `doctor.sh --dry-run` for static substrate checks.
-6. When the cluster is reachable, rerun doctor without `--dry-run` and provide
+2. For a real offline cache, run `scripts/prepare-offline-cache.sh
+   --artifacts-dir out/artifacts --output dist/offline-cache --force` on an
+   online host. Keep `out/artifacts/offline-artifacts.env` and the `file://`
+   artifact staging output uncommitted.
+3. Run an installer in validate-first mode.
+4. Run `validate-env.sh`.
+5. Run `validate-juicefs-contract.sh`.
+6. Run `preflight.sh` or `doctor.sh --dry-run` for static substrate checks.
+7. When the cluster is reachable, rerun doctor without `--dry-run` and provide
    either `--offline-cache` with `name: minio-client` and `name: rwx-smoke` in
    `images.lock`, or explicit `--s3-probe-image` and `--rwx-smoke-image`
    digest-pinned image refs.
