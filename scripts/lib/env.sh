@@ -145,6 +145,30 @@ validate_env_syntax() {
   fi
 }
 
+check_no_duplicate_env_keys() {
+  local file="$1"
+  local label="$2"
+  local duplicate
+  duplicate="$(awk '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      line=$0
+      sub(/\r$/, "", line)
+      sub(/^[[:space:]]*export[[:space:]]+/, "", line)
+      idx=index(line, "=")
+      if (idx == 0) { next }
+      key=substr(line, 1, idx - 1)
+      if (seen[key]++) {
+        print key
+        found=1
+        exit
+      }
+    }
+    END { if (!found) exit 1 }
+  ' "${file}" || true)"
+  [[ -z "${duplicate}" ]] || die "${label} contains duplicate key ${duplicate}"
+}
+
 require_key_present() {
   local file="$1"
   local key="$2"
@@ -211,6 +235,8 @@ validate_env_contract() {
   need_file "${secrets_file}"
   validate_env_syntax "${env_file}" "substrate.env"
   validate_env_syntax "${secrets_file}" "substrate.secrets.env"
+  check_no_duplicate_env_keys "${env_file}" "substrate.env"
+  check_no_duplicate_env_keys "${secrets_file}" "substrate.secrets.env"
   check_secret_file_mode "${secrets_file}"
 
   local key
@@ -241,11 +267,14 @@ validate_env_contract() {
   require_key_nonempty "${secrets_file}" "S3_SECRET_KEY" "substrate.secrets.env"
   require_key_nonempty "${secrets_file}" "JUICEFS_META_URL" "substrate.secrets.env"
 
-  local env_version secrets_version auth_mode
+  local env_version secrets_version auth_mode app_session_secret
   env_version="$(env_value_or_empty "${env_file}" "SUBSTRATE_SCHEMA_VERSION")"
   secrets_version="$(env_value_or_empty "${secrets_file}" "SUBSTRATE_SCHEMA_VERSION")"
   [[ "${env_version}" == "${SUBSTRATE_ENV_SCHEMA_VERSION}" ]] || die "unsupported substrate.env schema version ${env_version}"
   [[ "${secrets_version}" == "${SUBSTRATE_ENV_SCHEMA_VERSION}" ]] || die "unsupported substrate.secrets.env schema version ${secrets_version}"
+
+  app_session_secret="$(env_value_or_empty "${secrets_file}" "APP_SESSION_SECRET")"
+  [[ "${#app_session_secret}" -ge 32 ]] || die "APP_SESSION_SECRET must be at least 32 characters"
 
   auth_mode="$(env_value_or_empty "${env_file}" "AUTH_MODE")"
   case "${auth_mode}" in

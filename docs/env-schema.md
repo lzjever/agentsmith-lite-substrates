@@ -12,6 +12,8 @@ same key boundary as the schemas.
 `schemas/substrates-config.v1.schema.json` is kept aligned with
 `scripts/lib/config.sh::validate_config_contract`: required mode-specific config
 keys and small enums should be accepted or rejected the same way in both places.
+When `kubernetes.distribution` is present it must be `k3s`; local `kind` configs
+are intentionally outside this substrate contract.
 The schema remains intentionally light on unknown keys so operators can carry
 future or installer-specific metadata without breaking validation.
 
@@ -31,4 +33,6 @@ names, ingress settings, and optional registry coordinates.
   `JUICEFS_META_URL`
 
 The validator rejects secret keys in `substrate.env`, rejects unknown keys in
-the secret file, checks owner-only permissions, and prints fingerprints only.
+the secret file, rejects duplicate keys in both files, checks owner-only
+permissions, requires `APP_SESSION_SECRET` to be at least 32 characters, and
+prints fingerprints only.

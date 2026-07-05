@@ -53,7 +53,7 @@
       "type": "object",
       "required": ["namespace"],
       "properties": {
-        "distribution": { "type": "string" },
+        "distribution": { "const": "k3s" },
         "namespace": { "type": "string", "minLength": 1 },
         "kubeconfigOutput": { "type": "string" },
         "kubeconfigPath": { "type": "string" },

@@ -70,12 +70,16 @@ validate_config_contract() {
   local config_file="$1"
   need_file "${config_file}"
 
-  local mode provider auth_mode csi_driver
+  local mode provider auth_mode csi_driver distribution
   mode="$(config_required_value "${config_file}" "mode")"
   case "${mode}" in
     self-hosted|existing-cloud) ;;
     *) die "config contract mode must be self-hosted or existing-cloud" ;;
   esac
+
+  if distribution="$(config_raw_value "${config_file}" "kubernetes.distribution" 2>/dev/null)"; then
+    [[ "${distribution}" == "k3s" ]] || die "config contract kubernetes.distribution must be k3s"
+  fi
 
   local required_key
   for required_key in \

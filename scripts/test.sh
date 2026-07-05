@@ -83,7 +83,7 @@ EOF_ENV
   cat >"${dir}/substrate.secrets.env" <<'EOF_SECRETS'
 SUBSTRATE_SCHEMA_VERSION=agentsmith-lite.substrate.env/v1
 POSTGRES_APP_URL=postgresql://agentsmith:postgres-secret-value@postgres.agentsmith.svc.cluster.local:5432/agentsmith_lite
-APP_SESSION_SECRET=app-session-secret-value
+APP_SESSION_SECRET=app-session-secret-value-0123456789abcdef
 S3_ACCESS_KEY=minio-access-key
 S3_SECRET_KEY=minio-secret-value
 JUICEFS_META_URL=postgresql://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta
@@ -1035,7 +1035,7 @@ test_validate_env_split_and_redaction() {
   assert_contains "${out}" "secret boundary"
   assert_contains "${out}" "fingerprint="
   assert_not_contains "${out}" "postgres-secret-value"
-  assert_not_contains "${out}" "app-session-secret-value"
+  assert_not_contains "${out}" "app-session-secret-value-0123456789abcdef"
   assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${out}" "admin-secret-value"
   pass "S1 env/secrets contract accepts split files and redacts substrate/CSI secrets"
@@ -1054,6 +1054,47 @@ test_validate_env_rejects_secret_leak() {
   pass "S1 env/secrets contract rejects secret keys in substrate.env"
 }
 
+test_validate_env_rejects_duplicate_non_secret_key() {
+  local dir="${TMP_DIR}/env-duplicate-non-secret"
+  local out="${TMP_DIR}/validate-duplicate-non-secret.out"
+  write_valid_env_pair "${dir}"
+  printf 'KUBE_NAMESPACE=shadow-namespace\n' >>"${dir}/substrate.env"
+  if "${ROOT_DIR}/scripts/validate-env.sh" --env "${dir}/substrate.env" --secrets "${dir}/substrate.secrets.env" >"${out}" 2>&1; then
+    fail "validate-env accepted duplicate KUBE_NAMESPACE in substrate.env"
+  fi
+  assert_contains "${out}" "substrate.env contains duplicate key KUBE_NAMESPACE"
+  assert_not_contains "${out}" "shadow-namespace"
+  pass "P0 env contract rejects duplicate KUBE_NAMESPACE without printing values"
+}
+
+test_validate_env_rejects_duplicate_secret_key() {
+  local dir="${TMP_DIR}/env-duplicate-secret"
+  local out="${TMP_DIR}/validate-duplicate-secret.out"
+  write_valid_env_pair "${dir}"
+  printf 'S3_SECRET_KEY=second-minio-secret-value\n' >>"${dir}/substrate.secrets.env"
+  if "${ROOT_DIR}/scripts/validate-env.sh" --env "${dir}/substrate.env" --secrets "${dir}/substrate.secrets.env" >"${out}" 2>&1; then
+    fail "validate-env accepted duplicate S3_SECRET_KEY in substrate.secrets.env"
+  fi
+  assert_contains "${out}" "substrate.secrets.env contains duplicate key S3_SECRET_KEY"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${out}" "second-minio-secret-value"
+  pass "P0 env contract rejects duplicate S3_SECRET_KEY without leaking values"
+}
+
+test_validate_env_rejects_short_app_session_secret() {
+  local dir="${TMP_DIR}/env-app-secret-length"
+  local out="${TMP_DIR}/validate-app-secret-length.out"
+  write_valid_env_pair "${dir}"
+  replace_env_value "${dir}/substrate.secrets.env" "APP_SESSION_SECRET" "short"
+  chmod 0600 "${dir}/substrate.secrets.env"
+  if "${ROOT_DIR}/scripts/validate-env.sh" --env "${dir}/substrate.env" --secrets "${dir}/substrate.secrets.env" >"${out}" 2>&1; then
+    fail "validate-env accepted short APP_SESSION_SECRET"
+  fi
+  assert_contains "${out}" "APP_SESSION_SECRET must be at least 32 characters"
+  assert_not_contains "${out}" "short"
+  pass "P0 env contract rejects short APP_SESSION_SECRET without printing the value"
+}
+
 test_validate_env_rejects_loose_secret_mode() {
   local dir="${TMP_DIR}/env-mode"
   local out="${TMP_DIR}/validate-mode.out"
@@ -1065,6 +1106,23 @@ test_validate_env_rejects_loose_secret_mode() {
   assert_contains "${out}" "secret env permissions must not allow group/world access"
   assert_not_contains "${out}" "minio-secret-value"
   pass "S1 env/secrets contract rejects loose secret file permissions"
+}
+
+test_config_contract_rejects_self_hosted_non_k3s_distribution() {
+  local cache="${TMP_DIR}/config-contract-kind-cache"
+  local config="${TMP_DIR}/config-contract-kind.yaml"
+  local output="${TMP_DIR}/config-contract-kind-out"
+  local out="${TMP_DIR}/config-contract-kind.out"
+  local tmp="${config}.tmp"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  awk '{ if ($0 == "  distribution: k3s") print "  distribution: kind"; else print }' "${config}" >"${tmp}"
+  mv "${tmp}" "${config}"
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted self-hosted kubernetes.distribution=kind"
+  fi
+  assert_contains "${out}" "config contract kubernetes.distribution must be k3s"
+  pass "P0 config contract rejects self-hosted kubernetes.distribution=kind"
 }
 
 test_config_contract_rejects_invalid_mode() {
@@ -1121,6 +1179,7 @@ test_config_contract_rejects_existing_cloud_app_url_typo() {
 test_config_schema_matches_shell_contract() {
   local schema="${ROOT_DIR}/schemas/substrates-config.v1.schema.json"
   assert_contains "${schema}" '"mode": { "enum": ["self-hosted", "existing-cloud"] }'
+  assert_contains "${schema}" '"distribution": { "const": "k3s" }'
   assert_contains "${schema}" '"required": ["provider", "bucket"]'
   assert_contains "${schema}" '"provider": { "enum": ["minio", "s3"] }'
   assert_contains "${schema}" '"mode": { "enum": ["builtin_admin", "oidc"] }'
@@ -1853,7 +1912,7 @@ test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
 
   if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
     JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
-    APP_SESSION_SECRET="app-session-secret-value" \
+    APP_SESSION_SECRET="app-session-secret-value-0123456789abcdef" \
     BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
     S3_ACCESS_KEY="existing-access-key" \
     S3_SECRET_KEY="existing-secret-value" \
@@ -2129,7 +2188,7 @@ test_existing_cloud_offline_install_fails_without_psql() {
 
   if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
     JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
-    APP_SESSION_SECRET="app-session-secret-value" \
+    APP_SESSION_SECRET="app-session-secret-value-0123456789abcdef" \
     BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
     S3_ACCESS_KEY="existing-access-key" \
     S3_SECRET_KEY="existing-secret-value" \
@@ -3410,7 +3469,11 @@ test_forbidden_copy_guard() {
 
 test_validate_env_split_and_redaction
 test_validate_env_rejects_secret_leak
+test_validate_env_rejects_duplicate_non_secret_key
+test_validate_env_rejects_duplicate_secret_key
+test_validate_env_rejects_short_app_session_secret
 test_validate_env_rejects_loose_secret_mode
+test_config_contract_rejects_self_hosted_non_k3s_distribution
 test_config_contract_rejects_invalid_mode
 test_config_contract_rejects_missing_bucket
 test_config_contract_rejects_existing_cloud_app_url_typo
