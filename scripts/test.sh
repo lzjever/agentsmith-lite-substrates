@@ -1405,6 +1405,25 @@ test_p1_real_offline_install_dry_run_skips_cluster_mutation() {
   pass "P1 offline installer dry-run validates p1-real cache without cluster mutation"
 }
 
+test_online_install_dry_run_validates_p1_real_cache_without_mutation() {
+  local cache="${TMP_DIR}/online-cache-p1-dry-run-no-mutate"
+  local config="${TMP_DIR}/substrates-online-p1-dry-run-no-mutate.yaml"
+  local output="${TMP_DIR}/online-p1-dry-run-no-mutate-out"
+  local out="${TMP_DIR}/install-online-p1-dry-run-no-mutate.out"
+  local call_log="${TMP_DIR}/online-p1-dry-run-call.log"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}"
+
+  CALL_LOG="${call_log}" "${ROOT_DIR}/scripts/install-online.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1
+  if [[ -s "${call_log}" ]]; then
+    fail "online p1-real dry-run called cached mutation artifacts"
+  fi
+  assert_contains "${out}" "offline cache contract validated (p1-real)"
+  assert_contains "${out}" "dry-run: validated p1-real cache contract; skipped cluster mutation"
+  pass "P1 online installer dry-run validates p1-real cache without cluster mutation"
+}
+
 test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   local cache="${TMP_DIR}/offline-cache-p1-live"
   local config="${TMP_DIR}/substrates-p1-live.yaml"
@@ -1598,6 +1617,126 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${report}" "minio-secret-value"
   assert_contains "${report}" "live JuiceFS PVC phase is Bound"
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
+}
+
+test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
+  local cache="${TMP_DIR}/online-cache-p1-live"
+  local config="${TMP_DIR}/substrates-online-p1-live.yaml"
+  local output="${TMP_DIR}/online-p1-live-out"
+  local out="${TMP_DIR}/install-online-p1-live.out"
+  local call_log="${TMP_DIR}/online-p1-live-call.log"
+  local airgap_dir="${TMP_DIR}/online-p1-live-airgap"
+  local exec_stdin_dir="${TMP_DIR}/online-p1-live-exec-stdin"
+  local forbidden_bin="${TMP_DIR}/online-p1-live-path-bin"
+  local forbidden_log="${TMP_DIR}/online-p1-live-forbidden.log"
+  local rendered="${output}/rendered/offline-install"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_forbidden_path_bin "${forbidden_bin}"
+  write_config "${config}"
+
+  CALL_LOG="${call_log}" \
+    EXEC_STDIN_DIR="${exec_stdin_dir}" \
+    FORBIDDEN_LOG="${forbidden_log}" \
+    K3S_AIRGAP_DIR="${airgap_dir}" \
+    POSTGRES_PASSWORD="postgres-secret-value" \
+    JUICEFS_META_PASSWORD="juicefs-secret-value" \
+    PATH="${forbidden_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/install-online.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
+      printf '%s\n' "install-online output:" >&2
+      sed -n '1,220p' "${out}" >&2
+      fail "online self-hosted p1-real install did not delegate cached chain"
+    }
+
+  [[ ! -s "${forbidden_log}" ]] || fail "install-online used a forbidden PATH/public-network tool: $(<"${forbidden_log}")"
+  test -f "${output}/substrate.env" || fail "install-online did not write substrate.env"
+  test -f "${output}/substrate.secrets.env" || fail "install-online did not write substrate.secrets.env"
+  test -f "${rendered}/postgres.yaml" || fail "install-online did not render self-hosted Postgres through delegated p1 chain"
+  test -f "${rendered}/minio.yaml" || fail "install-online did not render self-hosted MinIO through delegated p1 chain"
+  assert_line_order "${call_log}" \
+    "install-k3s" \
+    "import-images args=" \
+    "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace agentsmith"
+  assert_contains "${out}" "install-offline: running cached k3s installer"
+  assert_contains "${out}" "doctor passed"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "minio-access-key"
+  assert_not_contains "${call_log}" "minio-secret-value"
+  pass "P1 online self-hosted installer delegates non-dry-run to cached p1-real chain"
+}
+
+test_online_install_existing_cloud_non_dry_run_delegates_validation_only() {
+  local cache="${TMP_DIR}/online-cache-existing-cloud"
+  local config="${TMP_DIR}/substrates-online-existing-cloud.yaml"
+  local output="${TMP_DIR}/online-existing-cloud-out"
+  local out="${TMP_DIR}/install-online-existing-cloud.out"
+  local call_log="${TMP_DIR}/online-existing-cloud-call.log"
+  local stub_bin="${TMP_DIR}/online-existing-cloud-bin"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_existing_cloud_config "${config}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/psql"
+
+  POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
+    S3_ACCESS_KEY="existing-access-key" \
+    S3_SECRET_KEY="existing-secret-value" \
+    CALL_LOG="${call_log}" \
+    K3S_AIRGAP_DIR="${TMP_DIR}/online-existing-cloud-airgap" \
+    PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/install-online.sh" --offline-cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
+      printf '%s\n' "install-online output:" >&2
+      sed -n '1,220p' "${out}" >&2
+      fail "online existing-cloud p1-real validation did not complete"
+    }
+
+  assert_contains "${out}" "existing-cloud mode; skipping self-hosted PostgreSQL, MinIO, and k3s mutation"
+  assert_contains "${out}" "doctor passed"
+  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
+  assert_not_contains "${call_log}" "install-k3s"
+  assert_not_contains "${call_log}" "import-images"
+  assert_not_contains "${call_log}" "postgres.yaml"
+  assert_not_contains "${call_log}" "minio.yaml"
+  [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "online existing-cloud rendered self-hosted Postgres"
+  [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO"
+  [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO bucket init Job"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "existing-access-key"
+  assert_not_contains "${out}" "existing-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "existing-access-key"
+  assert_not_contains "${call_log}" "existing-secret-value"
+  pass "P1 online existing-cloud installer delegates non-dry-run to validation only"
+}
+
+test_online_install_p0_contract_non_dry_run_fails() {
+  local cache="${TMP_DIR}/online-cache-p0-live"
+  local config="${TMP_DIR}/substrates-online-p0-live.yaml"
+  local output="${TMP_DIR}/online-p0-live-out"
+  local out="${TMP_DIR}/install-online-p0-live.out"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+
+  if "${ROOT_DIR}/scripts/install-online.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-online performed a non-dry-run install from a p0-contract cache"
+  fi
+  assert_contains "${out}" "cannot perform live online install from a P0 static cache skeleton"
+  pass "P1 online installer rejects p0-contract caches outside dry-run"
 }
 
 test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs() {
@@ -2991,7 +3130,11 @@ test_p1_real_offline_cache_rejects_mutable_minio_client_image_ref
 test_p1_real_offline_cache_rejects_app_owned_rwx_smoke_image_ref
 test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
+test_online_install_dry_run_validates_p1_real_cache_without_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
+test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain
+test_online_install_existing_cloud_non_dry_run_delegates_validation_only
+test_online_install_p0_contract_non_dry_run_fails
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
 test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs
 test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc

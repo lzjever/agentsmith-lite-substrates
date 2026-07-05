@@ -41,7 +41,9 @@ This first public-ready skeleton is validate-first:
 ```bash
 scripts/test.sh
 
+scripts/download-online.sh --contract-only --output dist/offline-cache --force
 scripts/install-online.sh \
+  --cache dist/offline-cache \
   --config config/substrates.self-hosted.example.yaml \
   --output out \
   --dry-run
@@ -86,6 +88,24 @@ scripts/download-online.sh \
   --force
 ```
 
+Use that p1-real cache with the online entrypoint when the operator host has
+network access but installation should still reuse the substrate dependency
+cache:
+
+```bash
+scripts/install-online.sh \
+  --cache dist/offline-cache \
+  --config config/substrates.self-hosted.example.yaml \
+  --output out \
+  --dry-run
+```
+
+`--offline-cache` is accepted as an alias for `--cache`. Dry-run validates the
+env contract and cache only. Non-dry-run requires `cacheMode: p1-real`; a
+`p0-contract` cache fails instead of pretending to install. In `existing-cloud`
+mode, non-dry-run writes the same env files and runs doctor/live validation
+without rendering or installing self-hosted PostgreSQL, MinIO, or k3s.
+
 ## Secret Boundary
 
 `substrate.env` is non-secret and can be attached to support tickets.
@@ -104,7 +124,7 @@ not be projected into app workload env.
 ```bash
 scripts/download-online.sh --contract-only --output dist/offline-cache --force
 scripts/download-online.sh --artifacts config/offline-artifacts.env --output dist/offline-cache --force
-scripts/install-online.sh --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
+scripts/install-online.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/install-offline.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.secrets.env
 scripts/validate-juicefs-contract.sh --env out/substrate.env --secrets out/substrate.secrets.env

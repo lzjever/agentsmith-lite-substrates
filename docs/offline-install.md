@@ -104,6 +104,28 @@ separate `repository` and `tag` values. It writes
 manifest, and an offline `scripts/import-images.sh` helper without public
 download URLs in the cache manifest.
 
+## Online Entry With an Existing Cache
+
+`scripts/install-online.sh` accepts the same substrate cache with `--cache` or
+`--offline-cache`. This entrypoint does not download app images or copy the
+offline install chain; it validates the cache and env contract, then reuses the
+p1-real install functions.
+
+```bash
+scripts/install-online.sh \
+  --cache dist/offline-cache \
+  --config config/substrates.self-hosted.example.yaml \
+  --output out \
+  --dry-run
+```
+
+Dry-run validates env/cache and skips cluster mutation. Without `--dry-run`, a
+`p0-contract` cache fails immediately. For `mode: self-hosted`, a p1-real cache
+runs the cached k3s/import/kubectl/Helm chain. For `mode: existing-cloud`, it
+writes `substrate.env` and `substrate.secrets.env`, then runs doctor/live
+validation only; it does not render or install self-hosted PostgreSQL, MinIO, or
+k3s.
+
 ## p1-real Cache
 
 When a produced or supplied cache declares `cacheMode: p1-real`, validation
