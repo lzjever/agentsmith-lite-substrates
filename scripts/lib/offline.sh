@@ -106,6 +106,84 @@ images_lock_archives() {
   ' "${lock_file}"
 }
 
+images_lock_entries() {
+  local lock_file="$1"
+  awk '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    function value_after_colon(line) {
+      return trim(substr(line, index(line, ":") + 1))
+    }
+    function flush() {
+      if (entry_seen) {
+        print name "\t" image "\t" archive "\t" sha
+      }
+      entry_seen=0
+      name=""
+      image=""
+      archive=""
+      sha=""
+    }
+    /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      flush()
+      name=value_after_colon($0)
+      entry_seen=1
+      next
+    }
+    entry_seen && /^[[:space:]]*image:[[:space:]]*/ {
+      image=value_after_colon($0)
+      next
+    }
+    entry_seen && /^[[:space:]]*archive:[[:space:]]*/ {
+      archive=value_after_colon($0)
+      next
+    }
+    entry_seen && /^[[:space:]]*sha256:[[:space:]]*/ {
+      sha=value_after_colon($0)
+      next
+    }
+    END { flush() }
+  ' "${lock_file}"
+}
+
+substrate_allowed_image_archive() {
+  local name="$1"
+  case "${name}" in
+    postgres) printf '%s\n' "images/oci/postgres.tar" ;;
+    minio) printf '%s\n' "images/oci/minio.tar" ;;
+    minio-client) printf '%s\n' "images/oci/minio-client.tar" ;;
+    juicefs-csi) printf '%s\n' "images/oci/juicefs-csi.tar" ;;
+    juicefs-csi-liveness-probe) printf '%s\n' "images/oci/juicefs-csi-liveness-probe.tar" ;;
+    juicefs-csi-node-driver-registrar) printf '%s\n' "images/oci/juicefs-csi-node-driver-registrar.tar" ;;
+    juicefs-csi-provisioner) printf '%s\n' "images/oci/juicefs-csi-provisioner.tar" ;;
+    juicefs-csi-resizer) printf '%s\n' "images/oci/juicefs-csi-resizer.tar" ;;
+    rwx-smoke) printf '%s\n' "images/oci/rwx-smoke.tar" ;;
+    *) return 1 ;;
+  esac
+}
+
+is_substrate_allowed_oci_archive() {
+  local archive="$1"
+  case "${archive}" in
+    images/oci/postgres.tar|\
+    images/oci/minio.tar|\
+    images/oci/minio-client.tar|\
+    images/oci/juicefs-csi.tar|\
+    images/oci/juicefs-csi-liveness-probe.tar|\
+    images/oci/juicefs-csi-node-driver-registrar.tar|\
+    images/oci/juicefs-csi-provisioner.tar|\
+    images/oci/juicefs-csi-resizer.tar|\
+    images/oci/rwx-smoke.tar)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 require_manifest_artifact() {
   local manifest_file="$1"
   local kind="$2"
@@ -252,6 +330,50 @@ validate_images_lock_archives() {
     actual="$(sha256_file "${file}")"
     [[ "${actual}" == "${expected}" ]] || die "images.lock archive sha256 mismatch for ${archive}"
   done < <(images_lock_archives "${lock_file}")
+}
+
+validate_images_lock_allowlist() {
+  local lock_file="$1"
+  local -A seen=()
+  local name image archive expected_sha expected_archive
+
+  while IFS=$'\t' read -r name image archive expected_sha; do
+    [[ -n "${name:-}" ]] || die "images.lock contains an image entry without name"
+    if ! expected_archive="$(substrate_allowed_image_archive "${name}")"; then
+      die "substrate offline cache images.lock contains non-substrate image entry: ${name}"
+    fi
+    [[ -z "${seen[${name}]:-}" ]] || die "images.lock contains duplicate substrate image entry: ${name}"
+    seen["${name}"]=1
+    [[ -n "${archive:-}" ]] || die "images.lock entry ${name} is missing archive"
+    [[ "${archive}" == "${expected_archive}" ]] \
+      || die "images.lock entry ${name} must declare archive: ${expected_archive}"
+  done < <(images_lock_entries "${lock_file}")
+}
+
+validate_manifest_oci_archive_allowlist() {
+  local manifest_file="$1"
+  local path sha kind
+  while IFS=$'\t' read -r path sha kind; do
+    [[ "${kind:-}" == "oci-archive" ]] || continue
+    if ! is_substrate_allowed_oci_archive "${path:-}"; then
+      die "offline cache manifest contains non-substrate OCI archive: ${path}"
+    fi
+  done < <(manifest_artifacts "${manifest_file}")
+}
+
+validate_oci_archive_files_allowlist() {
+  local cache_dir="$1"
+  local cache_root oci_dir file rel
+  cache_root="$(cd "${cache_dir}" && pwd -P)" || die "required directory not found: ${cache_dir}"
+  oci_dir="${cache_root}/images/oci"
+  [[ -d "${oci_dir}" ]] || return 0
+
+  while IFS= read -r file; do
+    rel="${file#${cache_root}/}"
+    if ! is_substrate_allowed_oci_archive "${rel}"; then
+      die "offline cache images/oci contains non-substrate OCI archive: ${rel}"
+    fi
+  done < <(find "${oci_dir}" -type f -name '*.tar' -print)
 }
 
 cache_relative_path() {
@@ -459,6 +581,9 @@ validate_offline_cache() {
   done < <(awk '/^[[:space:]]*image:/ { print $2 }' "${lock_file}")
 
   validate_images_lock_archives "${cache_dir}"
+  validate_images_lock_allowlist "${lock_file}"
+  validate_manifest_oci_archive_allowlist "${manifest_file}"
+  validate_oci_archive_files_allowlist "${cache_dir}"
 
   if [[ "${cache_mode}" == "p1-real" ]]; then
     validate_p1_real_cache "${cache_dir}"

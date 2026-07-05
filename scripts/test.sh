@@ -727,6 +727,36 @@ replace_images_lock_image_ref() {
   mv "${tmp}" "${cache}/images/images.lock"
 }
 
+append_p1_image_entry() {
+  local cache="$1"
+  local name="$2"
+  local image_ref="$3"
+  local archive="$4"
+  local archive_sum
+
+  mkdir -p "${cache}/$(dirname "${archive}")"
+  printf 'extra oci archive fixture for %s\n' "${name}" >"${cache}/${archive}"
+  archive_sum="$(sha256_file "${cache}/${archive}")"
+
+  cat >>"${cache}/images/images.lock" <<EOF_LOCK
+  - name: ${name}
+    image: ${image_ref}
+    archive: ${archive}
+    sha256: ${archive_sum}
+EOF_LOCK
+
+  cat >>"${cache}/manifest.yaml" <<EOF_MANIFEST
+  - path: ${archive}
+    sha256: ${archive_sum}
+    kind: oci-archive
+EOF_MANIFEST
+
+  printf '%s  %s\n' "${archive_sum}" "${archive}" >>"${cache}/checksums.txt"
+  refresh_checksum_entry "${cache}" "images/images.lock"
+  refresh_manifest_artifact_checksum "${cache}" "images/images.lock"
+  refresh_manifest_checksum_entry "${cache}"
+}
+
 file_url() {
   local file="$1"
   printf 'file://%s' "${file}"
@@ -1536,6 +1566,44 @@ test_p1_real_offline_cache_rejects_app_owned_rwx_smoke_image_ref() {
   assert_contains "${out}" "substrate offline cache must not include app-owned images"
   assert_not_contains "${out}" "${app_image}"
   pass "S5 p1-real offline-cache contract rejects app-owned rwx-smoke image refs without leaking the ref"
+}
+
+test_p1_real_offline_cache_rejects_unknown_images_lock_entry() {
+  local cache="${TMP_DIR}/offline-cache-p1-unknown-image-entry"
+  local config="${TMP_DIR}/substrates-p1-unknown-image-entry.yaml"
+  local output="${TMP_DIR}/offline-p1-unknown-image-entry-out"
+  local out="${TMP_DIR}/install-offline-p1-unknown-image-entry.out"
+  local unknown_image="ghcr.io/agentsmith-lite/agentsmith-lite-worker@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  append_p1_image_entry \
+    "${cache}" \
+    "agentsmith-lite-worker" \
+    "${unknown_image}" \
+    "images/oci/agentsmith-lite-worker.tar"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted an unknown digest-pinned image entry in a p1-real cache"
+  fi
+  assert_contains "${out}" "substrate offline cache images.lock contains non-substrate image entry: agentsmith-lite-worker"
+  assert_not_contains "${out}" "${unknown_image}"
+  pass "S5 p1-real offline-cache contract rejects unknown digest-pinned image entries"
+}
+
+test_p1_real_offline_cache_rejects_extra_unlisted_oci_archive() {
+  local cache="${TMP_DIR}/offline-cache-p1-extra-oci-archive"
+  local config="${TMP_DIR}/substrates-p1-extra-oci-archive.yaml"
+  local output="${TMP_DIR}/offline-p1-extra-oci-archive-out"
+  local out="${TMP_DIR}/install-offline-p1-extra-oci-archive.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  printf 'unlisted app-like oci archive fixture\n' >"${cache}/images/oci/agentsmith-lite-worker.tar"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted an extra unlisted OCI archive in a p1-real cache"
+  fi
+  assert_contains "${out}" "offline cache images/oci contains non-substrate OCI archive: images/oci/agentsmith-lite-worker.tar"
+  pass "S5 p1-real offline-cache contract rejects extra unlisted OCI archives"
 }
 
 test_p0_contract_offline_install_non_dry_run_still_fails() {
@@ -3641,6 +3709,8 @@ test_p1_real_offline_cache_requires_minio_client_oci_archive
 test_p1_real_offline_cache_requires_minio_client_images_lock_archive_sha
 test_p1_real_offline_cache_rejects_mutable_minio_client_image_ref
 test_p1_real_offline_cache_rejects_app_owned_rwx_smoke_image_ref
+test_p1_real_offline_cache_rejects_unknown_images_lock_entry
+test_p1_real_offline_cache_rejects_extra_unlisted_oci_archive
 test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
 test_online_install_dry_run_validates_p1_real_cache_without_mutation

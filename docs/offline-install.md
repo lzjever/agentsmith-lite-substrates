@@ -146,6 +146,8 @@ requires:
 - dependency image entries for PostgreSQL, MinIO, MinIO client, JuiceFS CSI,
   the JuiceFS CSI liveness probe, node-driver-registrar, provisioner, and
   resizer sidecars, and the `rwx-smoke` Job image
+- no `images.lock` entries or `images/oci/*.tar` files outside that substrate
+  image allowlist
 - digest-pinned image references
 - archive paths and per-archive sha256 values in `images.lock`
 
