@@ -8,12 +8,14 @@ source "${ROOT_DIR}/scripts/lib/env.sh"
 source "${ROOT_DIR}/scripts/lib/offline.sh"
 # shellcheck source=lib/postgres.sh
 source "${ROOT_DIR}/scripts/lib/postgres.sh"
+# shellcheck source=lib/s3_probe.sh
+source "${ROOT_DIR}/scripts/lib/s3_probe.sh"
 # shellcheck source=lib/rwx_smoke.sh
 source "${ROOT_DIR}/scripts/lib/rwx_smoke.sh"
 
 usage() {
   cat <<'EOF_USAGE'
-Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--rwx-smoke-image image@sha256:<digest>] [--dry-run] [--report out/doctor-report.json]
+Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--s3-probe-image image@sha256:<digest>] [--rwx-smoke-image image@sha256:<digest>] [--dry-run] [--report out/doctor-report.json]
 
 Substrate-only checks:
   K8s reachability/namespace, PostgreSQL URL/connectivity, S3 credential presence/probe,
@@ -30,6 +32,7 @@ EOF_USAGE
 env_file=""
 secrets_file=""
 offline_cache=""
+s3_probe_image=""
 rwx_smoke_image=""
 report_file=""
 dry_run=false
@@ -46,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --offline-cache)
       offline_cache="${2:-}"
+      shift 2
+      ;;
+    --s3-probe-image)
+      s3_probe_image="${2:-}"
       shift 2
       ;;
     --rwx-smoke-image)
@@ -79,6 +86,8 @@ fi
 checks_json=()
 failed=false
 partial=false
+resolved_s3_probe_image=""
+doctor_s3_probe_image_error=""
 resolved_rwx_smoke_image=""
 doctor_rwx_smoke_image_error=""
 
@@ -143,6 +152,49 @@ doctor_check_postgres_url() {
   fi
 }
 
+doctor_validate_s3_probe_image_ref() {
+  local image_ref="$1"
+  if [[ ! "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    doctor_s3_probe_image_error="S3 probe image must be digest-pinned with @sha256:<64 lowercase hex>"
+    return 1
+  fi
+  if is_app_owned_image_ref "${image_ref}"; then
+    doctor_s3_probe_image_error="S3 probe image must not reference app-owned images"
+    return 1
+  fi
+  return 0
+}
+
+doctor_resolve_s3_probe_image() {
+  local lock_file image_ref
+  resolved_s3_probe_image=""
+  doctor_s3_probe_image_error=""
+
+  if [[ -n "${s3_probe_image}" ]]; then
+    doctor_validate_s3_probe_image_ref "${s3_probe_image}" || return 1
+    resolved_s3_probe_image="${s3_probe_image}"
+    return 0
+  fi
+
+  if [[ -n "${offline_cache}" ]]; then
+    lock_file="${offline_cache}/images/images.lock"
+    if [[ ! -f "${lock_file}" ]]; then
+      doctor_s3_probe_image_error="S3 probe image is required for live S3 check; offline cache images.lock was not readable"
+      return 1
+    fi
+    if ! image_ref="$(images_lock_image_ref "${lock_file}" "minio-client" 2>/dev/null)"; then
+      doctor_s3_probe_image_error="S3 probe image is required for live S3 check; offline cache images.lock is missing name: minio-client"
+      return 1
+    fi
+    doctor_validate_s3_probe_image_ref "${image_ref}" || return 1
+    resolved_s3_probe_image="${image_ref}"
+    return 0
+  fi
+
+  doctor_s3_probe_image_error="S3 probe image is required for live S3 check; supply --offline-cache with images.lock name: minio-client or --s3-probe-image"
+  return 1
+}
+
 doctor_validate_rwx_smoke_image_ref() {
   local image_ref="$1"
   if [[ ! "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]]; then
@@ -199,7 +251,9 @@ kubeconfig_path="$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
 kube_context="$(env_value_or_empty "${env_file}" KUBE_CONTEXT)"
 postgres_url="$(env_value_or_empty "${secrets_file}" POSTGRES_APP_URL)"
 s3_endpoint="$(env_value_or_empty "${env_file}" S3_ENDPOINT)"
+s3_region="$(env_value_or_empty "${env_file}" S3_REGION)"
 s3_bucket="$(env_value_or_empty "${env_file}" S3_BUCKET)"
+s3_force_path_style="$(env_value_or_empty "${env_file}" S3_FORCE_PATH_STYLE)"
 s3_access="$(env_value_or_empty "${secrets_file}" S3_ACCESS_KEY)"
 s3_secret="$(env_value_or_empty "${secrets_file}" S3_SECRET_KEY)"
 juicefs_meta="$(env_value_or_empty "${secrets_file}" JUICEFS_META_URL)"
@@ -257,14 +311,26 @@ doctor_check_postgres_url \
   "JuiceFS metadata database did not accept a simple query" \
   "psql not found; JuiceFS metadata database connectivity was not verified"
 
-if [[ -n "${s3_endpoint}" && -n "${s3_bucket}" && -n "${s3_access}" && -n "${s3_secret}" ]]; then
+if [[ -n "${s3_endpoint}" && -n "${s3_region}" && -n "${s3_bucket}" && -n "${s3_force_path_style}" && -n "${s3_access}" && -n "${s3_secret}" ]]; then
   if [[ "${dry_run}" == "true" ]]; then
-    add_check "s3" "passed" "dry-run static: S3 endpoint, bucket, and key presence are valid; skipped read/write/delete probe" "substrate-csi-secret"
+    add_check "s3" "passed" "dry-run static: S3 endpoint, region, bucket, path-style, and key presence are valid; skipped read/write/delete probe" "substrate-csi-secret"
+  elif [[ "${kubectl_available}" != "true" ]]; then
+    add_check "s3" "partial" "kubectl not found; live S3 read/write/delete probe was not verified" "substrate-csi-secret"
+  elif [[ "${cluster_reachable}" != "true" ]]; then
+    add_check "s3" "partial" "cluster namespace is not reachable; live S3 read/write/delete probe was not verified" "substrate-csi-secret"
+  elif doctor_resolve_s3_probe_image; then
+    if s3_probe_output="$(s3_probe_run "${namespace}" "${resolved_s3_probe_image}" "${s3_endpoint}" "${s3_region}" "${s3_bucket}" "${s3_force_path_style}" "${s3_access}" "${s3_secret}" "${kubectl_cmd[0]}" "${kubectl_args[@]}" 2>&1)"; then
+      printf '%s\n' "${s3_probe_output}"
+      add_check "s3" "passed" "live S3 read/write/delete probe passed" "substrate-csi-secret"
+    else
+      printf '%s\n' "${s3_probe_output}" >&2
+      add_check "s3" "failed" "live S3 read/write/delete probe failed; credentials and endpoint remain redacted" "substrate-csi-secret"
+    fi
   else
-    add_check "s3" "partial" "live S3 read/write/delete probe is not implemented; credentials remain redacted" "substrate-csi-secret"
+    add_check "s3" "failed" "${doctor_s3_probe_image_error}" "substrate-csi-secret"
   fi
 else
-  add_check "s3" "failed" "S3 endpoint, bucket, S3_ACCESS_KEY, and S3_SECRET_KEY must be present" "substrate-csi-secret"
+  add_check "s3" "failed" "S3 endpoint, region, bucket, path-style, S3_ACCESS_KEY, and S3_SECRET_KEY must be present" "substrate-csi-secret"
 fi
 
 if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then

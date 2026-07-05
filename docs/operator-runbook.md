@@ -21,8 +21,9 @@ cluster mutation is enabled:
 4. Run `validate-juicefs-contract.sh`.
 5. Run `doctor.sh --dry-run`.
 6. When the cluster is reachable, rerun doctor without `--dry-run` and provide
-   either `--offline-cache` with `name: rwx-smoke` in `images.lock` or an
-   explicit `--rwx-smoke-image image@sha256:<digest>`.
+   either `--offline-cache` with `name: minio-client` and `name: rwx-smoke` in
+   `images.lock`, or explicit `--s3-probe-image` and `--rwx-smoke-image`
+   digest-pinned image refs.
 
 ## Doctor Scope
 
@@ -30,7 +31,7 @@ cluster mutation is enabled:
 
 - K8s reachability and namespace
 - PostgreSQL app URL/connectivity
-- S3 credential presence and future object probe
+- S3 credential presence and read/write/delete object probe
 - JuiceFS metadata URL, CSI driver, StorageClass, PVC, and RWX smoke
 - offline cache completeness when `--offline-cache` is supplied
 
@@ -44,11 +45,13 @@ Current behavior is intentionally layered:
   JuiceFS Secret/StorageClass/PVC, RWX access mode, and optional offline cache.
 - `doctor.sh` without `--dry-run` attempts live checks where implemented:
   kubectl namespace reachability, PostgreSQL `select 1` for both
-  `POSTGRES_APP_URL` and `JUICEFS_META_URL`, Kubernetes presence checks for
-  JuiceFS StorageClass/Secret/PVC, the PVC phase being `Bound`, and a two-Job
-  RWX smoke that mounts the configured PVC from writer and reader Jobs.
-- Live S3 read/write/delete and any checks that cannot be verified are reported
-  as `partial` or `failed`; skipped live checks are not treated as a green pass.
+  `POSTGRES_APP_URL` and `JUICEFS_META_URL`, an S3 read/write/delete probe from
+  a temporary Job, Kubernetes presence checks for JuiceFS StorageClass/Secret/PVC,
+  the PVC phase being `Bound`, and a two-Job RWX smoke that mounts the
+  configured PVC from writer and reader Jobs.
+- Checks that cannot be verified are reported as `partial` or `failed`; skipped
+  live checks are not treated as a green pass. If S3 config is present and the
+  cluster is reachable, a missing or mutable S3 probe image is a failure.
 
 In an environment without a working kubectl context, live doctor should not be
 green. Use `--dry-run` for static contract validation.

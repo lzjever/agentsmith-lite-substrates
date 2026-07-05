@@ -153,7 +153,8 @@ runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
 image, applies the StorageClass/PVC contract only after the format Job reports a
 matching volume, waits for the configured JuiceFS PVC to reach `Bound`, and
 finally runs `scripts/doctor.sh --offline-cache ...`. Live doctor reads the
-digest-pinned `name: rwx-smoke` image from that cache and runs writer/reader
+digest-pinned `name: minio-client` image from that cache for an S3 object
+read/write/delete probe, then reads `name: rwx-smoke` and runs writer/reader
 Jobs against the same PVC. Doctor `partial` is still allowed for live checks
-that are explicitly unverified, such as S3 object probing; doctor `failed` still
-fails the install.
+that cannot be verified, such as missing `kubectl` or `psql`; doctor `failed`
+still fails the install.

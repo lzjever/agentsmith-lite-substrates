@@ -33,8 +33,8 @@ This first public-ready skeleton is validate-first:
   contract
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - runs a substrate-only doctor for static dry-run checks and live K8s,
-  PostgreSQL, JuiceFS PVC, and two-Job RWX smoke checks; live S3 object probing
-  remains reported as `partial` until implemented
+  PostgreSQL, S3 object read/write/delete, JuiceFS PVC, and two-Job RWX smoke
+  checks
 
 ## Quick Start
 
@@ -56,9 +56,11 @@ scripts/doctor.sh \
   --dry-run
 ```
 
-Live doctor runs the RWX smoke only after the configured JuiceFS PVC is
-`Bound`. It reads the digest-pinned `name: rwx-smoke` image from
-`--offline-cache images/images.lock`, or from explicit
+Live doctor runs the S3 object probe from the cluster network with the
+digest-pinned `name: minio-client` image from `--offline-cache
+images/images.lock`, or from explicit `--s3-probe-image
+image@sha256:<digest>`. It runs the RWX smoke only after the configured JuiceFS
+PVC is `Bound`, using `name: rwx-smoke` from the same lock or
 `--rwx-smoke-image image@sha256:<digest>`.
 
 For an offline contract skeleton dry-run:

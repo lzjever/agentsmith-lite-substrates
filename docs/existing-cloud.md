@@ -26,6 +26,8 @@ product-secret subset and should reference the existing PVC and CSI Secret by
 name.
 
 Existing-cloud mode does not create or mutate a self-hosted PostgreSQL Secret or
-StatefulSet. Live `doctor.sh` validates both `POSTGRES_APP_URL` and
-`JUICEFS_META_URL` with `psql` when it is available; otherwise those database
-checks are reported as `partial`, not passed.
+StatefulSet, and it does not render self-hosted MinIO resources. Live
+`doctor.sh` validates both `POSTGRES_APP_URL` and `JUICEFS_META_URL` with
+`psql` when it is available, and can create a temporary S3 probe Secret/Job
+against the configured existing bucket when `minio-client` is available from the
+offline cache or `--s3-probe-image`.

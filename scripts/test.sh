@@ -1579,7 +1579,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_contains "${rendered}/postgres.yaml" "name: JUICEFS_META_PASSWORD"
   assert_contains "${rendered}/postgres.yaml" "key: juicefsPassword"
   assert_contains "${rendered}/minio.yaml" "image: quay.io/minio/minio@sha256:"
-  assert_contains "${out}" "doctor reported partial"
+  assert_contains "${out}" "doctor passed"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
   assert_not_contains "${out}" "minio-access-key"
@@ -1800,7 +1800,7 @@ EOF_PSQL
   [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret"
   [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet"
   [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job"
-  assert_contains "${out}" "doctor reported partial"
+  assert_contains "${out}" "doctor passed"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
   assert_not_contains "${out}" "existing-access-key"
@@ -2224,8 +2224,8 @@ EOF_PSQL
   assert_contains "${report}" "app database accepted a simple query"
   assert_contains "${report}" "JuiceFS metadata database accepted a simple query"
   assert_contains "${report}" "live JuiceFS PVC phase is Bound"
-  assert_contains "${report}" '"status": "partial"'
-  assert_contains "${report}" "live S3 read/write/delete probe is not implemented"
+  assert_contains "${report}" '"name": "s3"'
+  assert_contains "${report}" "S3 probe image is required"
   assert_contains "${report}" "RWX smoke image is required"
   assert_contains "${kubectl_log}" "get storageclass agentsmith-lite-juicefs-rwx"
   assert_contains "${kubectl_log}" "-n agentsmith get secret agentsmith-lite-juicefs"
@@ -2247,7 +2247,7 @@ EOF_PSQL
   assert_not_contains "${psql_log}" "postgres://"
   assert_not_contains "${out}" "postgresql://"
   assert_not_contains "${report}" "postgresql://"
-  pass "S7 doctor live mode fails instead of going green when RWX smoke image is missing"
+  pass "S7 doctor live mode fails instead of going green when S3/RWX probe images are missing"
 }
 
 test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound() {
@@ -2272,7 +2272,7 @@ set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
 previous=""
 for arg in "$@"; do
-  if [[ "${previous}" == "-f" && -f "${arg}" ]] && grep -Fq "agentsmith-lite-rwx-smoke" "${arg}"; then
+  if [[ "${previous}" == "-f" && -f "${arg}" ]] && grep -Eq "agentsmith-lite-rwx-smoke|agentsmith-lite/check: s3-probe" "${arg}"; then
     index="$(find "${KUBECTL_APPLIED_DIR}" -type f -name 'apply-*.yaml' | wc -l | tr -d '[:space:]')"
     cp "${arg}" "${KUBECTL_APPLIED_DIR}/apply-${index}.yaml"
   fi
@@ -2281,6 +2281,9 @@ done
 case "$*" in
   *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
     printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-s3-probe-"*)
+    printf 'agentsmith-lite-s3-probe: ok\n'
     ;;
   *" logs job/agentsmith-lite-rwx-smoke-"*)
     printf 'agentsmith-lite-rwx-smoke: ok\n'
@@ -2301,27 +2304,37 @@ EOF_PSQL
     "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
   status=$?
   set -e
-  [[ "${status}" -eq 2 ]] || fail "doctor live mode should exit 2 only because S3 remains partial, got ${status}"
+  [[ "${status}" -eq 0 ]] || fail "doctor live mode should exit 0 when S3 and RWX probes pass, got ${status}"
 
   mapfile -t smoke_manifests < <(find "${applied_dir}" -type f -name 'apply-*.yaml' -print | sort)
-  [[ "${#smoke_manifests[@]}" -eq 2 ]] || fail "expected writer and reader RWX smoke manifests, got ${#smoke_manifests[@]}"
+  [[ "${#smoke_manifests[@]}" -eq 4 ]] || fail "expected S3 Secret/Job plus writer/reader RWX manifests, got ${#smoke_manifests[@]}"
   : >"${rendered}"
   local manifest
   for manifest in "${smoke_manifests[@]}"; do
     cat "${manifest}" >>"${rendered}"
   done
 
-  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${report}" '"overallStatus": "passed"'
+  assert_contains "${report}" '"name": "s3"'
+  assert_contains "${report}" "live S3 read/write/delete probe passed"
   assert_contains "${report}" '"name": "rwx"'
   assert_contains "${report}" '"status": "passed"'
   assert_contains "${report}" "live two-job ReadWriteMany smoke passed"
   assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-s3-probe-"
+  assert_contains "${kubectl_log}" "logs job/agentsmith-lite-s3-probe-"
   assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-reader-"
   assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-writer-"
   assert_contains "${kubectl_log}" "logs job/agentsmith-lite-rwx-smoke-reader-"
   assert_contains "${kubectl_log}" "logs job/agentsmith-lite-rwx-smoke-writer-"
   assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
   assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_contains "${rendered}" "image: quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  assert_contains "${rendered}" "agentsmith-lite/check: s3-probe"
+  assert_contains "${rendered}" "secretKeyRef:"
+  assert_contains "${rendered}" "config.json"
+  assert_not_contains "${rendered}" "mc alias set"
   assert_contains "${rendered}" "image: ghcr.io/agentsmith-lite/rwx-smoke@sha256:3333333333333333333333333333333333333333333333333333333333333333"
   assert_contains "${rendered}" "claimName: agentsmith-lite-files"
   assert_contains "${rendered}" "app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor"
@@ -2333,16 +2346,245 @@ EOF_PSQL
   assert_not_contains "${rendered}" "juicefs-secret-value"
   assert_not_contains "${rendered}" "minio-access-key"
   assert_not_contains "${rendered}" "minio-secret-value"
+  assert_not_contains "${rendered}" "http://minio.agentsmith.svc.cluster.local:9000"
   assert_not_contains "${rendered}" "http://"
   assert_not_contains "${rendered}" "https://"
   assert_not_contains "${rendered}" "postgresql://"
+  assert_not_contains "${kubectl_log}" "http://minio.agentsmith.svc.cluster.local:9000"
+  assert_not_contains "${kubectl_log}" "minio-access-key"
+  assert_not_contains "${kubectl_log}" "minio-secret-value"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "http://minio.agentsmith.svc.cluster.local:9000"
   assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${report}" "postgres-secret-value"
   assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "http://minio.agentsmith.svc.cluster.local:9000"
   assert_not_contains "${report}" "minio-secret-value"
-  pass "S7 doctor live mode runs a two-Job RWX smoke against a Bound JuiceFS PVC"
+  pass "S7 doctor live mode runs S3 CRUD and two-Job RWX smoke against a Bound JuiceFS PVC"
+}
+
+test_substrate_only_doctor_live_fails_and_cleans_up_when_s3_probe_wait_fails() {
+  local env_dir="${TMP_DIR}/doctor-live-s3-wait-fail-env"
+  local cache="${TMP_DIR}/doctor-live-s3-wait-fail-cache"
+  local stub_bin="${TMP_DIR}/doctor-live-s3-wait-fail-bin"
+  local report="${TMP_DIR}/doctor-live-s3-wait-fail-report.json"
+  local out="${TMP_DIR}/doctor-live-s3-wait-fail.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-s3-wait-fail-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  write_p1_offline_cache "${cache}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *"wait --for=condition=complete job/agentsmith-lite-s3-probe-"*)
+    exit 43
+    ;;
+  *" logs job/agentsmith-lite-s3-probe-"*)
+    printf 'agentsmith-lite-s3-probe failed: write object\n'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when S3 probe wait fails, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "s3"'
+  assert_contains "${report}" '"status": "failed"'
+  assert_contains "${report}" "live S3 read/write/delete probe failed"
+  assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-s3-probe-"
+  assert_contains "${kubectl_log}" "logs job/agentsmith-lite-s3-probe-"
+  assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${out}" "http://minio.agentsmith.svc.cluster.local:9000"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-access-key"
+  assert_not_contains "${report}" "minio-secret-value"
+  assert_not_contains "${report}" "http://minio.agentsmith.svc.cluster.local:9000"
+  assert_not_contains "${kubectl_log}" "minio-access-key"
+  assert_not_contains "${kubectl_log}" "minio-secret-value"
+  assert_not_contains "${kubectl_log}" "http://minio.agentsmith.svc.cluster.local:9000"
+  pass "S7 doctor live mode fails S3 probe on Job wait failure and still cleans up"
+}
+
+test_substrate_only_doctor_live_redacts_s3_secret_apply_output_on_failure() {
+  local env_dir="${TMP_DIR}/doctor-live-s3-secret-apply-leak-env"
+  local cache="${TMP_DIR}/doctor-live-s3-secret-apply-leak-cache"
+  local stub_bin="${TMP_DIR}/doctor-live-s3-secret-apply-leak-bin"
+  local report="${TMP_DIR}/doctor-live-s3-secret-apply-leak-report.json"
+  local out="${TMP_DIR}/doctor-live-s3-secret-apply-leak.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-s3-secret-apply-leak-kubectl.log"
+  local access_b64 secret_b64 endpoint_b64 status
+  write_valid_env_pair "${env_dir}"
+  write_p1_offline_cache "${cache}"
+  access_b64="$(printf 'minio-access-key' | base64 | tr -d '\n')"
+  secret_b64="$(printf 'minio-secret-value' | base64 | tr -d '\n')"
+  endpoint_b64="$(printf 'http://minio.agentsmith.svc.cluster.local:9000' | base64 | tr -d '\n')"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "-f" && -f "${arg}" ]] \
+    && grep -Fq "kind: Secret" "${arg}" \
+    && grep -Fq "agentsmith-lite/check: s3-probe" "${arg}"; then
+    cat "${arg}" >&2
+    exit 44
+  fi
+  previous="${arg}"
+done
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when S3 Secret apply fails, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "s3"'
+  assert_contains "${report}" '"status": "failed"'
+  assert_contains "${report}" "live S3 read/write/delete probe failed"
+  assert_contains "${out}" "s3 probe failed at apply Secret"
+  assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${out}" "http://minio.agentsmith.svc.cluster.local:9000"
+  assert_not_contains "${out}" "${access_b64}"
+  assert_not_contains "${out}" "${secret_b64}"
+  assert_not_contains "${out}" "${endpoint_b64}"
+  assert_not_contains "${report}" "minio-access-key"
+  assert_not_contains "${report}" "minio-secret-value"
+  assert_not_contains "${report}" "http://minio.agentsmith.svc.cluster.local:9000"
+  assert_not_contains "${report}" "${access_b64}"
+  assert_not_contains "${report}" "${secret_b64}"
+  assert_not_contains "${report}" "${endpoint_b64}"
+  assert_not_contains "${kubectl_log}" "minio-access-key"
+  assert_not_contains "${kubectl_log}" "minio-secret-value"
+  assert_not_contains "${kubectl_log}" "http://minio.agentsmith.svc.cluster.local:9000"
+  assert_not_contains "${kubectl_log}" "${access_b64}"
+  assert_not_contains "${kubectl_log}" "${secret_b64}"
+  assert_not_contains "${kubectl_log}" "${endpoint_b64}"
+  pass "S7 doctor live mode redacts S3 Secret apply output on failure and still cleans up"
+}
+
+test_substrate_only_doctor_live_rejects_invalid_s3_probe_images_before_creating_job() {
+  local case_def case_name mode expected image env_dir cache stub_bin report out kubectl_log status
+  local app_image="agentsmith-lite/app@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  local cases=(
+    "missing|minio-client missing|S3 probe image is required|"
+    "mutable|override mutable|S3 probe image must be digest-pinned|quay.io/minio/mc:latest"
+    "app-owned|override app-owned|S3 probe image must not reference app-owned images|${app_image}"
+  )
+
+  for case_def in "${cases[@]}"; do
+    IFS='|' read -r mode case_name expected image <<<"${case_def}"
+    env_dir="${TMP_DIR}/doctor-live-s3-invalid-${mode}-env"
+    cache="${TMP_DIR}/doctor-live-s3-invalid-${mode}-cache"
+    stub_bin="${TMP_DIR}/doctor-live-s3-invalid-${mode}-bin"
+    report="${TMP_DIR}/doctor-live-s3-invalid-${mode}-report.json"
+    out="${TMP_DIR}/doctor-live-s3-invalid-${mode}.out"
+    kubectl_log="${TMP_DIR}/doctor-live-s3-invalid-${mode}-kubectl.log"
+    write_valid_env_pair "${env_dir}"
+    mkdir -p "${stub_bin}"
+    cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+    cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+    chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+    set +e
+    if [[ "${mode}" == "missing" ]]; then
+      write_p1_offline_cache "${cache}" "missing-minio-client"
+      KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+        "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+    else
+      KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+        "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --s3-probe-image "${image}" --report "${report}" >"${out}" 2>&1
+    fi
+    status=$?
+    set -e
+
+    [[ "${status}" -eq 1 ]] || fail "doctor live mode should reject ${case_name} S3 probe image, got ${status}"
+    assert_contains "${report}" '"overallStatus": "failed"'
+    assert_contains "${report}" '"name": "s3"'
+    assert_contains "${report}" "${expected}"
+    assert_not_contains "${kubectl_log}" "agentsmith-lite-s3-probe"
+    assert_not_contains "${out}" "minio-access-key"
+    assert_not_contains "${out}" "minio-secret-value"
+    assert_not_contains "${out}" "http://minio.agentsmith.svc.cluster.local:9000"
+    assert_not_contains "${report}" "minio-access-key"
+    assert_not_contains "${report}" "minio-secret-value"
+    assert_not_contains "${report}" "http://minio.agentsmith.svc.cluster.local:9000"
+    if [[ -n "${image}" ]]; then
+      assert_not_contains "${out}" "${image}"
+      assert_not_contains "${report}" "${image}"
+    fi
+  done
+
+  pass "S7 doctor live mode rejects missing, mutable, and app-owned S3 probe images before creating Jobs"
 }
 
 test_substrate_only_doctor_live_fails_and_cleans_up_when_rwx_reader_wait_fails() {
@@ -2777,6 +3019,9 @@ test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing
 test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound
+test_substrate_only_doctor_live_fails_and_cleans_up_when_s3_probe_wait_fails
+test_substrate_only_doctor_live_redacts_s3_secret_apply_output_on_failure
+test_substrate_only_doctor_live_rejects_invalid_s3_probe_images_before_creating_job
 test_substrate_only_doctor_live_fails_and_cleans_up_when_rwx_reader_wait_fails
 test_substrate_only_doctor_live_rejects_mutable_rwx_smoke_image
 test_substrate_only_doctor_live_rejects_app_owned_rwx_smoke_image
