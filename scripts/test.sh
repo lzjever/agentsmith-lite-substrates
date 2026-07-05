@@ -39,17 +39,38 @@ first_line_number() {
   grep -Fn -- "${needle}" "${file}" | head -n 1 | cut -d: -f1 || true
 }
 
+next_line_number_after() {
+  local file="$1"
+  local needle="$2"
+  local previous="$3"
+  awk -v needle="${needle}" -v previous="${previous}" '
+    NR > previous && index($0, needle) {
+      print NR
+      exit
+    }
+  ' "${file}"
+}
+
 assert_line_order() {
   local file="$1"
   shift
   local previous=0
   local needle line
   for needle in "$@"; do
-    line="$(first_line_number "${file}" "${needle}")"
+    line="$(next_line_number_after "${file}" "${needle}" "${previous}")"
     [[ -n "${line}" ]] || fail "expected ${file} to contain ordered line: ${needle}"
     [[ "${line}" -gt "${previous}" ]] || fail "expected ${needle} to appear after previous call in ${file}"
     previous="${line}"
   done
+}
+
+assert_occurrence_count() {
+  local file="$1"
+  local needle="$2"
+  local expected="$3"
+  local count
+  count="$( (grep -F -- "${needle}" "${file}" || true) | wc -l | tr -d '[:space:]' )"
+  [[ "${count}" == "${expected}" ]] || fail "expected ${file} to contain ${expected} occurrences of ${needle}, got ${count}"
 }
 
 assert_cli_requires_value() {
@@ -831,7 +852,7 @@ set -euo pipefail
 : "${CALL_LOG:?CALL_LOG is required}"
 printf 'kubectl %s\n' "$*" >>"${CALL_LOG}"
 case "$*" in
-  *postgresql://*|*postgres://*|*postgres-secret-value*|*juicefs-secret-value*|*minio-secret-value*|*minio-access-key*|*S3_SECRET_KEY*) exit 54 ;;
+  *postgresql://*|*postgres://*|*postgres-secret-value*|*juicefs-secret-value*|*minio-secret-value*|*minio-access-key*|*S3_SECRET_KEY*|*JUICEFS_META_URL*) exit 54 ;;
 esac
 is_exec=false
 has_stdin=false
@@ -866,10 +887,43 @@ case "$*" in
   *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
     printf '%s\n' "${JUICEFS_FAKE_PVC_PHASE:-Bound}"
     ;;
+  *"wait --for=condition=complete job/agentsmith-lite-minio-bucket-init"*)
+    [[ "${MINIO_FAKE_BUCKET_WAIT_MODE:-ok}" != "fail" ]] || {
+      printf 'minio bucket init wait failed\n' >&2
+      exit 55
+    }
+    ;;
+  *"logs job/agentsmith-lite-minio-bucket-init"*)
+    case "${MINIO_FAKE_BUCKET_LOG_MODE:-ok}" in
+      fail)
+        printf 'minio bucket init logs unavailable\n' >&2
+        exit 56
+        ;;
+      missing-ready)
+        printf 'minio bucket init completed without readiness marker\n'
+        ;;
+      *)
+        printf 'minio bucket ready\n'
+        ;;
+    esac
+    ;;
+  *"wait --for=condition=complete job/agentsmith-lite-juicefs-format"*)
+    [[ "${JUICEFS_FAKE_FORMAT_WAIT_MODE:-ok}" != "fail" ]] || {
+      printf 'juicefs format wait failed\n' >&2
+      exit 57
+    }
+    ;;
   *"logs job/agentsmith-lite-juicefs-format"*)
     case "${JUICEFS_FAKE_FORMAT_MODE:-ok}" in
       mismatch)
         printf 'agentsmith-lite-juicefs-format: existing JuiceFS volume mismatch: bucket\n'
+        ;;
+      log-fail)
+        printf 'juicefs format logs unavailable\n' >&2
+        exit 58
+        ;;
+      missing-ok)
+        printf 'agentsmith-lite-juicefs-format: completed without ok marker\n'
         ;;
       *)
         printf 'agentsmith-lite-juicefs-format: ok\n'
@@ -2034,17 +2088,22 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns rollout status statefulset/minio --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-minio-bucket-init --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-bucket-init-job.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite delete -f ${rendered}/minio-bucket-init-job.yaml --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns logs job/agentsmith-lite-minio-bucket-init" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-minio-bucket-init --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-secret.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-juicefs-format --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-format-job.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns logs job/agentsmith-lite-juicefs-format" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete -f ${rendered}/juicefs-format-job.yaml --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-juicefs-format --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=jsonpath={.status.phase}=Bound pvc/agentsmith-lite-files --timeout=180s" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace custom-ns"
+  assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-minio-bucket-init --ignore-not-found=true" "2"
+  assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-juicefs-format --ignore-not-found=true" "2"
   assert_not_contains "${call_log}" "apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml"
   assert_contains "${call_log}" "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz"
   assert_contains "${call_log}" "-Atc \"select 1\""
@@ -2390,10 +2449,94 @@ test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc() {
   assert_not_contains "${out}" "juicefs-secret-value"
   assert_not_contains "${out}" "minio-secret-value"
   assert_contains "${call_log}" "logs job/agentsmith-lite-juicefs-format"
+  assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-juicefs-format --ignore-not-found=true" "2"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/juicefs-storageclass-pvc.yaml"
   assert_not_contains "${call_log}" "juicefs-secret-value"
   assert_not_contains "${call_log}" "minio-secret-value"
   pass "P1 offline installer fails JuiceFS format mismatch before applying PVC contract"
+}
+
+test_p1_real_offline_install_cleans_minio_bucket_init_job_on_wait_failure() {
+  local cache="${TMP_DIR}/offline-cache-p1-minio-wait-fail"
+  local config="${TMP_DIR}/substrates-p1-minio-wait-fail.yaml"
+  local output="${TMP_DIR}/offline-p1-minio-wait-fail-out"
+  local out="${TMP_DIR}/install-offline-p1-minio-wait-fail.out"
+  local call_log="${TMP_DIR}/p1-minio-wait-fail-call.log"
+  local airgap_dir="${TMP_DIR}/p1-minio-wait-fail-airgap"
+  local exec_stdin_dir="${TMP_DIR}/p1-minio-wait-fail-exec-stdin"
+  local rendered="${output}/rendered/offline-install"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}" "agentsmith" "${output}/kubeconfig"
+
+  if CALL_LOG="${call_log}" \
+    EXEC_STDIN_DIR="${exec_stdin_dir}" \
+    K3S_AIRGAP_DIR="${airgap_dir}" \
+    MINIO_FAKE_BUCKET_WAIT_MODE="fail" \
+    POSTGRES_PASSWORD="postgres-secret-value" \
+    JUICEFS_META_PASSWORD="juicefs-secret-value" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline succeeded even though MinIO bucket init wait failed"
+  fi
+
+  assert_contains "${out}" "MinIO bucket init Job failed"
+  assert_line_order "${call_log}" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-minio-bucket-init --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-bucket-init-job.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-minio-bucket-init" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-minio-bucket-init --ignore-not-found=true"
+  assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-minio-bucket-init --ignore-not-found=true" "2"
+  assert_not_contains "${call_log}" "apply -f ${rendered}/juicefs-secret.yaml"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${out}" "S3_SECRET_KEY="
+  assert_not_contains "${call_log}" "minio-access-key"
+  assert_not_contains "${call_log}" "minio-secret-value"
+  assert_not_contains "${call_log}" "S3_SECRET_KEY"
+  pass "P1 offline installer cleans MinIO bucket init Job after wait failure without leaking S3 secrets"
+}
+
+test_p1_real_offline_install_cleans_juicefs_format_job_on_log_failure() {
+  local cache="${TMP_DIR}/offline-cache-p1-juicefs-log-fail"
+  local config="${TMP_DIR}/substrates-p1-juicefs-log-fail.yaml"
+  local output="${TMP_DIR}/offline-p1-juicefs-log-fail-out"
+  local out="${TMP_DIR}/install-offline-p1-juicefs-log-fail.out"
+  local call_log="${TMP_DIR}/p1-juicefs-log-fail-call.log"
+  local airgap_dir="${TMP_DIR}/p1-juicefs-log-fail-airgap"
+  local exec_stdin_dir="${TMP_DIR}/p1-juicefs-log-fail-exec-stdin"
+  local rendered="${output}/rendered/offline-install"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}" "agentsmith" "${output}/kubeconfig"
+
+  if CALL_LOG="${call_log}" \
+    EXEC_STDIN_DIR="${exec_stdin_dir}" \
+    K3S_AIRGAP_DIR="${airgap_dir}" \
+    JUICEFS_FAKE_FORMAT_MODE="log-fail" \
+    POSTGRES_PASSWORD="postgres-secret-value" \
+    JUICEFS_META_PASSWORD="juicefs-secret-value" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline succeeded even though JuiceFS format logs failed"
+  fi
+
+  assert_contains "${out}" "JuiceFS format Job logs could not be read"
+  assert_line_order "${call_log}" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-secret.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-juicefs-format --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-format-job.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-juicefs-format" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-juicefs-format --ignore-not-found=true"
+  assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-juicefs-format --ignore-not-found=true" "2"
+  assert_not_contains "${call_log}" "apply -f ${rendered}/juicefs-storageclass-pvc.yaml"
+  assert_not_contains "${out}" "JUICEFS_META_URL="
+  assert_not_contains "${out}" "postgresql://"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "JUICEFS_META_URL="
+  assert_not_contains "${call_log}" "postgresql://"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  pass "P1 offline installer cleans JuiceFS format Job after log failure without leaking the meta URL"
 }
 
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation() {
@@ -2529,6 +2672,7 @@ EOF_PSQL
   [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret"
   [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet"
   [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job"
+  [[ ! -e "${output}/rendered/offline-install/juicefs-format-job.yaml" ]] || fail "existing-cloud rendered a self-hosted JuiceFS format Job"
   assert_contains "${out}" "doctor passed"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
@@ -4243,6 +4387,8 @@ test_online_install_p0_contract_non_dry_run_fails
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
 test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs
 test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc
+test_p1_real_offline_install_cleans_minio_bucket_init_job_on_wait_failure
+test_p1_real_offline_install_cleans_juicefs_format_job_on_log_failure
 test_minio_bucket_init_job_keeps_credentials_out_of_mc_argv
 test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation
 test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation

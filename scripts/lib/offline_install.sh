@@ -27,6 +27,15 @@ offline_install_kubectl() {
   "${kubectl_bin}" "${kubectl_args[@]}" "$@"
 }
 
+offline_install_delete_job_best_effort() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local namespace="$3"
+  local job_name="$4"
+
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" delete job "${job_name}" --ignore-not-found=true || true
+}
+
 offline_install_helm() {
   local cache_dir="$1"
   local env_file="$2"
@@ -348,39 +357,81 @@ offline_install_init_minio_bucket() {
   local cache_dir="$1"
   local env_file="$2"
   local render_dir="$3"
-  local namespace bucket
+  local namespace bucket job_name logs apply_status wait_status logs_status
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
   bucket="$(env_value_or_empty "${env_file}" S3_BUCKET)"
+  job_name="agentsmith-lite-minio-bucket-init"
   minio_validate_bucket_name "${bucket}"
   info "install-offline: initializing MinIO bucket"
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+
+  set +e
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/minio-bucket-init-job.yaml"
-  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s
-  offline_install_kubectl "${cache_dir}" "${env_file}" delete -f "${render_dir}/minio-bucket-init-job.yaml" --ignore-not-found=true
+  apply_status=$?
+  wait_status=0
+  logs_status=0
+  logs=""
+  if [[ "${apply_status}" -eq 0 ]]; then
+    offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout=120s
+    wait_status=$?
+    logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
+    logs_status=$?
+  fi
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+  set -e
+
+  if [[ "${apply_status}" -ne 0 ]]; then
+    die "MinIO bucket init Job apply failed; refusing to continue"
+  fi
+  if [[ "${wait_status}" -ne 0 ]]; then
+    die "MinIO bucket init Job failed; refusing to continue"
+  fi
+  if [[ "${logs_status}" -ne 0 ]]; then
+    die "MinIO bucket init Job logs could not be read; refusing to continue"
+  fi
+  if ! grep -Fq "minio bucket ready" <<<"${logs}"; then
+    die "MinIO bucket init Job did not report bucket readiness"
+  fi
 }
 
 offline_install_format_juicefs() {
   local cache_dir="$1"
   local env_file="$2"
   local render_dir="$3"
-  local namespace logs status
+  local namespace job_name logs apply_status wait_status logs_status
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  job_name="agentsmith-lite-juicefs-format"
 
   info "install-offline: formatting JuiceFS volume"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-secret.yaml"
-  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-format-job.yaml"
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
 
   set +e
-  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s
-  status=$?
-  logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs job/agentsmith-lite-juicefs-format 2>&1)"
-  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" delete -f "${render_dir}/juicefs-format-job.yaml" --ignore-not-found=true
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-format-job.yaml"
+  apply_status=$?
+  wait_status=0
+  logs_status=0
+  logs=""
+  if [[ "${apply_status}" -eq 0 ]]; then
+    offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout=120s
+    wait_status=$?
+    logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
+    logs_status=$?
+  fi
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
   set -e
 
+  if [[ "${apply_status}" -ne 0 ]]; then
+    die "JuiceFS format Job apply failed; refusing to apply JuiceFS PVC contract"
+  fi
   if grep -Fq "agentsmith-lite-juicefs-format: existing JuiceFS volume mismatch" <<<"${logs}"; then
     die "existing JuiceFS volume mismatch; refusing to apply JuiceFS PVC contract"
   fi
-  if [[ "${status}" -ne 0 ]]; then
+  if [[ "${wait_status}" -ne 0 ]]; then
     die "JuiceFS format Job failed; refusing to apply JuiceFS PVC contract"
+  fi
+  if [[ "${logs_status}" -ne 0 ]]; then
+    die "JuiceFS format Job logs could not be read; refusing to apply JuiceFS PVC contract"
   fi
   if ! grep -Fq "agentsmith-lite-juicefs-format: ok" <<<"${logs}"; then
     die "JuiceFS format Job did not report a successful idempotent format"
