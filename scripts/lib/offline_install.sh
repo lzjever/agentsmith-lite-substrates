@@ -160,6 +160,63 @@ offline_install_render_workload_manifest() {
   ' "${input}" >"${output}"
 }
 
+offline_install_render_namespace_manifest() {
+  local input="$1"
+  local output="$2"
+  local env_file="$3"
+  local namespace tmp
+
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  [[ -n "${namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering namespace bootstrap"
+  need_file "${input}"
+  mkdir -p "$(dirname "${output}")"
+  tmp="${output}.tmp"
+
+  if ! awk -v ns="${namespace}" '
+    BEGIN {
+      kind_seen=0
+      in_metadata=0
+      rendered_name=0
+      metadata_indent=0
+    }
+    /^[[:space:]]*kind:[[:space:]]*Namespace[[:space:]]*$/ {
+      kind_seen=1
+      print
+      next
+    }
+    kind_seen && /^[[:space:]]*metadata:[[:space:]]*$/ {
+      match($0, /^[[:space:]]*/)
+      metadata_indent=RLENGTH
+      in_metadata=1
+      print
+      next
+    }
+    in_metadata {
+      match($0, /^[[:space:]]*/)
+      indent=RLENGTH
+      if (indent <= metadata_indent && $0 !~ /^[[:space:]]*$/) {
+        in_metadata=0
+      } else if (indent == metadata_indent + 2 && $0 ~ /^[[:space:]]*name:[[:space:]]*/) {
+        print substr($0, 1, indent) "name: " ns
+        rendered_name=1
+        in_metadata=0
+        next
+      }
+    }
+    { print }
+    END {
+      if (!kind_seen || !rendered_name) {
+        exit 1
+      }
+    }
+  ' "${input}" >"${tmp}"; then
+    rm -f "${tmp}"
+    die "namespace bootstrap manifest must be a Namespace with metadata.name"
+  fi
+
+  mv "${tmp}" "${output}"
+}
+
 offline_install_render_manifests() {
   local cache_dir="$1"
   local env_file="$2"
@@ -365,18 +422,20 @@ run_p1_real_offline_install() {
   local env_file="$2"
   local secrets_file="$3"
   local output_dir="$4"
-  local render_dir namespace_manifest
+  local render_dir namespace_manifest rendered_namespace_manifest
 
   render_dir="${output_dir}/rendered/offline-install"
   namespace_manifest="$(cache_relative_path "${cache_dir}" "manifests/namespace-bootstrap/namespace.yaml" "namespace bootstrap manifest")"
+  rendered_namespace_manifest="${render_dir}/namespace.yaml"
 
   postgres_validate_self_hosted_urls "${env_file}" "${secrets_file}"
   minio_validate_self_hosted_env "${env_file}" "${secrets_file}"
   offline_install_run_k3s_installer "${cache_dir}" "${env_file}" "${output_dir}"
   offline_install_import_images "${cache_dir}"
 
-  info "install-offline: applying cached namespace bootstrap"
-  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${namespace_manifest}"
+  offline_install_render_namespace_manifest "${namespace_manifest}" "${rendered_namespace_manifest}" "${env_file}"
+  info "install-offline: applying rendered namespace bootstrap"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${rendered_namespace_manifest}"
 
   offline_install_render_manifests "${cache_dir}" "${env_file}" "${secrets_file}" "${render_dir}"
 

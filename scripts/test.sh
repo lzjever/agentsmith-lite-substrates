@@ -110,11 +110,12 @@ replace_env_value() {
 
 write_config() {
   local file="$1"
-  cat >"${file}" <<'EOF_CONFIG'
+  local namespace="${2:-agentsmith}"
+  cat >"${file}" <<EOF_CONFIG
 mode: self-hosted
 kubernetes:
   distribution: k3s
-  namespace: agentsmith
+  namespace: ${namespace}
   kubeconfigOutput: out/kubeconfig
 postgres:
   storageClass: local-path
@@ -122,7 +123,7 @@ postgres:
   juicefsDatabase: juicefs_meta
 objectStorage:
   provider: minio
-  endpoint: http://minio.agentsmith.svc.cluster.local:9000
+  endpoint: http://minio.${namespace}.svc.cluster.local:9000
   region: us-east-1
   bucket: agentsmith-lite-files
 juicefs:
@@ -1439,7 +1440,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
   write_forbidden_path_bin "${forbidden_bin}"
-  write_config "${config}"
+  write_config "${config}" "custom-ns"
 
   CALL_LOG="${call_log}" \
     EXEC_STDIN_DIR="${exec_stdin_dir}" \
@@ -1460,6 +1461,10 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   test "$(stat -c '%a' "${output}/substrate.secrets.env")" = "600" || fail "install-offline did not chmod substrate.secrets.env to 0600"
   test -f "${rendered}/juicefs-secret.yaml" || fail "install-offline did not render JuiceFS Secret"
   test "$(stat -c '%a' "${rendered}/juicefs-secret.yaml")" = "600" || fail "install-offline did not keep rendered JuiceFS Secret owner-only"
+  test -f "${rendered}/namespace.yaml" || fail "install-offline did not render namespace bootstrap"
+  assert_contains "${rendered}/namespace.yaml" "kind: Namespace"
+  assert_contains "${rendered}/namespace.yaml" "  name: custom-ns"
+  assert_not_contains "${rendered}/namespace.yaml" "  name: agentsmith"
   test -f "${rendered}/postgres-secret.yaml" || fail "install-offline did not render Postgres Secret"
   test "$(stat -c '%a' "${rendered}/postgres-secret.yaml")" = "600" || fail "install-offline did not keep rendered Postgres Secret owner-only"
   test -f "${rendered}/minio-secret.yaml" || fail "install-offline did not render MinIO Secret"
@@ -1474,7 +1479,9 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsUsername:"
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsPassword:"
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsDatabase:"
+  assert_contains "${rendered}/postgres-secret.yaml" "namespace: custom-ns"
   assert_contains "${rendered}/minio-secret.yaml" "name: agentsmith-lite-minio"
+  assert_contains "${rendered}/minio-secret.yaml" "namespace: custom-ns"
   assert_contains "${rendered}/minio-secret.yaml" "access-key:"
   assert_contains "${rendered}/minio-secret.yaml" "secret-key:"
   assert_not_contains "${rendered}/minio-secret.yaml" "minio-access-key"
@@ -1540,29 +1547,30 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_line_order "${call_log}" \
     "install-k3s" \
     "import-images args=" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/namespace.yaml" \
     "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz --namespace kube-system --create-namespace --wait --timeout 180s -f ${rendered}/juicefs-csi-values.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/postgres --timeout=180s" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith exec -i statefulset/postgres -- sh -c psql -v ON_ERROR_STOP=1 -U \"\${POSTGRES_USER}\" -d postgres" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns rollout status statefulset/postgres --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns exec -i statefulset/postgres -- sh -c psql -v ON_ERROR_STOP=1 -U \"\${POSTGRES_USER}\" -d postgres" \
     "kubectl exec stdin bytes=" \
-    "POSTGRES_PASSWORD postgres.agentsmith.svc.cluster.local 5432 agentsmith agentsmith_lite" \
-    "JUICEFS_META_PASSWORD postgres.agentsmith.svc.cluster.local 5432 juicefs juicefs_meta" \
+    "POSTGRES_PASSWORD postgres.custom-ns.svc.cluster.local 5432 agentsmith agentsmith_lite" \
+    "JUICEFS_META_PASSWORD postgres.custom-ns.svc.cluster.local 5432 juicefs juicefs_meta" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/minio --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns rollout status statefulset/minio --timeout=180s" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-bucket-init-job.yaml" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite delete -f ${rendered}/minio-bucket-init-job.yaml --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-format-job.yaml" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-juicefs-format" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete -f ${rendered}/juicefs-format-job.yaml --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns logs job/agentsmith-lite-juicefs-format" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete -f ${rendered}/juicefs-format-job.yaml --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=jsonpath={.status.phase}=Bound pvc/agentsmith-lite-files --timeout=180s" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace agentsmith"
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=jsonpath={.status.phase}=Bound pvc/agentsmith-lite-files --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace custom-ns"
+  assert_not_contains "${call_log}" "apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml"
   assert_contains "${call_log}" "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz"
   assert_contains "${call_log}" "-Atc \"select 1\""
   assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
@@ -1653,9 +1661,11 @@ test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
   test -f "${output}/substrate.secrets.env" || fail "install-online did not write substrate.secrets.env"
   test -f "${rendered}/postgres.yaml" || fail "install-online did not render self-hosted Postgres through delegated p1 chain"
   test -f "${rendered}/minio.yaml" || fail "install-online did not render self-hosted MinIO through delegated p1 chain"
+  test -f "${rendered}/namespace.yaml" || fail "install-online did not render namespace bootstrap through delegated p1 chain"
   assert_line_order "${call_log}" \
     "install-k3s" \
     "import-images args=" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/namespace.yaml" \
     "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml" \

@@ -162,9 +162,11 @@ split contract, and clearly skips cluster mutation in `--dry-run`.
 
 Without `--dry-run`, a P0 skeleton fails immediately as not installable. A
 p1-real cache runs the cached `scripts/install-k3s.sh` with offline download
-guards, runs the cached `scripts/import-images.sh`, applies the cached namespace
-bootstrap with `bin/kubectl`, renders the JuiceFS CSI Secret plus
-StorageClass/PVC contract, renders non-secret JuiceFS CSI Helm values, installs
+guards, runs the cached `scripts/import-images.sh`, renders the namespace
+bootstrap to `${output}/rendered/offline-install/namespace.yaml` with
+`metadata.name` set from `KUBE_NAMESPACE`, applies it with `bin/kubectl`,
+renders the JuiceFS CSI Secret plus StorageClass/PVC contract, renders
+non-secret JuiceFS CSI Helm values, installs
 the cached `charts/juicefs-csi.tgz` with cached `bin/helm`, renders and applies
 the self-hosted PostgreSQL Secret before the PostgreSQL StatefulSet, waits for
 `statefulset/postgres`, initializes/verifies the app DB and JuiceFS metadata
