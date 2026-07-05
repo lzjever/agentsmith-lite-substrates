@@ -21,7 +21,8 @@ The current test slices are:
 - S6: rendered JuiceFS CSI contract, cross-checking env-rendered namespace,
   secretName, storageClass, pvcName, ReadWriteMany, and bucket URL
 - S7: doctor dry-run/live layering; dry-run proves static contracts, while live
-  unverifiable kubectl/cluster/psql/S3/JuiceFS/RWX checks are partial or failed
+  kubectl/cluster/psql checks observe reachable resources and JuiceFS PVC
+  `Bound`; unverifiable S3/RWX checks are partial or failed
 
 ## Shell Style
 

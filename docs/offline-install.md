@@ -148,7 +148,8 @@ Secret before the MinIO StatefulSet, waits for `statefulset/minio`,
 creates/verifies `S3_BUCKET` with a one-shot MinIO client Job, deletes that Job,
 runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
 image, applies the StorageClass/PVC contract only after the format Job reports a
-matching volume, and finally runs `scripts/doctor.sh --offline-cache ...`.
+matching volume, waits for the configured JuiceFS PVC to reach `Bound`, and
+finally runs `scripts/doctor.sh --offline-cache ...`.
 
 The p1-real installer still does not run a live RWX smoke. Doctor `partial` is
 allowed for those incomplete live checks; doctor `failed` still fails the

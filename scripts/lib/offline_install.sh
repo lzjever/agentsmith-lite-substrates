@@ -268,6 +268,16 @@ offline_install_wait_minio_ready() {
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status statefulset/minio --timeout=180s
 }
 
+offline_install_wait_juicefs_pvc_bound() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local namespace pvc_name
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  pvc_name="$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)"
+  info "install-offline: waiting for JuiceFS PVC to bind"
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=jsonpath={.status.phase}=Bound "pvc/${pvc_name}" --timeout=180s
+}
+
 offline_install_init_minio_bucket() {
   local cache_dir="$1"
   local env_file="$2"
@@ -386,6 +396,7 @@ run_p1_real_offline_install() {
   offline_install_format_juicefs "${cache_dir}" "${env_file}" "${render_dir}"
   info "install-offline: applying rendered JuiceFS CSI contract"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
+  offline_install_wait_juicefs_pvc_bound "${cache_dir}" "${env_file}"
 
   offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}"
 }

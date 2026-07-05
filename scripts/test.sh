@@ -790,6 +790,9 @@ for arg in "$@"; do
   previous="${arg}"
 done
 case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf '%s\n' "${JUICEFS_FAKE_PVC_PHASE:-Bound}"
+    ;;
   *"logs job/agentsmith-lite-juicefs-format"*)
     case "${JUICEFS_FAKE_FORMAT_MODE:-ok}" in
       mismatch)
@@ -1466,7 +1469,9 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-juicefs-format" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete -f ${rendered}/juicefs-format-job.yaml --ignore-not-found=true" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml"
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=jsonpath={.status.phase}=Bound pvc/agentsmith-lite-files --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace agentsmith"
   assert_contains "${call_log}" "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz"
   assert_contains "${call_log}" "-Atc \"select 1\""
   assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
@@ -1519,6 +1524,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${report}" "juicefs-secret-value"
   assert_not_contains "${report}" "minio-access-key"
   assert_not_contains "${report}" "minio-secret-value"
+  assert_contains "${report}" "live JuiceFS PVC phase is Bound"
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
 }
 
@@ -2069,11 +2075,20 @@ test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified() {
   local report="${TMP_DIR}/doctor-live-report.json"
   local out="${TMP_DIR}/doctor-live.out"
   local psql_log="${TMP_DIR}/doctor-live-psql.log"
+  local kubectl_log="${TMP_DIR}/doctor-live-kubectl.log"
   local status
   write_valid_env_pair "${env_dir}"
   mkdir -p "${stub_bin}"
   cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
 #!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+esac
 exit 0
 EOF_KUBECTL
   cat >"${stub_bin}/psql" <<'EOF_PSQL'
@@ -2089,7 +2104,7 @@ EOF_PSQL
   chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
 
   set +e
-  PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  KUBECTL_LOG="${kubectl_log}" PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
   status=$?
   set -e
   [[ "${status}" -eq 2 ]] || fail "doctor live mode should exit 2 for partial checks, got ${status}"
@@ -2099,11 +2114,22 @@ EOF_PSQL
   assert_contains "${report}" '"postgres-juicefs-meta"'
   assert_contains "${report}" "app database accepted a simple query"
   assert_contains "${report}" "JuiceFS metadata database accepted a simple query"
+  assert_contains "${report}" "live JuiceFS PVC phase is Bound"
   assert_contains "${report}" '"status": "partial"'
   assert_contains "${report}" "live S3 read/write/delete probe is not implemented"
   assert_contains "${report}" "RWX was not verified"
+  assert_contains "${kubectl_log}" "get storageclass agentsmith-lite-juicefs-rwx"
+  assert_contains "${kubectl_log}" "-n agentsmith get secret agentsmith-lite-juicefs"
+  assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files"
+  assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.status.phase}"
+  assert_not_contains "${kubectl_log}" " apply "
+  assert_not_contains "${kubectl_log}" " delete "
+  assert_not_contains "${kubectl_log}" " create "
   assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${report}" "minio-secret-value"
+  assert_not_contains "${kubectl_log}" "juicefs-secret-value"
+  assert_not_contains "${kubectl_log}" "minio-secret-value"
+  assert_not_contains "${kubectl_log}" "postgresql://"
   assert_contains "${psql_log}" "-h postgres.agentsmith.svc.cluster.local -p 5432 -U agentsmith -d agentsmith_lite"
   assert_contains "${psql_log}" "-h postgres.agentsmith.svc.cluster.local -p 5432 -U juicefs -d juicefs_meta"
   assert_not_contains "${psql_log}" "postgres-secret-value"
@@ -2113,6 +2139,150 @@ EOF_PSQL
   assert_not_contains "${out}" "postgresql://"
   assert_not_contains "${report}" "postgresql://"
   pass "S7 doctor live mode is not falsely green when S3/RWX live checks are unverified"
+}
+
+test_substrate_only_doctor_live_fails_when_pvc_phase_is_pending() {
+  local env_dir="${TMP_DIR}/doctor-live-pvc-pending-env"
+  local stub_bin="${TMP_DIR}/doctor-live-pvc-pending-bin"
+  local report="${TMP_DIR}/doctor-live-pvc-pending-report.json"
+  local out="${TMP_DIR}/doctor-live-pvc-pending.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-pvc-pending-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Pending'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when JuiceFS PVC is Pending, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"juicefs-csi"'
+  assert_contains "${report}" "live JuiceFS PVC phase is Pending, expected Bound"
+  assert_contains "${report}" '"rwx"'
+  assert_contains "${report}" "RWX was not verified"
+  assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.status.phase}"
+  assert_not_contains "${kubectl_log}" " apply "
+  assert_not_contains "${kubectl_log}" " delete "
+  assert_not_contains "${kubectl_log}" " create "
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-secret-value"
+  assert_not_contains "${kubectl_log}" "postgresql://"
+  pass "S7 doctor live mode fails JuiceFS CSI when PVC phase is Pending"
+}
+
+test_substrate_only_doctor_live_fails_when_pvc_phase_read_fails() {
+  local env_dir="${TMP_DIR}/doctor-live-pvc-read-fail-env"
+  local stub_bin="${TMP_DIR}/doctor-live-pvc-read-fail-bin"
+  local report="${TMP_DIR}/doctor-live-pvc-read-fail-report.json"
+  local out="${TMP_DIR}/doctor-live-pvc-read-fail.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-pvc-read-fail-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    exit 23
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when JuiceFS PVC phase cannot be read, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" "live JuiceFS PVC phase could not be read"
+  assert_contains "${kubectl_log}" "get storageclass agentsmith-lite-juicefs-rwx"
+  assert_contains "${kubectl_log}" "-n agentsmith get secret agentsmith-lite-juicefs"
+  assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files"
+  assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.status.phase}"
+  assert_not_contains "${kubectl_log}" " apply "
+  assert_not_contains "${kubectl_log}" " delete "
+  assert_not_contains "${kubectl_log}" " create "
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${kubectl_log}" "postgresql://"
+  pass "S7 doctor live mode fails JuiceFS CSI when PVC phase cannot be read"
+}
+
+test_substrate_only_doctor_live_fails_when_pvc_is_missing() {
+  local env_dir="${TMP_DIR}/doctor-live-pvc-missing-env"
+  local stub_bin="${TMP_DIR}/doctor-live-pvc-missing-bin"
+  local report="${TMP_DIR}/doctor-live-pvc-missing-report.json"
+  local out="${TMP_DIR}/doctor-live-pvc-missing.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-pvc-missing-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *"-n agentsmith get pvc agentsmith-lite-files"*)
+    exit 24
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when JuiceFS PVC is missing, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" "live JuiceFS StorageClass, Secret, or PVC is missing"
+  assert_contains "${report}" "RWX was not verified"
+  assert_contains "${kubectl_log}" "get storageclass agentsmith-lite-juicefs-rwx"
+  assert_contains "${kubectl_log}" "-n agentsmith get secret agentsmith-lite-juicefs"
+  assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files"
+  assert_not_contains "${kubectl_log}" "jsonpath={.status.phase}"
+  assert_not_contains "${kubectl_log}" " apply "
+  assert_not_contains "${kubectl_log}" " delete "
+  assert_not_contains "${kubectl_log}" " create "
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${kubectl_log}" "postgresql://"
+  pass "S7 doctor live mode fails JuiceFS CSI when PVC is missing"
 }
 
 test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails() {
@@ -2241,6 +2411,9 @@ test_download_online_rejects_mutable_csi_sidecar_image_ref
 test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified
+test_substrate_only_doctor_live_fails_when_pvc_phase_is_pending
+test_substrate_only_doctor_live_fails_when_pvc_phase_read_fails
+test_substrate_only_doctor_live_fails_when_pvc_is_missing
 test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails
 test_juicefs_csi_contract
 test_juicefs_csi_contract_renders_custom_env_names

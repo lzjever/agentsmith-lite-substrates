@@ -26,7 +26,8 @@ This first public-ready skeleton is validate-first:
 - renders the self-hosted MinIO Secret, waits for `statefulset/minio`, and
   creates/verifies `S3_BUCKET` with the cached MinIO client image
 - runs an idempotent `juicefs format` bootstrap Job with the cached
-  digest-pinned JuiceFS CSI image before applying the JuiceFS PVC contract
+  digest-pinned JuiceFS CSI image before applying the JuiceFS PVC contract and
+  waiting for that PVC to reach `Bound`
 - installs the cached JuiceFS CSI Helm chart with cached driver and sidecar
   images while leaving StorageClass/Secret/PVC ownership to the substrate
   contract

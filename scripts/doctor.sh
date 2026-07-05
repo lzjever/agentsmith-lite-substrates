@@ -230,7 +230,23 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
     elif "${kubectl_cmd[@]}" "${kubectl_args[@]}" get storageclass "${juicefs_storage_class}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get secret "${juicefs_secret_name}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" >/dev/null 2>&1; then
-      add_check "juicefs-csi" "passed" "live JuiceFS StorageClass, Secret, and PVC are present" "substrate-csi-secret"
+      pvc_phase=""
+      if pvc_phase="$("${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" -o jsonpath={.status.phase} 2>/dev/null)" \
+        && [[ -n "${pvc_phase}" ]]; then
+        case "${pvc_phase}" in
+          Bound)
+            add_check "juicefs-csi" "passed" "live JuiceFS PVC phase is Bound" "substrate-csi-secret"
+            ;;
+          Pending|Lost)
+            add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is ${pvc_phase}, expected Bound" "substrate-csi-secret"
+            ;;
+          *)
+            add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is not Bound" "substrate-csi-secret"
+            ;;
+        esac
+      else
+        add_check "juicefs-csi" "failed" "live JuiceFS PVC phase could not be read" "substrate-csi-secret"
+      fi
       add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
     else
       add_check "juicefs-csi" "failed" "live JuiceFS StorageClass, Secret, or PVC is missing" "substrate-csi-secret"
