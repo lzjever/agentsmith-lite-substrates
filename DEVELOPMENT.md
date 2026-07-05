@@ -35,8 +35,9 @@ The current test slices are:
 - `install-online.sh` and `install-offline.sh` refuse to overwrite generated env files unless `--force` is supplied.
 - `reset-dev.sh` requires `--destroy-data` and a self-hosted config.
 - P0 skeletons remain dry-run/contract-only. p1-real offline install performs
-  the minimum cached k3s/import/kubectl apply chain, but live JuiceFS CSI driver
-  install, JuiceFS format, and RWX smoke remain open.
+  the minimum cached k3s/import/kubectl apply chain, self-hosted PostgreSQL and
+  MinIO bootstrap, and idempotent JuiceFS format. Live JuiceFS CSI driver
+  install and RWX smoke remain open.
 - The default `download-online.sh` output is still a P0 static contract
   skeleton. It is useful for contract generation and dry-run validation only.
 - A p1-real offline cache must be supplied with all required artifacts and

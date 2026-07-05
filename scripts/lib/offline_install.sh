@@ -82,7 +82,7 @@ offline_install_render_manifests() {
   local env_file="$2"
   local secrets_file="$3"
   local render_dir="$4"
-  local lock_file namespace postgres_image minio_image minio_client_image
+  local lock_file namespace postgres_image minio_image minio_client_image juicefs_csi_image
 
   mkdir -p "${render_dir}"
   render_juicefs_contract "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}"
@@ -94,6 +94,8 @@ offline_install_render_manifests() {
     || die "p1-real images.lock is missing dependency image entry: minio"
   minio_client_image="$(images_lock_image_ref "${lock_file}" "minio-client")" \
     || die "p1-real images.lock is missing dependency image entry: minio-client"
+  juicefs_csi_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi")" \
+    || die "p1-real images.lock is missing dependency image entry: juicefs-csi"
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
 
   render_postgres_secret_manifest "${env_file}" "${secrets_file}" "${render_dir}/postgres-secret.yaml"
@@ -101,6 +103,7 @@ offline_install_render_manifests() {
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/postgres/postgres.yaml" "${render_dir}/postgres.yaml" "${namespace}" "${postgres_image}"
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/minio/minio.yaml" "${render_dir}/minio.yaml" "${namespace}" "${minio_image}"
   render_minio_bucket_init_job "${env_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-bucket-init-job.yaml" "${minio_client_image}"
+  render_juicefs_format_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}/juicefs-format-job.yaml" "${juicefs_csi_image}"
 }
 
 offline_install_import_images() {
@@ -176,6 +179,35 @@ offline_install_init_minio_bucket() {
   offline_install_kubectl "${cache_dir}" "${env_file}" delete -f "${render_dir}/minio-bucket-init-job.yaml" --ignore-not-found=true
 }
 
+offline_install_format_juicefs() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local render_dir="$3"
+  local namespace logs status
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+
+  info "install-offline: formatting JuiceFS volume"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-secret.yaml"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-format-job.yaml"
+
+  set +e
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s
+  status=$?
+  logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs job/agentsmith-lite-juicefs-format 2>&1)"
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" delete -f "${render_dir}/juicefs-format-job.yaml" --ignore-not-found=true
+  set -e
+
+  if grep -Fq "agentsmith-lite-juicefs-format: existing JuiceFS volume mismatch" <<<"${logs}"; then
+    die "existing JuiceFS volume mismatch; refusing to apply JuiceFS PVC contract"
+  fi
+  if [[ "${status}" -ne 0 ]]; then
+    die "JuiceFS format Job failed; refusing to apply JuiceFS PVC contract"
+  fi
+  if ! grep -Fq "agentsmith-lite-juicefs-format: ok" <<<"${logs}"; then
+    die "JuiceFS format Job did not report a successful idempotent format"
+  fi
+}
+
 offline_install_init_postgres_databases() {
   local cache_dir="$1"
   local env_file="$2"
@@ -234,9 +266,6 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${namespace_manifest}"
 
   offline_install_render_manifests "${cache_dir}" "${env_file}" "${secrets_file}" "${render_dir}"
-  info "install-offline: applying rendered JuiceFS CSI contract"
-  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-secret.yaml"
-  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
 
   info "install-offline: applying rendered Postgres manifests"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres-secret.yaml"
@@ -248,6 +277,10 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/minio.yaml"
   offline_install_wait_minio_ready "${cache_dir}" "${env_file}"
   offline_install_init_minio_bucket "${cache_dir}" "${env_file}" "${render_dir}"
+
+  offline_install_format_juicefs "${cache_dir}" "${env_file}" "${render_dir}"
+  info "install-offline: applying rendered JuiceFS CSI contract"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
 
   offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}"
 }

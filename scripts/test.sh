@@ -704,6 +704,18 @@ for arg in "$@"; do
   fi
   previous="${arg}"
 done
+case "$*" in
+  *"logs job/agentsmith-lite-juicefs-format"*)
+    case "${JUICEFS_FAKE_FORMAT_MODE:-ok}" in
+      mismatch)
+        printf 'agentsmith-lite-juicefs-format: existing JuiceFS volume mismatch: bucket\n'
+        ;;
+      *)
+        printf 'agentsmith-lite-juicefs-format: ok\n'
+        ;;
+    esac
+    ;;
+esac
 exit 0
 EOF_KUBECTL
 
@@ -1144,6 +1156,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   test -f "${rendered}/minio-secret.yaml" || fail "install-offline did not render MinIO Secret"
   test "$(stat -c '%a' "${rendered}/minio-secret.yaml")" = "600" || fail "install-offline did not keep rendered MinIO Secret owner-only"
   test -f "${rendered}/minio-bucket-init-job.yaml" || fail "install-offline did not render MinIO bucket init Job"
+  test -f "${rendered}/juicefs-format-job.yaml" || fail "install-offline did not render JuiceFS format Job"
   assert_contains "${rendered}/postgres-secret.yaml" "name: agentsmith-lite-postgres"
   assert_contains "${rendered}/postgres-secret.yaml" "username:"
   assert_contains "${rendered}/postgres-secret.yaml" "password:"
@@ -1170,13 +1183,31 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "S3_SECRET_KEY"
   assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "minio-access-key"
   assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "minio-secret-value"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "name: agentsmith-lite-juicefs-format"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "image: docker.io/juicedata/juicefs-csi-driver@sha256:"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "name: JUICEFS_VOLUME_NAME"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "name: JUICEFS_META_URL"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "name: JUICEFS_BUCKET"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "name: S3_ACCESS_KEY"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "name: S3_SECRET_KEY"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "secretKeyRef:"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "key: metaurl"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "key: bucket"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "juicefs format"
+  assert_contains "${rendered}/juicefs-format-job.yaml" '--bucket "$JUICEFS_BUCKET"'
+  assert_contains "${rendered}/juicefs-format-job.yaml" "JFS_NO_CHECK_OBJECT_STORAGE=1"
+  assert_not_contains "${rendered}/juicefs-format-job.yaml" "--access-key"
+  assert_not_contains "${rendered}/juicefs-format-job.yaml" "--secret-key"
+  assert_not_contains "${rendered}/juicefs-format-job.yaml" "postgresql://juicefs:"
+  assert_not_contains "${rendered}/juicefs-format-job.yaml" "postgres-secret-value"
+  assert_not_contains "${rendered}/juicefs-format-job.yaml" "juicefs-secret-value"
+  assert_not_contains "${rendered}/juicefs-format-job.yaml" "minio-access-key"
+  assert_not_contains "${rendered}/juicefs-format-job.yaml" "minio-secret-value"
 
   assert_line_order "${call_log}" \
     "install-k3s" \
     "import-images args=" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-secret.yaml" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/postgres --timeout=180s" \
@@ -1189,7 +1220,13 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/minio --timeout=180s" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-bucket-init-job.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite delete -f ${rendered}/minio-bucket-init-job.yaml --ignore-not-found=true"
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite delete -f ${rendered}/minio-bucket-init-job.yaml --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-secret.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-format-job.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-juicefs-format --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-juicefs-format" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete -f ${rendered}/juicefs-format-job.yaml --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml"
   assert_contains "${call_log}" "-Atc \"select 1\""
   assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
   assert_contains "${call_log}" "INSTALL_K3S_EXEC=server --write-kubeconfig ${output}/kubeconfig --write-kubeconfig-mode 600"
@@ -1234,6 +1271,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${call_log}" "minio-access-key"
   assert_not_contains "${call_log}" "minio-secret-value"
   assert_not_contains "${call_log}" "S3_SECRET_KEY"
+  assert_not_contains "${call_log}" "JUICEFS_META_URL="
   assert_not_contains "${call_log}" "postgresql://"
   assert_not_contains "${call_log}" "postgres://"
   assert_not_contains "${report}" "postgres-secret-value"
@@ -1241,6 +1279,75 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${report}" "minio-access-key"
   assert_not_contains "${report}" "minio-secret-value"
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
+}
+
+test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs() {
+  local env_dir="${TMP_DIR}/juicefs-format-env"
+  local output="${TMP_DIR}/juicefs-format-job.yaml"
+  local out="${TMP_DIR}/juicefs-format-render.out"
+  local image="docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  write_valid_env_pair "${env_dir}"
+
+  bash -c 'set -euo pipefail; source "$1/scripts/lib/juicefs.sh"; render_juicefs_format_job "$2" "$3" "$1/manifests/juicefs-csi" "$4" "$5"' \
+    _ "${ROOT_DIR}" "${env_dir}/substrate.env" "${env_dir}/substrate.secrets.env" "${output}" "${image}" >"${out}" 2>&1
+
+  assert_contains "${output}" "image: ${image}"
+  assert_contains "${output}" "name: agentsmith-lite-juicefs-format"
+  assert_contains "${output}" "name: JUICEFS_VOLUME_NAME"
+  assert_contains "${output}" "name: JUICEFS_META_URL"
+  assert_contains "${output}" "name: JUICEFS_BUCKET"
+  assert_contains "${output}" "valueFrom:"
+  assert_contains "${output}" "secretKeyRef:"
+  assert_contains "${output}" "name: agentsmith-lite-juicefs"
+  assert_contains "${output}" "key: name"
+  assert_contains "${output}" "key: metaurl"
+  assert_contains "${output}" "key: bucket"
+  assert_contains "${output}" "key: access-key"
+  assert_contains "${output}" "key: secret-key"
+  assert_contains "${output}" "juicefs format"
+  assert_contains "${output}" '--storage s3'
+  assert_contains "${output}" '--bucket "$JUICEFS_BUCKET"'
+  assert_contains "${output}" "JFS_NO_CHECK_OBJECT_STORAGE=1"
+  assert_not_contains "${output}" "--access-key"
+  assert_not_contains "${output}" "--secret-key"
+  assert_not_contains "${output}" "postgresql://juicefs:"
+  assert_not_contains "${output}" "juicefs-secret-value"
+  assert_not_contains "${output}" "minio-access-key"
+  assert_not_contains "${output}" "minio-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  pass "JuiceFS format Job renders digest-pinned CSI image, secret refs, and complete format parameters"
+}
+
+test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc() {
+  local cache="${TMP_DIR}/offline-cache-p1-format-mismatch"
+  local config="${TMP_DIR}/substrates-p1-format-mismatch.yaml"
+  local output="${TMP_DIR}/offline-p1-format-mismatch-out"
+  local out="${TMP_DIR}/install-offline-p1-format-mismatch.out"
+  local call_log="${TMP_DIR}/p1-format-mismatch-call.log"
+  local airgap_dir="${TMP_DIR}/p1-format-mismatch-airgap"
+  local exec_stdin_dir="${TMP_DIR}/p1-format-mismatch-exec-stdin"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}"
+
+  if CALL_LOG="${call_log}" \
+    EXEC_STDIN_DIR="${exec_stdin_dir}" \
+    K3S_AIRGAP_DIR="${airgap_dir}" \
+    JUICEFS_FAKE_FORMAT_MODE="mismatch" \
+    POSTGRES_PASSWORD="postgres-secret-value" \
+    JUICEFS_META_PASSWORD="juicefs-secret-value" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline accepted a mismatched existing JuiceFS volume"
+  fi
+
+  assert_contains "${out}" "existing JuiceFS volume mismatch"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_contains "${call_log}" "logs job/agentsmith-lite-juicefs-format"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/juicefs-storageclass-pvc.yaml"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "minio-secret-value"
+  pass "P1 offline installer fails JuiceFS format mismatch before applying PVC contract"
 }
 
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation() {
@@ -1802,6 +1909,8 @@ test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
+test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs
+test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc
 test_minio_bucket_init_job_keeps_credentials_out_of_mc_argv
 test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation
 test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation

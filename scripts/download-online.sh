@@ -428,7 +428,7 @@ EOF_SUMS
 
   validate_offline_cache "${dir}"
   info "wrote p1-real offline cache: ${dir}"
-  info "note: install-offline.sh can run the minimum cached p1-real chain; JuiceFS driver install, juicefs format, and RWX smoke remain follow-up work"
+  info "note: install-offline.sh can run the minimum cached p1-real chain including JuiceFS format bootstrap; JuiceFS driver install and RWX smoke remain follow-up work"
 }
 
 if [[ -n "${artifact_lock}" ]]; then
