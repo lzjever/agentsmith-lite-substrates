@@ -1118,6 +1118,21 @@ test_config_contract_rejects_existing_cloud_app_url_typo() {
   pass "S1 config contract rejects existing-cloud appUrlFromEnv typos"
 }
 
+test_config_schema_matches_shell_contract() {
+  local schema="${ROOT_DIR}/schemas/substrates-config.v1.schema.json"
+  assert_contains "${schema}" '"mode": { "enum": ["self-hosted", "existing-cloud"] }'
+  assert_contains "${schema}" '"required": ["provider", "bucket"]'
+  assert_contains "${schema}" '"provider": { "enum": ["minio", "s3"] }'
+  assert_contains "${schema}" '"mode": { "enum": ["builtin_admin", "oidc"] }'
+  assert_contains "${schema}" '"csiDriver": { "const": "csi.juicefs.com" }'
+  assert_contains "${schema}" '"mode": { "const": "existing-cloud" }'
+  assert_contains "${schema}" '"required": ["postgres", "objectStorage"]'
+  assert_contains "${schema}" '"required": ["appUrlFromEnv", "juicefsMetaUrlFromEnv"]'
+  assert_contains "${schema}" '"required": ["accessKeyFromEnv", "secretKeyFromEnv"]'
+  assert_contains "${schema}" '"required": ["clientSecretFromEnv"]'
+  pass "S1 config schema carries shell config contract guardrails"
+}
+
 test_config_contract_accepts_valid_modes() {
   local cache="${TMP_DIR}/config-contract-valid-cache"
   local self_config="${TMP_DIR}/config-contract-self-hosted.yaml"
@@ -3399,6 +3414,7 @@ test_validate_env_rejects_loose_secret_mode
 test_config_contract_rejects_invalid_mode
 test_config_contract_rejects_missing_bucket
 test_config_contract_rejects_existing_cloud_app_url_typo
+test_config_schema_matches_shell_contract
 test_config_contract_accepts_valid_modes
 test_offline_install_validates_cache_without_network
 test_offline_cache_rejects_public_download_contract

@@ -9,6 +9,12 @@ The repo has exactly three schema files:
 The shell validator parses env files as `KEY=VALUE` records and enforces the
 same key boundary as the schemas.
 
+`schemas/substrates-config.v1.schema.json` is kept aligned with
+`scripts/lib/config.sh::validate_config_contract`: required mode-specific config
+keys and small enums should be accepted or rejected the same way in both places.
+The schema remains intentionally light on unknown keys so operators can carry
+future or installer-specific metadata without breaking validation.
+
 ## Non-Secret File
 
 `substrate.env` contains routing and resource names only: namespace,
