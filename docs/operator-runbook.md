@@ -46,9 +46,10 @@ Current behavior is intentionally layered:
 - `doctor.sh` without `--dry-run` attempts live checks where implemented:
   kubectl namespace reachability, PostgreSQL `select 1` for both
   `POSTGRES_APP_URL` and `JUICEFS_META_URL`, an S3 read/write/delete probe from
-  a temporary Job, Kubernetes presence checks for JuiceFS StorageClass/Secret/PVC,
-  the PVC phase being `Bound`, and a two-Job RWX smoke that mounts the
-  configured PVC from writer and reader Jobs.
+  a temporary Job, Kubernetes presence checks for the provider-owned JuiceFS
+  CSIDriver plus JuiceFS StorageClass/Secret/PVC, the PVC phase being `Bound`,
+  and a two-Job RWX smoke that mounts the configured PVC from writer and reader
+  Jobs.
 - Checks that cannot be verified are reported as `partial` or `failed`; skipped
   live checks are not treated as a green pass. If S3 config is present and the
   cluster is reachable, a missing or mutable S3 probe image is a failure.

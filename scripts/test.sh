@@ -801,6 +801,9 @@ for arg in "$@"; do
   previous="${arg}"
 done
 case "$*" in
+  *"get csidriver csi.juicefs.com"*)
+    [[ "${JUICEFS_FAKE_CSIDRIVER:-present}" != "missing" ]] || exit 26
+    ;;
   *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
     printf '%s\n' "${JUICEFS_FAKE_PVC_PHASE:-Bound}"
     ;;
@@ -2172,6 +2175,70 @@ EOF_PSQL
   pass "existing-cloud p1-real install validates without mutating self-hosted Postgres"
 }
 
+test_existing_cloud_offline_install_fails_when_juicefs_csidriver_is_missing() {
+  local cache="${TMP_DIR}/offline-cache-existing-cloud-missing-csidriver"
+  local config="${TMP_DIR}/substrates-existing-cloud-missing-csidriver.yaml"
+  local output="${TMP_DIR}/offline-existing-cloud-missing-csidriver-out"
+  local out="${TMP_DIR}/install-offline-existing-cloud-missing-csidriver.out"
+  local report="${output}/doctor-report.json"
+  local call_log="${TMP_DIR}/existing-cloud-missing-csidriver-call.log"
+  local stub_bin="${TMP_DIR}/existing-cloud-missing-csidriver-bin"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_existing_cloud_config "${config}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/psql"
+
+  if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
+    S3_ACCESS_KEY="existing-access-key" \
+    S3_SECRET_KEY="existing-secret-value" \
+    CALL_LOG="${call_log}" \
+    JUICEFS_FAKE_CSIDRIVER="missing" \
+    PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline existing-cloud succeeded even though live doctor could not verify JuiceFS CSIDriver"
+  fi
+
+  assert_contains "${out}" "existing-cloud live validation requires passed doctor"
+  assert_contains "${out}" "live JuiceFS CSIDriver csi.juicefs.com is missing"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" "live JuiceFS CSIDriver csi.juicefs.com is missing"
+  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
+  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get csidriver csi.juicefs.com"
+  assert_not_contains "${call_log}" "get storageclass agentsmith-lite-juicefs-rwx"
+  assert_not_contains "${call_log}" "agentsmith-lite-rwx-smoke"
+  assert_not_contains "${call_log}" "install-k3s"
+  assert_not_contains "${call_log}" "import-images"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio-secret.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio.yaml"
+  [[ ! -e "${output}/rendered/offline-install/postgres-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres Secret after failed CSIDriver validation"
+  [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres StatefulSet after failed CSIDriver validation"
+  [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret after failed CSIDriver validation"
+  [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet after failed CSIDriver validation"
+  [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job after failed CSIDriver validation"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "existing-access-key"
+  assert_not_contains "${out}" "existing-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "existing-access-key"
+  assert_not_contains "${report}" "existing-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "existing-access-key"
+  assert_not_contains "${call_log}" "existing-secret-value"
+  assert_not_contains "${call_log}" "postgresql://"
+  pass "existing-cloud p1-real install fails closed when JuiceFS CSIDriver is missing"
+}
+
 test_existing_cloud_offline_install_fails_without_psql() {
   local cache="${TMP_DIR}/offline-cache-existing-cloud-no-psql"
   local config="${TMP_DIR}/substrates-existing-cloud-no-psql.yaml"
@@ -2817,6 +2884,7 @@ EOF_PSQL
   assert_contains "${report}" '"name": "rwx"'
   assert_contains "${report}" '"status": "passed"'
   assert_contains "${report}" "live two-job ReadWriteMany smoke passed"
+  assert_contains "${kubectl_log}" "get csidriver csi.juicefs.com"
   assert_contains "${kubectl_log}" "apply -f"
   assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-s3-probe-"
   assert_contains "${kubectl_log}" "logs job/agentsmith-lite-s3-probe-"
@@ -2827,6 +2895,13 @@ EOF_PSQL
   assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
   assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
   assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_line_order "${kubectl_log}" \
+    "get csidriver csi.juicefs.com" \
+    "get storageclass agentsmith-lite-juicefs-rwx" \
+    "-n agentsmith get secret agentsmith-lite-juicefs" \
+    "-n agentsmith get pvc agentsmith-lite-files" \
+    "-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.status.phase}" \
+    "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-reader-"
   assert_contains "${rendered}" "image: quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   assert_contains "${rendered}" "agentsmith-lite/check: s3-probe"
   assert_contains "${rendered}" "secretKeyRef:"
@@ -2859,6 +2934,77 @@ EOF_PSQL
   assert_not_contains "${report}" "http://minio.agentsmith.svc.cluster.local:9000"
   assert_not_contains "${report}" "minio-secret-value"
   pass "S7 doctor live mode runs S3 CRUD and two-Job RWX smoke against a Bound JuiceFS PVC"
+}
+
+test_substrate_only_doctor_live_fails_when_juicefs_csidriver_is_missing() {
+  local env_dir="${TMP_DIR}/doctor-live-csidriver-missing-env"
+  local cache="${TMP_DIR}/doctor-live-csidriver-missing-cache"
+  local stub_bin="${TMP_DIR}/doctor-live-csidriver-missing-bin"
+  local report="${TMP_DIR}/doctor-live-csidriver-missing-report.json"
+  local out="${TMP_DIR}/doctor-live-csidriver-missing.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-csidriver-missing-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  write_p1_offline_cache "${cache}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *"get csidriver csi.juicefs.com"*)
+    exit 27
+    ;;
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-s3-probe-"*)
+    printf 'agentsmith-lite-s3-probe: ok\n'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: should-not-run\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when JuiceFS CSIDriver is missing, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "juicefs-csi"'
+  assert_contains "${report}" '"status": "failed"'
+  assert_contains "${report}" "live JuiceFS CSIDriver csi.juicefs.com is missing"
+  assert_contains "${report}" '"name": "rwx"'
+  assert_contains "${report}" "RWX was not verified because live JuiceFS CSIDriver csi.juicefs.com is missing"
+  assert_contains "${kubectl_log}" "get csidriver csi.juicefs.com"
+  assert_not_contains "${kubectl_log}" "get storageclass agentsmith-lite-juicefs-rwx"
+  assert_not_contains "${kubectl_log}" "-n agentsmith get secret agentsmith-lite-juicefs"
+  assert_not_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files"
+  assert_not_contains "${kubectl_log}" "agentsmith-lite-rwx-smoke"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-access-key"
+  assert_not_contains "${report}" "minio-secret-value"
+  assert_not_contains "${kubectl_log}" "postgres-secret-value"
+  assert_not_contains "${kubectl_log}" "juicefs-secret-value"
+  assert_not_contains "${kubectl_log}" "minio-access-key"
+  assert_not_contains "${kubectl_log}" "minio-secret-value"
+  assert_not_contains "${kubectl_log}" "postgresql://"
+  pass "S7 doctor live mode fails closed when JuiceFS CSIDriver is missing"
 }
 
 test_substrate_only_doctor_live_fails_and_cleans_up_when_s3_probe_wait_fails() {
@@ -3510,6 +3656,7 @@ test_minio_bucket_init_job_keeps_credentials_out_of_mc_argv
 test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation
 test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation
 test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres
+test_existing_cloud_offline_install_fails_when_juicefs_csidriver_is_missing
 test_existing_cloud_offline_install_fails_without_psql
 test_p1_real_offline_cache_rejects_missing_image_archive_sha
 test_p1_real_offline_cache_rejects_public_download_references_in_images_lock
@@ -3533,6 +3680,7 @@ test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing
 test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound
+test_substrate_only_doctor_live_fails_when_juicefs_csidriver_is_missing
 test_substrate_only_doctor_live_fails_and_cleans_up_when_s3_probe_wait_fails
 test_substrate_only_doctor_live_redacts_s3_secret_apply_output_on_failure
 test_substrate_only_doctor_live_rejects_invalid_s3_probe_images_before_creating_job

@@ -257,6 +257,7 @@ s3_force_path_style="$(env_value_or_empty "${env_file}" S3_FORCE_PATH_STYLE)"
 s3_access="$(env_value_or_empty "${secrets_file}" S3_ACCESS_KEY)"
 s3_secret="$(env_value_or_empty "${secrets_file}" S3_SECRET_KEY)"
 juicefs_meta="$(env_value_or_empty "${secrets_file}" JUICEFS_META_URL)"
+juicefs_csi_driver="$(env_value_or_empty "${env_file}" JUICEFS_CSI_DRIVER)"
 juicefs_secret_name="$(env_value_or_empty "${env_file}" JUICEFS_SECRET_NAME)"
 juicefs_storage_class="$(env_value_or_empty "${env_file}" JUICEFS_STORAGE_CLASS)"
 juicefs_pvc_name="$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)"
@@ -345,6 +346,9 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
     elif [[ "${cluster_reachable}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "cluster namespace is not reachable; live JuiceFS resources were not verified" "substrate-csi-secret"
       add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires a reachable namespace; RWX was not verified"
+    elif ! "${kubectl_cmd[@]}" "${kubectl_args[@]}" get csidriver "${juicefs_csi_driver}" >/dev/null 2>&1; then
+      add_check "juicefs-csi" "failed" "live JuiceFS CSIDriver ${juicefs_csi_driver} is missing" "substrate-csi-secret"
+      add_check "rwx" "failed" "RWX was not verified because live JuiceFS CSIDriver ${juicefs_csi_driver} is missing"
     elif "${kubectl_cmd[@]}" "${kubectl_args[@]}" get storageclass "${juicefs_storage_class}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get secret "${juicefs_secret_name}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" >/dev/null 2>&1; then
