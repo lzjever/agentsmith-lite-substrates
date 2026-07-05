@@ -69,12 +69,13 @@ scripts/doctor.sh \
   --dry-run
 ```
 
-Live doctor runs the S3 object probe from the cluster network with the
-digest-pinned `name: minio-client` image from `--offline-cache
-images/images.lock`, or from explicit `--s3-probe-image
-image@sha256:<digest>`. It runs the RWX smoke only after the configured JuiceFS
-PVC is `Bound`, using `name: rwx-smoke` from the same lock or
-`--rwx-smoke-image image@sha256:<digest>`.
+Live doctor runs Postgres, S3, and RWX probes from the cluster network. It reads
+digest-pinned `name: postgres`, `name: minio-client`, and `name: rwx-smoke`
+images from `--offline-cache images/images.lock`, or accepts explicit
+`--postgres-probe-image`, `--s3-probe-image`, and `--rwx-smoke-image`
+`image@sha256:<digest>` refs. The Postgres probes run read-only `select 1`
+checks for both `POSTGRES_APP_URL` and `JUICEFS_META_URL`; the RWX smoke runs
+only after the configured JuiceFS PVC is `Bound`.
 
 For an offline contract skeleton dry-run:
 
@@ -155,7 +156,7 @@ external evidence surface. It accepts `--env`, `--secrets`,
 `scripts/doctor.sh --dry-run`.
 
 Preflight is static only: it does not run app checks, Botified checks, API smoke,
-live kubectl, psql, S3 probes, RWX smoke, Helm, k3s install, downloads, or image
+live kubectl, Postgres/S3/RWX probes, Helm, k3s install, downloads, or image
 import. It does not replace live doctor, clean-VM install evidence,
 disconnected-VM validation, or existing-cloud validation.
 

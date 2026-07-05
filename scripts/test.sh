@@ -2553,15 +2553,15 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
 }
 
-test_p1_real_offline_install_non_dry_run_fails_without_psql() {
-  local cache="${TMP_DIR}/offline-cache-p1-live-no-psql"
-  local config="${TMP_DIR}/substrates-p1-live-no-psql.yaml"
-  local output="${TMP_DIR}/offline-p1-live-no-psql-out"
-  local out="${TMP_DIR}/install-offline-p1-live-no-psql.out"
+test_p1_real_offline_install_non_dry_run_runs_postgres_probe_without_host_psql() {
+  local cache="${TMP_DIR}/offline-cache-p1-live-no-host-psql"
+  local config="${TMP_DIR}/substrates-p1-live-no-host-psql.yaml"
+  local output="${TMP_DIR}/offline-p1-live-no-host-psql-out"
+  local out="${TMP_DIR}/install-offline-p1-live-no-host-psql.out"
   local report="${output}/doctor-report.json"
-  local call_log="${TMP_DIR}/p1-live-no-psql-call.log"
-  local airgap_dir="${TMP_DIR}/p1-live-no-psql-airgap"
-  local no_psql_path="${TMP_DIR}/p1-live-no-psql-path"
+  local call_log="${TMP_DIR}/p1-live-no-host-psql-call.log"
+  local airgap_dir="${TMP_DIR}/p1-live-no-host-psql-airgap"
+  local no_psql_path="${TMP_DIR}/p1-live-no-host-psql-path"
   local rendered="${output}/rendered/offline-install"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
@@ -2569,27 +2569,39 @@ test_p1_real_offline_install_non_dry_run_fails_without_psql() {
   write_path_without_psql "${no_psql_path}"
   ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
 
-  if CALL_LOG="${call_log}" \
+  CALL_LOG="${call_log}" \
     K3S_AIRGAP_DIR="${airgap_dir}" \
     APP_SESSION_SECRET="app-session-secret-value-0123456789abcdef" \
     BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
     S3_ACCESS_KEY="minio-access-key" \
     S3_SECRET_KEY="minio-secret-value" \
     PATH="${no_psql_path}" \
-    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
-    fail "install-offline self-hosted succeeded even though live doctor could not verify Postgres without psql"
-  fi
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
+      printf '%s\n' "install-offline output:" >&2
+      sed -n '1,220p' "${out}" >&2
+      fail "install-offline self-hosted should use in-cluster Postgres probes without host psql"
+    }
 
-  assert_contains "${out}" "self-hosted live install requires passed doctor"
-  assert_contains "${out}" "psql not found; app database connectivity was not verified"
-  assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
-  assert_contains "${report}" '"overallStatus": "partial"'
-  assert_not_contains "${report}" '"overallStatus": "passed"'
-  assert_not_contains "${out}" "doctor passed"
+  assert_contains "${out}" "doctor passed"
+  assert_contains "${report}" '"overallStatus": "passed"'
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-app") | .status' "passed"
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-juicefs-meta") | .status' "passed"
+  assert_contains "${report}" "app database accepted a simple query"
+  assert_contains "${report}" "JuiceFS metadata database accepted a simple query"
+  assert_not_contains "${out}" "psql not found"
+  assert_not_contains "${report}" "psql not found"
   assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml"
   assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-init-job.yaml"
   assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-postgres-init"
   assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace agentsmith"
+  assert_contains "${call_log}" "postgres-probe-secret.yaml"
+  assert_contains "${call_log}" "postgres-probe-job.yaml"
+  assert_contains "${call_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-app-"
+  assert_contains "${call_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${call_log}" "logs job/asl-pg-probe-postgres-app-"
+  assert_contains "${call_log}" "logs job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${call_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${call_log}" "delete secret -l agentsmith-lite/run-id="
   assert_not_contains "${call_log}" "exec -i statefulset/postgres"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
@@ -2599,7 +2611,7 @@ test_p1_real_offline_install_non_dry_run_fails_without_psql() {
   assert_not_contains "${call_log}" "juicefs-secret-value"
   assert_not_contains "${call_log}" "minio-access-key"
   assert_not_contains "${call_log}" "minio-secret-value"
-  pass "P1 offline self-hosted live install fails closed when psql is unavailable"
+  pass "P1 offline self-hosted live install uses in-cluster Postgres probes without host psql"
 }
 
 test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
@@ -2724,15 +2736,15 @@ EOF_PSQL
   pass "P1 online existing-cloud installer delegates non-dry-run to validation only"
 }
 
-test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
-  local cache="${TMP_DIR}/online-cache-existing-cloud-no-psql"
-  local config="${TMP_DIR}/substrates-online-existing-cloud-no-psql.yaml"
-  local kubeconfig="${TMP_DIR}/online-existing-cloud-no-psql-kubeconfig"
-  local output="${TMP_DIR}/online-existing-cloud-no-psql-out"
-  local out="${TMP_DIR}/install-online-existing-cloud-no-psql.out"
+test_online_install_existing_cloud_non_dry_run_runs_postgres_probe_without_host_psql() {
+  local cache="${TMP_DIR}/online-cache-existing-cloud-no-host-psql"
+  local config="${TMP_DIR}/substrates-online-existing-cloud-no-host-psql.yaml"
+  local kubeconfig="${TMP_DIR}/online-existing-cloud-no-host-psql-kubeconfig"
+  local output="${TMP_DIR}/online-existing-cloud-no-host-psql-out"
+  local out="${TMP_DIR}/install-online-existing-cloud-no-host-psql.out"
   local report="${output}/doctor-report.json"
-  local call_log="${TMP_DIR}/online-existing-cloud-no-psql-call.log"
-  local no_psql_path="${TMP_DIR}/online-existing-cloud-no-psql-path"
+  local call_log="${TMP_DIR}/online-existing-cloud-no-host-psql-call.log"
+  local no_psql_path="${TMP_DIR}/online-existing-cloud-no-host-psql-path"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
   write_existing_cloud_config "${config}" "${kubeconfig}"
@@ -2740,7 +2752,7 @@ test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
   write_path_without_psql "${no_psql_path}"
   ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
 
-  if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+  POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
     JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
     APP_SESSION_SECRET="app-session-secret-value-0123456789abcdef" \
     BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
@@ -2748,15 +2760,27 @@ test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
     S3_SECRET_KEY="existing-secret-value" \
     CALL_LOG="${call_log}" \
     PATH="${no_psql_path}" \
-    "${ROOT_DIR}/scripts/install-online.sh" --offline-cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
-    fail "install-online existing-cloud succeeded even though live doctor could not verify Postgres without psql"
-  fi
+    "${ROOT_DIR}/scripts/install-online.sh" --offline-cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
+      printf '%s\n' "install-online output:" >&2
+      sed -n '1,220p' "${out}" >&2
+      fail "install-online existing-cloud should use in-cluster Postgres probes without host psql"
+    }
 
-  assert_contains "${out}" "existing-cloud live validation requires passed doctor"
-  assert_contains "${out}" "psql not found; app database connectivity was not verified"
-  assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
-  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${out}" "doctor passed"
+  assert_contains "${report}" '"overallStatus": "passed"'
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-app") | .status' "passed"
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-juicefs-meta") | .status' "passed"
+  assert_not_contains "${out}" "psql not found"
+  assert_not_contains "${report}" "psql not found"
   assert_contains "${call_log}" "kubectl --kubeconfig ${kubeconfig} --context production get namespace agentsmith"
+  assert_contains "${call_log}" "postgres-probe-secret.yaml"
+  assert_contains "${call_log}" "postgres-probe-job.yaml"
+  assert_contains "${call_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-app-"
+  assert_contains "${call_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${call_log}" "logs job/asl-pg-probe-postgres-app-"
+  assert_contains "${call_log}" "logs job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${call_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${call_log}" "delete secret -l agentsmith-lite/run-id="
   assert_not_contains "${call_log}" "install-k3s"
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "postgres.yaml"
@@ -2775,7 +2799,7 @@ test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
   assert_not_contains "${call_log}" "juicefs-secret-value"
   assert_not_contains "${call_log}" "existing-access-key"
   assert_not_contains "${call_log}" "existing-secret-value"
-  pass "P1 online existing-cloud live validation fails closed when psql is unavailable"
+  pass "P1 online existing-cloud live validation uses in-cluster Postgres probes without host psql"
 }
 
 test_online_install_p0_contract_non_dry_run_fails() {
@@ -3266,15 +3290,15 @@ EOF_PSQL
   pass "existing-cloud p1-real install fails closed when JuiceFS CSIDriver is missing"
 }
 
-test_existing_cloud_offline_install_fails_without_psql() {
-  local cache="${TMP_DIR}/offline-cache-existing-cloud-no-psql"
-  local config="${TMP_DIR}/substrates-existing-cloud-no-psql.yaml"
-  local kubeconfig="${TMP_DIR}/existing-cloud-no-psql-kubeconfig"
-  local output="${TMP_DIR}/offline-existing-cloud-no-psql-out"
-  local out="${TMP_DIR}/install-offline-existing-cloud-no-psql.out"
+test_existing_cloud_offline_install_runs_postgres_probe_without_host_psql() {
+  local cache="${TMP_DIR}/offline-cache-existing-cloud-no-host-psql"
+  local config="${TMP_DIR}/substrates-existing-cloud-no-host-psql.yaml"
+  local kubeconfig="${TMP_DIR}/existing-cloud-no-host-psql-kubeconfig"
+  local output="${TMP_DIR}/offline-existing-cloud-no-host-psql-out"
+  local out="${TMP_DIR}/install-offline-existing-cloud-no-host-psql.out"
   local report="${output}/doctor-report.json"
-  local call_log="${TMP_DIR}/existing-cloud-no-psql-call.log"
-  local no_psql_path="${TMP_DIR}/existing-cloud-no-psql-path"
+  local call_log="${TMP_DIR}/existing-cloud-no-host-psql-call.log"
+  local no_psql_path="${TMP_DIR}/existing-cloud-no-host-psql-path"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
   write_existing_cloud_config "${config}" "${kubeconfig}"
@@ -3282,7 +3306,7 @@ test_existing_cloud_offline_install_fails_without_psql() {
   write_path_without_psql "${no_psql_path}"
   ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
 
-  if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+  POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
     JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
     APP_SESSION_SECRET="app-session-secret-value-0123456789abcdef" \
     BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
@@ -3290,15 +3314,27 @@ test_existing_cloud_offline_install_fails_without_psql() {
     S3_SECRET_KEY="existing-secret-value" \
     CALL_LOG="${call_log}" \
     PATH="${no_psql_path}" \
-    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
-    fail "install-offline existing-cloud succeeded even though live doctor could not verify Postgres without psql"
-  fi
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
+      printf '%s\n' "install-offline output:" >&2
+      sed -n '1,220p' "${out}" >&2
+      fail "install-offline existing-cloud should use in-cluster Postgres probes without host psql"
+    }
 
-  assert_contains "${out}" "existing-cloud live validation requires passed doctor"
-  assert_contains "${out}" "psql not found; app database connectivity was not verified"
-  assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
-  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${out}" "doctor passed"
+  assert_contains "${report}" '"overallStatus": "passed"'
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-app") | .status' "passed"
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-juicefs-meta") | .status' "passed"
+  assert_not_contains "${out}" "psql not found"
+  assert_not_contains "${report}" "psql not found"
   assert_contains "${call_log}" "kubectl --kubeconfig ${kubeconfig} --context production get namespace agentsmith"
+  assert_contains "${call_log}" "postgres-probe-secret.yaml"
+  assert_contains "${call_log}" "postgres-probe-job.yaml"
+  assert_contains "${call_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-app-"
+  assert_contains "${call_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${call_log}" "logs job/asl-pg-probe-postgres-app-"
+  assert_contains "${call_log}" "logs job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${call_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${call_log}" "delete secret -l agentsmith-lite/run-id="
   assert_not_contains "${call_log}" "install-k3s"
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
@@ -3321,7 +3357,7 @@ test_existing_cloud_offline_install_fails_without_psql() {
   assert_not_contains "${call_log}" "juicefs-secret-value"
   assert_not_contains "${call_log}" "existing-access-key"
   assert_not_contains "${call_log}" "existing-secret-value"
-  pass "existing-cloud p1-real install fails closed when psql is unavailable"
+  pass "existing-cloud p1-real install uses in-cluster Postgres probes without host psql"
 }
 
 test_p1_real_offline_cache_rejects_missing_image_archive_sha() {
@@ -3962,15 +3998,15 @@ test_substrate_preflight_rejects_unknown_argument() {
 
 test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing() {
   local env_dir="${TMP_DIR}/doctor-live-env"
-  local stub_bin="${TMP_DIR}/doctor-live-bin"
+  local no_psql_path="${TMP_DIR}/doctor-live-no-host-psql-path"
   local report="${TMP_DIR}/doctor-live-report.json"
   local out="${TMP_DIR}/doctor-live.out"
-  local psql_log="${TMP_DIR}/doctor-live-psql.log"
   local kubectl_log="${TMP_DIR}/doctor-live-kubectl.log"
+  local postgres_probe_image="docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   local status
   write_valid_env_pair "${env_dir}"
-  mkdir -p "${stub_bin}"
-  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+  write_path_without_psql "${no_psql_path}"
+  cat >"${no_psql_path}/kubectl" <<'EOF_KUBECTL'
 #!/usr/bin/env bash
 set -euo pipefail
 : "${KUBECTL_LOG:?KUBECTL_LOG is required}"
@@ -3979,23 +4015,17 @@ case "$*" in
   *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
     printf 'Bound'
     ;;
+  *" logs job/asl-pg-probe-"*)
+    printf 'agentsmith-lite-postgres-probe passed\n'
+    ;;
 esac
 exit 0
 EOF_KUBECTL
-  cat >"${stub_bin}/psql" <<'EOF_PSQL'
-#!/usr/bin/env bash
-: "${PSQL_LOG:?PSQL_LOG is required}"
-printf 'psql %s\n' "$*" >>"${PSQL_LOG}"
-case "$*" in
-  *agentsmith_lite*) [[ "${PGPASSWORD:-}" == "postgres-secret-value" ]] || exit 18 ;;
-  *juicefs_meta*) [[ "${PGPASSWORD:-}" == "juicefs-secret-value" ]] || exit 19 ;;
-esac
-exit 0
-EOF_PSQL
-  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+  chmod +x "${no_psql_path}/kubectl"
 
   set +e
-  KUBECTL_LOG="${kubectl_log}" PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  KUBECTL_LOG="${kubectl_log}" PATH="${no_psql_path}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --postgres-probe-image "${postgres_probe_image}" --report "${report}" >"${out}" 2>&1
   status=$?
   set -e
   [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when PVC is Bound but no RWX smoke image is configured, got ${status}"
@@ -4009,24 +4039,23 @@ EOF_PSQL
   assert_contains "${report}" '"name": "s3"'
   assert_contains "${report}" "S3 probe image is required"
   assert_contains "${report}" "RWX smoke image is required"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-app-"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${kubectl_log}" "logs job/asl-pg-probe-postgres-app-"
+  assert_contains "${kubectl_log}" "logs job/asl-pg-probe-postgres-juicefs-meta-"
   assert_contains "${kubectl_log}" "get storageclass agentsmith-lite-juicefs-rwx"
   assert_contains "${kubectl_log}" "-n agentsmith get secret agentsmith-lite-juicefs"
   assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files"
   assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.status.phase}"
-  assert_not_contains "${kubectl_log}" " apply "
-  assert_not_contains "${kubectl_log}" " delete "
+  assert_contains "${kubectl_log}" " apply "
+  assert_contains "${kubectl_log}" " delete "
   assert_not_contains "${kubectl_log}" " create "
   assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${report}" "minio-secret-value"
   assert_not_contains "${kubectl_log}" "juicefs-secret-value"
   assert_not_contains "${kubectl_log}" "minio-secret-value"
   assert_not_contains "${kubectl_log}" "postgresql://"
-  assert_contains "${psql_log}" "-h postgres.agentsmith.svc.cluster.local -p 5432 -U agentsmith -d agentsmith_lite"
-  assert_contains "${psql_log}" "-h postgres.agentsmith.svc.cluster.local -p 5432 -U juicefs -d juicefs_meta"
-  assert_not_contains "${psql_log}" "postgres-secret-value"
-  assert_not_contains "${psql_log}" "juicefs-secret-value"
-  assert_not_contains "${psql_log}" "postgresql://"
-  assert_not_contains "${psql_log}" "postgres://"
+  assert_not_contains "${kubectl_log}" "psql "
   assert_not_contains "${out}" "postgresql://"
   assert_not_contains "${report}" "postgresql://"
   pass "S7 doctor live mode fails instead of going green when S3/RWX probe images are missing"
@@ -4088,18 +4117,18 @@ EOF_PSQL
 test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound() {
   local env_dir="${TMP_DIR}/doctor-live-rwx-env"
   local cache="${TMP_DIR}/doctor-live-rwx-cache"
-  local stub_bin="${TMP_DIR}/doctor-live-rwx-bin"
+  local no_psql_path="${TMP_DIR}/doctor-live-rwx-no-host-psql-path"
   local applied_dir="${TMP_DIR}/doctor-live-rwx-applied"
   local report="${TMP_DIR}/doctor-live-rwx-report.json"
   local out="${TMP_DIR}/doctor-live-rwx.out"
-  local psql_log="${TMP_DIR}/doctor-live-rwx-psql.log"
   local kubectl_log="${TMP_DIR}/doctor-live-rwx-kubectl.log"
   local rendered="${TMP_DIR}/doctor-live-rwx-rendered.yaml"
   local status
   write_valid_env_pair "${env_dir}"
   write_p1_offline_cache "${cache}"
-  mkdir -p "${stub_bin}" "${applied_dir}"
-  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+  mkdir -p "${applied_dir}"
+  write_path_without_psql "${no_psql_path}"
+  cat >"${no_psql_path}/kubectl" <<'EOF_KUBECTL'
 #!/usr/bin/env bash
 set -euo pipefail
 : "${KUBECTL_LOG:?KUBECTL_LOG is required}"
@@ -4107,7 +4136,7 @@ set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
 previous=""
 for arg in "$@"; do
-  if [[ "${previous}" == "-f" && -f "${arg}" ]] && grep -Eq "agentsmith-lite-rwx-smoke|agentsmith-lite/check: s3-probe" "${arg}"; then
+  if [[ "${previous}" == "-f" && -f "${arg}" ]] && grep -Eq "agentsmith-lite-rwx-smoke|agentsmith-lite/check: s3-probe|agentsmith-lite/check: postgres-probe" "${arg}"; then
     index="$(find "${KUBECTL_APPLIED_DIR}" -type f -name 'apply-*.yaml' | wc -l | tr -d '[:space:]')"
     cp "${arg}" "${KUBECTL_APPLIED_DIR}/apply-${index}.yaml"
   fi
@@ -4116,6 +4145,9 @@ done
 case "$*" in
   *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
     printf 'Bound'
+    ;;
+  *" logs job/asl-pg-probe-"*)
+    printf 'agentsmith-lite-postgres-probe passed\n'
     ;;
   *" logs job/agentsmith-lite-s3-probe-"*)
     printf 'agentsmith-lite-s3-probe: ok\n'
@@ -4126,23 +4158,17 @@ case "$*" in
 esac
 exit 0
 EOF_KUBECTL
-  cat >"${stub_bin}/psql" <<'EOF_PSQL'
-#!/usr/bin/env bash
-: "${PSQL_LOG:?PSQL_LOG is required}"
-printf 'psql %s\n' "$*" >>"${PSQL_LOG}"
-exit 0
-EOF_PSQL
-  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+  chmod +x "${no_psql_path}/kubectl"
 
   set +e
-  KUBECTL_LOG="${kubectl_log}" KUBECTL_APPLIED_DIR="${applied_dir}" PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" \
+  KUBECTL_LOG="${kubectl_log}" KUBECTL_APPLIED_DIR="${applied_dir}" PATH="${no_psql_path}" \
     "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
   status=$?
   set -e
-  [[ "${status}" -eq 0 ]] || fail "doctor live mode should exit 0 when S3 and RWX probes pass, got ${status}"
+  [[ "${status}" -eq 0 ]] || fail "doctor live mode should exit 0 when Postgres, S3, and RWX probes pass without host psql, got ${status}"
 
   mapfile -t smoke_manifests < <(find "${applied_dir}" -type f -name 'apply-*.yaml' -print | sort)
-  [[ "${#smoke_manifests[@]}" -eq 4 ]] || fail "expected S3 Secret/Job plus writer/reader RWX manifests, got ${#smoke_manifests[@]}"
+  [[ "${#smoke_manifests[@]}" -eq 8 ]] || fail "expected Postgres app/meta Secret/Job, S3 Secret/Job, plus writer/reader RWX manifests, got ${#smoke_manifests[@]}"
   : >"${rendered}"
   local manifest
   for manifest in "${smoke_manifests[@]}"; do
@@ -4150,6 +4176,10 @@ EOF_PSQL
   done
 
   assert_contains "${report}" '"overallStatus": "passed"'
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-app") | .status' "passed"
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-juicefs-meta") | .status' "passed"
+  assert_contains "${report}" "app database accepted a simple query"
+  assert_contains "${report}" "JuiceFS metadata database accepted a simple query"
   assert_contains "${report}" '"name": "s3"'
   assert_contains "${report}" "live S3 read/write/delete probe passed"
   assert_contains "${report}" '"name": "rwx"'
@@ -4157,6 +4187,10 @@ EOF_PSQL
   assert_contains "${report}" "live two-job ReadWriteMany smoke passed"
   assert_contains "${kubectl_log}" "get csidriver csi.juicefs.com"
   assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-app-"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${kubectl_log}" "logs job/asl-pg-probe-postgres-app-"
+  assert_contains "${kubectl_log}" "logs job/asl-pg-probe-postgres-juicefs-meta-"
   assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-s3-probe-"
   assert_contains "${kubectl_log}" "logs job/agentsmith-lite-s3-probe-"
   assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-reader-"
@@ -4167,12 +4201,25 @@ EOF_PSQL
   assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
   assert_contains "${kubectl_log}" "--ignore-not-found=true"
   assert_line_order "${kubectl_log}" \
+    "wait --for=condition=complete job/asl-pg-probe-postgres-app-" \
+    "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-" \
+    "wait --for=condition=complete job/agentsmith-lite-s3-probe-" \
     "get csidriver csi.juicefs.com" \
     "get storageclass agentsmith-lite-juicefs-rwx" \
     "-n agentsmith get secret agentsmith-lite-juicefs" \
     "-n agentsmith get pvc agentsmith-lite-files" \
     "-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.status.phase}" \
     "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-reader-"
+  assert_contains "${rendered}" "image: docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  assert_contains "${rendered}" "agentsmith-lite/check: postgres-probe"
+  assert_contains "${rendered}" "name: PGHOST"
+  assert_contains "${rendered}" "name: PGPORT"
+  assert_contains "${rendered}" "name: PGUSER"
+  assert_contains "${rendered}" "name: PGPASSWORD"
+  assert_contains "${rendered}" "name: PGDATABASE"
+  assert_contains "${rendered}" "psql -v ON_ERROR_STOP=1 -Atc 'select 1'"
+  assert_not_contains "${rendered}" "CREATE ROLE"
+  assert_not_contains "${rendered}" "CREATE DATABASE"
   assert_contains "${rendered}" "image: quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   assert_contains "${rendered}" "agentsmith-lite/check: s3-probe"
   assert_contains "${rendered}" "secretKeyRef:"
@@ -4193,6 +4240,7 @@ EOF_PSQL
   assert_not_contains "${rendered}" "http://"
   assert_not_contains "${rendered}" "https://"
   assert_not_contains "${rendered}" "postgresql://"
+  assert_not_contains "${kubectl_log}" "psql "
   assert_not_contains "${kubectl_log}" "http://minio.agentsmith.svc.cluster.local:9000"
   assert_not_contains "${kubectl_log}" "minio-access-key"
   assert_not_contains "${kubectl_log}" "minio-secret-value"
@@ -4204,7 +4252,7 @@ EOF_PSQL
   assert_not_contains "${report}" "juicefs-secret-value"
   assert_not_contains "${report}" "http://minio.agentsmith.svc.cluster.local:9000"
   assert_not_contains "${report}" "minio-secret-value"
-  pass "S7 doctor live mode runs S3 CRUD and two-Job RWX smoke against a Bound JuiceFS PVC"
+  pass "S7 doctor live mode runs Postgres, S3 CRUD, and two-Job RWX smoke without host psql"
 }
 
 test_substrate_only_doctor_live_fails_when_juicefs_csidriver_is_missing() {
@@ -4499,6 +4547,270 @@ EOF_PSQL
   done
 
   pass "S7 doctor live mode rejects missing, mutable, and app-owned S3 probe images before creating Jobs"
+}
+
+test_substrate_only_doctor_live_rejects_invalid_postgres_probe_images_before_creating_job() {
+  local case_def case_name mode expected image env_dir cache no_psql_path report out kubectl_log psql_log status
+  local app_image="agentsmith-lite/app@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  local cases=(
+    "missing|postgres missing|Postgres probe image is required|"
+    "mutable|override mutable|Postgres probe image must be digest-pinned|docker.io/library/postgres:16"
+    "app-owned|override app-owned|Postgres probe image must not reference app-owned images|${app_image}"
+  )
+
+  for case_def in "${cases[@]}"; do
+    IFS='|' read -r mode case_name expected image <<<"${case_def}"
+    env_dir="${TMP_DIR}/doctor-live-postgres-invalid-${mode}-env"
+    cache="${TMP_DIR}/doctor-live-postgres-invalid-${mode}-cache"
+    no_psql_path="${TMP_DIR}/doctor-live-postgres-invalid-${mode}-path"
+    report="${TMP_DIR}/doctor-live-postgres-invalid-${mode}-report.json"
+    out="${TMP_DIR}/doctor-live-postgres-invalid-${mode}.out"
+    kubectl_log="${TMP_DIR}/doctor-live-postgres-invalid-${mode}-kubectl.log"
+    psql_log="${TMP_DIR}/doctor-live-postgres-invalid-${mode}-psql.log"
+    write_valid_env_pair "${env_dir}"
+    write_p1_offline_cache "${cache}"
+    if [[ "${mode}" == "missing" ]]; then
+      remove_images_lock_entry_for_name "${cache}" "postgres"
+      refresh_cache_artifacts "${cache}" "images/images.lock"
+    fi
+    write_path_without_psql "${no_psql_path}"
+    cat >"${no_psql_path}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "-f" && -f "${arg}" ]] && grep -Fq "agentsmith-lite/check: postgres-probe" "${arg}"; then
+    printf 'unexpected postgres probe apply\n' >&2
+    exit 88
+  fi
+  previous="${arg}"
+done
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-s3-probe-"*)
+    printf 'agentsmith-lite-s3-probe: ok\n'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+    cat >"${no_psql_path}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${PSQL_LOG:?PSQL_LOG is required}"
+printf 'psql %s\n' "$*" >>"${PSQL_LOG}"
+exit 0
+EOF_PSQL
+    chmod +x "${no_psql_path}/kubectl" "${no_psql_path}/psql"
+
+    set +e
+    if [[ "${mode}" == "missing" ]]; then
+      KUBECTL_LOG="${kubectl_log}" PSQL_LOG="${psql_log}" PATH="${no_psql_path}" \
+        "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+    else
+      KUBECTL_LOG="${kubectl_log}" PSQL_LOG="${psql_log}" PATH="${no_psql_path}" \
+        "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --postgres-probe-image "${image}" --report "${report}" >"${out}" 2>&1
+    fi
+    status=$?
+    set -e
+
+    [[ "${status}" -eq 1 ]] || fail "doctor live mode should reject ${case_name} Postgres probe image, got ${status}"
+    assert_contains "${report}" '"overallStatus": "failed"'
+    assert_contains "${report}" '"name": "postgres-app"'
+    assert_contains "${report}" '"name": "postgres-juicefs-meta"'
+    assert_contains "${report}" "${expected}"
+    assert_not_contains "${kubectl_log}" "postgres-probe"
+    [[ ! -s "${psql_log}" ]] || fail "doctor live mode used host psql as fallback for ${case_name} Postgres probe image"
+    assert_not_contains "${out}" "postgres-secret-value"
+    assert_not_contains "${out}" "juicefs-secret-value"
+    assert_not_contains "${out}" "postgresql://"
+    assert_not_contains "${report}" "postgres-secret-value"
+    assert_not_contains "${report}" "juicefs-secret-value"
+    assert_not_contains "${report}" "postgresql://"
+    if [[ -n "${image}" ]]; then
+      assert_not_contains "${out}" "${image}"
+      assert_not_contains "${report}" "${image}"
+    fi
+  done
+
+  pass "S7 doctor live mode rejects missing, mutable, and app-owned Postgres probe images before creating Jobs"
+}
+
+test_substrate_only_doctor_live_fails_and_cleans_up_when_postgres_probe_wait_fails() {
+  local env_dir="${TMP_DIR}/doctor-live-postgres-wait-fail-env"
+  local cache="${TMP_DIR}/doctor-live-postgres-wait-fail-cache"
+  local no_psql_path="${TMP_DIR}/doctor-live-postgres-wait-fail-path"
+  local report="${TMP_DIR}/doctor-live-postgres-wait-fail-report.json"
+  local out="${TMP_DIR}/doctor-live-postgres-wait-fail.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-postgres-wait-fail-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  write_p1_offline_cache "${cache}"
+  write_path_without_psql "${no_psql_path}"
+  cat >"${no_psql_path}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *"wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"*)
+    exit 43
+    ;;
+  *" logs job/asl-pg-probe-postgres-app-"*)
+    printf 'agentsmith-lite-postgres-probe passed\n'
+    ;;
+  *" logs job/asl-pg-probe-postgres-juicefs-meta-"*)
+    printf 'agentsmith-lite-postgres-probe failed: select 1\n'
+    ;;
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-s3-probe-"*)
+    printf 'agentsmith-lite-s3-probe: ok\n'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  chmod +x "${no_psql_path}/kubectl"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${no_psql_path}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when Postgres probe wait fails, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-app") | .status' "passed"
+  assert_json_value "${report}" '.checks[] | select(.name == "postgres-juicefs-meta") | .status' "failed"
+  assert_contains "${report}" "JuiceFS metadata database did not accept a simple query"
+  assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-app-"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${kubectl_log}" "logs job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_contains "${out}" "postgres probe failed at wait for Postgres probe Job completion"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "postgresql://"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "postgresql://"
+  assert_not_contains "${kubectl_log}" "postgres-secret-value"
+  assert_not_contains "${kubectl_log}" "juicefs-secret-value"
+  assert_not_contains "${kubectl_log}" "postgresql://"
+  pass "S7 doctor live mode fails Postgres probe on Job wait failure and still cleans up"
+}
+
+test_substrate_only_doctor_live_redacts_postgres_secret_apply_output_on_failure() {
+  local env_dir="${TMP_DIR}/doctor-live-postgres-secret-apply-leak-env"
+  local cache="${TMP_DIR}/doctor-live-postgres-secret-apply-leak-cache"
+  local no_psql_path="${TMP_DIR}/doctor-live-postgres-secret-apply-leak-path"
+  local report="${TMP_DIR}/doctor-live-postgres-secret-apply-leak-report.json"
+  local out="${TMP_DIR}/doctor-live-postgres-secret-apply-leak.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-postgres-secret-apply-leak-kubectl.log"
+  local app_url meta_url app_user_b64 app_password_b64 meta_user_b64 meta_password_b64 app_host_b64 status
+  write_valid_env_pair "${env_dir}"
+  app_url="postgresql://pgusersecret:postgres-secret-value@postgres.agentsmith.svc.cluster.local:5432/agentsmith_lite"
+  meta_url="postgresql://metasecretuser:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta"
+  replace_env_value "${env_dir}/substrate.secrets.env" POSTGRES_APP_URL "${app_url}"
+  replace_env_value "${env_dir}/substrate.secrets.env" JUICEFS_META_URL "${meta_url}"
+  write_p1_offline_cache "${cache}"
+  app_user_b64="$(printf 'pgusersecret' | base64 | tr -d '\n')"
+  app_password_b64="$(printf 'postgres-secret-value' | base64 | tr -d '\n')"
+  meta_user_b64="$(printf 'metasecretuser' | base64 | tr -d '\n')"
+  meta_password_b64="$(printf 'juicefs-secret-value' | base64 | tr -d '\n')"
+  app_host_b64="$(printf 'postgres.agentsmith.svc.cluster.local' | base64 | tr -d '\n')"
+  write_path_without_psql "${no_psql_path}"
+  cat >"${no_psql_path}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "-f" && -f "${arg}" ]] \
+    && grep -Fq "kind: Secret" "${arg}" \
+    && grep -Fq "agentsmith-lite/check: postgres-probe" "${arg}"; then
+    cat "${arg}" >&2
+    exit 44
+  fi
+  previous="${arg}"
+done
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-s3-probe-"*)
+    printf 'agentsmith-lite-s3-probe: ok\n'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  chmod +x "${no_psql_path}/kubectl"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${no_psql_path}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when Postgres Secret apply fails, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "postgres-app"'
+  assert_contains "${report}" '"status": "failed"'
+  assert_contains "${report}" "app database did not accept a simple query"
+  assert_contains "${out}" "postgres probe failed at apply Secret"
+  assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_not_contains "${out}" "${app_url}"
+  assert_not_contains "${out}" "${meta_url}"
+  assert_not_contains "${out}" "pgusersecret"
+  assert_not_contains "${out}" "metasecretuser"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "${app_user_b64}"
+  assert_not_contains "${out}" "${app_password_b64}"
+  assert_not_contains "${out}" "${meta_user_b64}"
+  assert_not_contains "${out}" "${meta_password_b64}"
+  assert_not_contains "${out}" "${app_host_b64}"
+  assert_not_contains "${report}" "${app_url}"
+  assert_not_contains "${report}" "${meta_url}"
+  assert_not_contains "${report}" "pgusersecret"
+  assert_not_contains "${report}" "metasecretuser"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "${app_user_b64}"
+  assert_not_contains "${report}" "${app_password_b64}"
+  assert_not_contains "${report}" "${meta_user_b64}"
+  assert_not_contains "${report}" "${meta_password_b64}"
+  assert_not_contains "${report}" "${app_host_b64}"
+  assert_not_contains "${kubectl_log}" "${app_url}"
+  assert_not_contains "${kubectl_log}" "${meta_url}"
+  assert_not_contains "${kubectl_log}" "pgusersecret"
+  assert_not_contains "${kubectl_log}" "metasecretuser"
+  assert_not_contains "${kubectl_log}" "postgres-secret-value"
+  assert_not_contains "${kubectl_log}" "juicefs-secret-value"
+  assert_not_contains "${kubectl_log}" "${app_user_b64}"
+  assert_not_contains "${kubectl_log}" "${app_password_b64}"
+  assert_not_contains "${kubectl_log}" "${meta_user_b64}"
+  assert_not_contains "${kubectl_log}" "${meta_password_b64}"
+  assert_not_contains "${kubectl_log}" "${app_host_b64}"
+  pass "S7 doctor live mode redacts Postgres Secret apply output on failure and still cleans up"
 }
 
 test_substrate_only_doctor_live_fails_and_cleans_up_when_rwx_reader_wait_fails() {
@@ -4804,31 +5116,47 @@ EOF_PSQL
 
 test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails() {
   local env_dir="${TMP_DIR}/doctor-live-meta-fail-env"
-  local stub_bin="${TMP_DIR}/doctor-live-meta-fail-bin"
+  local cache="${TMP_DIR}/doctor-live-meta-fail-cache"
+  local no_psql_path="${TMP_DIR}/doctor-live-meta-fail-path"
   local report="${TMP_DIR}/doctor-live-meta-fail-report.json"
   local out="${TMP_DIR}/doctor-live-meta-fail.out"
-  local psql_log="${TMP_DIR}/doctor-live-meta-fail-psql.log"
+  local kubectl_log="${TMP_DIR}/doctor-live-meta-fail-kubectl.log"
   local status
   write_valid_env_pair "${env_dir}"
-  mkdir -p "${stub_bin}"
-  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
-#!/usr/bin/env bash
-exit 0
-EOF_KUBECTL
-  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+  write_p1_offline_cache "${cache}"
+  write_path_without_psql "${no_psql_path}"
+  cat >"${no_psql_path}/kubectl" <<'EOF_KUBECTL'
 #!/usr/bin/env bash
 set -euo pipefail
-: "${PSQL_LOG:?PSQL_LOG is required}"
-printf 'psql %s\n' "$*" >>"${PSQL_LOG}"
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
 case "$*" in
-  *"juicefs_meta"*) exit 17 ;;
+  *"wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"*)
+    exit 17
+    ;;
+  *" logs job/asl-pg-probe-postgres-app-"*)
+    printf 'agentsmith-lite-postgres-probe passed\n'
+    ;;
+  *" logs job/asl-pg-probe-postgres-juicefs-meta-"*)
+    printf 'agentsmith-lite-postgres-probe failed: select 1\n'
+    ;;
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-s3-probe-"*)
+    printf 'agentsmith-lite-s3-probe: ok\n'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
 esac
 exit 0
-EOF_PSQL
-  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+EOF_KUBECTL
+  chmod +x "${no_psql_path}/kubectl"
 
   set +e
-  PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  KUBECTL_LOG="${kubectl_log}" PATH="${no_psql_path}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
   status=$?
   set -e
   [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when JuiceFS metadata query fails, got ${status}"
@@ -4837,14 +5165,20 @@ EOF_PSQL
   assert_contains "${report}" "app database accepted a simple query"
   assert_contains "${report}" '"postgres-juicefs-meta"'
   assert_contains "${report}" "JuiceFS metadata database did not accept a simple query"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-app-"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${kubectl_log}" "logs job/asl-pg-probe-postgres-juicefs-meta-"
+  assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "delete secret -l agentsmith-lite/run-id="
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
   assert_not_contains "${report}" "postgres-secret-value"
   assert_not_contains "${report}" "juicefs-secret-value"
-  assert_not_contains "${psql_log}" "postgres-secret-value"
-  assert_not_contains "${psql_log}" "juicefs-secret-value"
-  assert_not_contains "${psql_log}" "postgresql://"
-  assert_not_contains "${psql_log}" "postgres://"
+  assert_not_contains "${kubectl_log}" "postgres-secret-value"
+  assert_not_contains "${kubectl_log}" "juicefs-secret-value"
+  assert_not_contains "${kubectl_log}" "postgresql://"
+  assert_not_contains "${kubectl_log}" "postgres://"
+  assert_not_contains "${kubectl_log}" "psql "
   pass "S7 doctor live mode fails when JuiceFS metadata database query fails"
 }
 
@@ -4961,10 +5295,10 @@ test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
 test_online_install_dry_run_validates_p1_real_cache_without_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
-test_p1_real_offline_install_non_dry_run_fails_without_psql
+test_p1_real_offline_install_non_dry_run_runs_postgres_probe_without_host_psql
 test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain
 test_online_install_existing_cloud_non_dry_run_delegates_validation_only
-test_online_install_existing_cloud_non_dry_run_fails_without_psql
+test_online_install_existing_cloud_non_dry_run_runs_postgres_probe_without_host_psql
 test_online_install_p0_contract_non_dry_run_fails
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
 test_postgres_init_job_renders_digest_pinned_image_and_secret_refs
@@ -4978,7 +5312,7 @@ test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation
 test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation
 test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres
 test_existing_cloud_offline_install_fails_when_juicefs_csidriver_is_missing
-test_existing_cloud_offline_install_fails_without_psql
+test_existing_cloud_offline_install_runs_postgres_probe_without_host_psql
 test_p1_real_offline_cache_rejects_missing_image_archive_sha
 test_p1_real_offline_cache_rejects_public_download_references_in_images_lock
 test_p1_real_offline_cache_rejects_missing_bootstrap_artifact_entries
@@ -5013,6 +5347,9 @@ test_substrate_only_doctor_live_fails_when_juicefs_csidriver_is_missing
 test_substrate_only_doctor_live_fails_and_cleans_up_when_s3_probe_wait_fails
 test_substrate_only_doctor_live_redacts_s3_secret_apply_output_on_failure
 test_substrate_only_doctor_live_rejects_invalid_s3_probe_images_before_creating_job
+test_substrate_only_doctor_live_rejects_invalid_postgres_probe_images_before_creating_job
+test_substrate_only_doctor_live_fails_and_cleans_up_when_postgres_probe_wait_fails
+test_substrate_only_doctor_live_redacts_postgres_secret_apply_output_on_failure
 test_substrate_only_doctor_live_fails_and_cleans_up_when_rwx_reader_wait_fails
 test_substrate_only_doctor_live_rejects_mutable_rwx_smoke_image
 test_substrate_only_doctor_live_rejects_app_owned_rwx_smoke_image

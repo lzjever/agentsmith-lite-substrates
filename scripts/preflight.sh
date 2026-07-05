@@ -13,7 +13,7 @@ Substrate-only preflight delegates to scripts/doctor.sh --dry-run for static
 env/secrets, JuiceFS/RWX contract, and optional offline-cache validation.
 Use --cache as an alias for --offline-cache.
 
-Preflight does not run live kubectl, psql, S3, RWX, Helm, k3s install, image
+Preflight does not run live kubectl, Postgres/S3/RWX probes, Helm, k3s install, image
 import, download, app, Botified, or API smoke checks.
 EOF_USAGE
 }

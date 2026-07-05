@@ -217,9 +217,10 @@ runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
 image, applies the StorageClass/PVC contract only after the format Job reports a
 matching volume, waits for the configured JuiceFS PVC to reach `Bound`, and
 finally runs `scripts/doctor.sh --offline-cache ...`. Live doctor reads the
-digest-pinned `name: minio-client` image from that cache for an S3 object
+digest-pinned `name: postgres` image from that cache for read-only `select 1`
+probes against both Postgres URLs, reads `name: minio-client` for an S3 object
 read/write/delete probe, then reads `name: rwx-smoke` and runs writer/reader
 Jobs against the same PVC. Live self-hosted install now requires doctor
 `overallStatus: passed`; `partial` results, including checks that cannot be
-verified such as a missing `kubectl` or `psql`, fail closed just like doctor
-`failed`.
+verified because kubectl or the namespace is unavailable, fail closed just like
+doctor `failed`.

@@ -8,6 +8,8 @@ source "${ROOT_DIR}/scripts/lib/env.sh"
 source "${ROOT_DIR}/scripts/lib/offline.sh"
 # shellcheck source=lib/postgres.sh
 source "${ROOT_DIR}/scripts/lib/postgres.sh"
+# shellcheck source=lib/postgres_probe.sh
+source "${ROOT_DIR}/scripts/lib/postgres_probe.sh"
 # shellcheck source=lib/s3_probe.sh
 source "${ROOT_DIR}/scripts/lib/s3_probe.sh"
 # shellcheck source=lib/rwx_smoke.sh
@@ -15,15 +17,15 @@ source "${ROOT_DIR}/scripts/lib/rwx_smoke.sh"
 
 usage() {
   cat <<'EOF_USAGE'
-Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--s3-probe-image image@sha256:<digest>] [--rwx-smoke-image image@sha256:<digest>] [--dry-run] [--report out/doctor-report.json]
+Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--postgres-probe-image image@sha256:<digest>] [--s3-probe-image image@sha256:<digest>] [--rwx-smoke-image image@sha256:<digest>] [--dry-run] [--report out/doctor-report.json]
 
 Substrate-only checks:
   K8s reachability/namespace, PostgreSQL URL/connectivity, S3 credential presence/probe,
   JuiceFS CSI/StorageClass/PVC/RWX contract, and offline cache completeness.
 
 --dry-run proves static contracts only. Live mode marks unverifiable kubectl,
-cluster, psql, S3, JuiceFS, or RWX checks partial or failed; skipped live checks
-are never treated as a full pass.
+cluster, Postgres probe, S3, JuiceFS, or RWX checks partial or failed; skipped
+live checks are never treated as a full pass.
 
 This script does not check app delivery smoke.
 EOF_USAGE
@@ -32,6 +34,7 @@ EOF_USAGE
 env_file=""
 secrets_file=""
 offline_cache=""
+postgres_probe_image=""
 s3_probe_image=""
 rwx_smoke_image=""
 report_file=""
@@ -54,6 +57,11 @@ while [[ $# -gt 0 ]]; do
     --offline-cache)
       require_cli_value "$1" "${2-}"
       offline_cache="${2:-}"
+      shift 2
+      ;;
+    --postgres-probe-image)
+      require_cli_value "$1" "${2-}"
+      postgres_probe_image="${2:-}"
       shift 2
       ;;
     --s3-probe-image)
@@ -112,6 +120,8 @@ fi
 checks_json=()
 failed=false
 partial=false
+resolved_postgres_probe_image=""
+doctor_postgres_probe_image_error=""
 resolved_s3_probe_image=""
 doctor_s3_probe_image_error=""
 resolved_rwx_smoke_image=""
@@ -206,7 +216,6 @@ doctor_check_postgres_url() {
   local url="$3"
   local passed_message="$4"
   local failed_message="$5"
-  local partial_message="$6"
   local prefix="doctor_${name//-/_}"
 
   if [[ ! "${url}" =~ ^postgres(ql)?:// ]]; then
@@ -221,7 +230,16 @@ doctor_check_postgres_url() {
 
   if [[ "${dry_run}" == "true" ]]; then
     add_check "${name}" "passed" "dry-run static: ${key} shape is valid; skipped live query"
-  elif command -v psql >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "${kubeconfig_unreadable}" == "true" ]]; then
+    add_check "${name}" "partial" "configured KUBECONFIG_PATH is not readable; live ${key} query was not verified"
+  elif [[ "${kubectl_available}" != "true" ]]; then
+    add_check "${name}" "partial" "kubectl not found; live ${key} query was not verified"
+  elif [[ "${cluster_reachable}" != "true" ]]; then
+    add_check "${name}" "partial" "cluster namespace is not reachable; live ${key} query was not verified"
+  elif doctor_resolve_postgres_probe_image; then
     local password_var host_var port_var user_var database_var
     local password host port user database
     password_var="${prefix}_PASSWORD"
@@ -234,14 +252,60 @@ doctor_check_postgres_url() {
     port="${!port_var}"
     user="${!user_var}"
     database="${!database_var}"
-    if PGPASSWORD="${password}" psql -h "${host}" -p "${port}" -U "${user}" -d "${database}" -Atc 'select 1' >/dev/null 2>&1; then
+    local postgres_probe_output
+    if postgres_probe_output="$(postgres_probe_run "${namespace}" "${name}" "${resolved_postgres_probe_image}" "${host}" "${port}" "${user}" "${password}" "${database}" "${kubectl_cmd[0]}" "${kubectl_args[@]}" 2>&1)"; then
+      printf '%s\n' "${postgres_probe_output}"
       add_check "${name}" "passed" "${passed_message}"
     else
+      printf '%s\n' "${postgres_probe_output}" >&2
       add_check "${name}" "failed" "${failed_message}"
     fi
   else
-    add_check "${name}" "partial" "${partial_message}"
+    add_check "${name}" "failed" "${doctor_postgres_probe_image_error}"
   fi
+}
+
+doctor_validate_postgres_probe_image_ref() {
+  local image_ref="$1"
+  if [[ ! "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    doctor_postgres_probe_image_error="Postgres probe image must be digest-pinned with @sha256:<64 lowercase hex>"
+    return 1
+  fi
+  if is_app_owned_image_ref "${image_ref}"; then
+    doctor_postgres_probe_image_error="Postgres probe image must not reference app-owned images"
+    return 1
+  fi
+  return 0
+}
+
+doctor_resolve_postgres_probe_image() {
+  local lock_file image_ref
+  resolved_postgres_probe_image=""
+  doctor_postgres_probe_image_error=""
+
+  if [[ -n "${postgres_probe_image}" ]]; then
+    doctor_validate_postgres_probe_image_ref "${postgres_probe_image}" || return 1
+    resolved_postgres_probe_image="${postgres_probe_image}"
+    return 0
+  fi
+
+  if [[ -n "${offline_cache}" ]]; then
+    lock_file="${offline_cache}/images/images.lock"
+    if [[ ! -f "${lock_file}" ]]; then
+      doctor_postgres_probe_image_error="Postgres probe image is required for live Postgres check; offline cache images.lock was not readable"
+      return 1
+    fi
+    if ! image_ref="$(images_lock_image_ref "${lock_file}" "postgres" 2>/dev/null)"; then
+      doctor_postgres_probe_image_error="Postgres probe image is required for live Postgres check; offline cache images.lock is missing name: postgres"
+      return 1
+    fi
+    doctor_validate_postgres_probe_image_ref "${image_ref}" || return 1
+    resolved_postgres_probe_image="${image_ref}"
+    return 0
+  fi
+
+  doctor_postgres_probe_image_error="Postgres probe image is required for live Postgres check; supply --offline-cache with images.lock name: postgres or --postgres-probe-image"
+  return 1
 }
 
 doctor_validate_s3_probe_image_ref() {
@@ -397,16 +461,14 @@ doctor_check_postgres_url \
   "POSTGRES_APP_URL" \
   "${postgres_url}" \
   "app database accepted a simple query" \
-  "app database did not accept a simple query" \
-  "psql not found; app database connectivity was not verified"
+  "app database did not accept a simple query"
 
 doctor_check_postgres_url \
   "postgres-juicefs-meta" \
   "JUICEFS_META_URL" \
   "${juicefs_meta}" \
   "JuiceFS metadata database accepted a simple query" \
-  "JuiceFS metadata database did not accept a simple query" \
-  "psql not found; JuiceFS metadata database connectivity was not verified"
+  "JuiceFS metadata database did not accept a simple query"
 
 if [[ -n "${s3_endpoint}" && -n "${s3_region}" && -n "${s3_bucket}" && -n "${s3_force_path_style}" && -n "${s3_access}" && -n "${s3_secret}" ]]; then
   if [[ "${dry_run}" == "true" ]]; then

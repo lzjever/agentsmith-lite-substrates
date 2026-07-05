@@ -38,9 +38,11 @@ Existing-cloud mode does not create or mutate a self-hosted PostgreSQL Secret or
 StatefulSet, and it does not render self-hosted MinIO resources or install k3s.
 Live existing-cloud validation uses the same `--cache`/`--offline-cache`
 argument and requires a `cacheMode: p1-real` cache. It runs live doctor checks
-only: `doctor.sh` validates both `POSTGRES_APP_URL` and `JUICEFS_META_URL` with
-`psql` when it is available, and can create a temporary S3 probe Secret/Job
-against the configured existing bucket when `minio-client` is available from the
-cache or `--s3-probe-image`. Live install succeeds only when doctor reports
-`overallStatus: passed`; partial results, including a missing `psql` client that
-leaves external Postgres or JuiceFS metadata databases unverified, fail closed.
+only: `doctor.sh` creates temporary probe Secret/Job resources for read-only
+Postgres `select 1` checks against both `POSTGRES_APP_URL` and
+`JUICEFS_META_URL`, plus the S3 object probe against the configured existing
+bucket. Probe images come from digest-pinned `name: postgres`,
+`name: minio-client`, and `name: rwx-smoke` entries in `images.lock`, or explicit
+`--postgres-probe-image`, `--s3-probe-image`, and `--rwx-smoke-image` refs. Live
+install succeeds only when doctor reports `overallStatus: passed`; partial
+results, including an unreachable namespace or missing kubectl, fail closed.
