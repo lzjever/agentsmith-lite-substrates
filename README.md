@@ -32,6 +32,8 @@ This first public-ready skeleton is validate-first:
   images while leaving StorageClass/Secret/PVC ownership to the substrate
   contract
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
+- provides `scripts/preflight.sh` as a substrate-repo thin wrapper over
+  `scripts/doctor.sh --dry-run` for local/static configuration diagnostics
 - runs a substrate-only doctor for static dry-run checks and live K8s,
   PostgreSQL, S3 object read/write/delete, JuiceFS PVC, and two-Job RWX smoke
   checks
@@ -51,6 +53,11 @@ scripts/install-online.sh \
 scripts/validate-env.sh \
   --env out/substrate.env \
   --secrets out/substrate.secrets.env
+
+scripts/preflight.sh \
+  --env out/substrate.env \
+  --secrets out/substrate.secrets.env \
+  --cache dist/offline-cache
 
 scripts/doctor.sh \
   --env out/substrate.env \
@@ -106,6 +113,18 @@ env contract and cache only. Non-dry-run requires `cacheMode: p1-real`; a
 mode, non-dry-run writes the same env files and runs doctor/live validation
 without rendering or installing self-hosted PostgreSQL, MinIO, or k3s.
 
+## Preflight Boundary
+
+`scripts/preflight.sh` is a command in this substrate repo, not a third repo or
+external evidence surface. It accepts `--env`, `--secrets`,
+`--cache`/`--offline-cache`, and `--report`, then delegates to
+`scripts/doctor.sh --dry-run`.
+
+Preflight is static only: it does not run app checks, Botified checks, API smoke,
+live kubectl, psql, S3 probes, RWX smoke, Helm, k3s install, downloads, or image
+import. It does not replace live doctor, clean-VM install evidence,
+disconnected-VM validation, or existing-cloud validation.
+
 ## Secret Boundary
 
 `substrate.env` is non-secret and can be attached to support tickets.
@@ -128,6 +147,7 @@ scripts/install-online.sh --cache dist/offline-cache --config config/substrates.
 scripts/install-offline.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.secrets.env
 scripts/validate-juicefs-contract.sh --env out/substrate.env --secrets out/substrate.secrets.env
+scripts/preflight.sh --env out/substrate.env --secrets out/substrate.secrets.env --cache dist/offline-cache
 scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env --dry-run
 scripts/reset-dev.sh --config config/substrates.self-hosted.example.yaml --destroy-data
 ```

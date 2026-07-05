@@ -2888,6 +2888,85 @@ test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
   pass "S7 substrate-only doctor dry-run proves static contracts, offline-cache, and redaction"
 }
 
+test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias() {
+  local env_dir="${TMP_DIR}/preflight-env"
+  local cache="${TMP_DIR}/preflight-cache"
+  local report="${TMP_DIR}/preflight-report.json"
+  local out="${TMP_DIR}/preflight.out"
+  write_valid_env_pair "${env_dir}"
+  write_offline_cache "${cache}"
+
+  "${ROOT_DIR}/scripts/preflight.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --cache "${cache}" --report "${report}" >"${out}" 2>&1
+  assert_contains "${report}" '"dryRun": true'
+  assert_contains "${report}" '"scope": "substrate-only"'
+  assert_contains "${report}" '"overallStatus": "passed"'
+  assert_contains "${report}" '"offline-cache"'
+  assert_contains "${report}" "P0 static cache skeleton is valid"
+  assert_contains "${out}" "dry-run static"
+  assert_contains "${out}" "doctor report written: ${report}"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-access-key"
+  assert_not_contains "${report}" "minio-secret-value"
+  assert_not_contains "${report}" "app-images"
+  assert_not_contains "${report}" "botified"
+  pass "S7 preflight delegates to doctor dry-run, forwards --cache, and redacts secrets"
+}
+
+test_substrate_preflight_unreadable_kubeconfig_stays_static() {
+  local env_dir="${TMP_DIR}/preflight-unreadable-kubeconfig-env"
+  local stub_bin="${TMP_DIR}/preflight-unreadable-kubeconfig-bin"
+  local report="${TMP_DIR}/preflight-unreadable-kubeconfig-report.json"
+  local out="${TMP_DIR}/preflight-unreadable-kubeconfig.out"
+  local kubectl_log="${TMP_DIR}/preflight-unreadable-kubeconfig-kubectl.log"
+  local missing_kubeconfig="${env_dir}/missing-kubeconfig"
+  write_valid_env_pair "${env_dir}"
+  replace_env_value "${env_dir}/substrate.env" KUBECONFIG_PATH "${missing_kubeconfig}"
+  mkdir -p "${stub_bin}"
+  : >"${kubectl_log}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+exit 42
+EOF_KUBECTL
+  chmod +x "${stub_bin}/kubectl"
+
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/preflight.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  assert_contains "${report}" '"dryRun": true'
+  assert_contains "${report}" '"scope": "substrate-only"'
+  assert_contains "${report}" '"overallStatus": "passed"'
+  assert_contains "${out}" "dry-run static: namespace is configured as agentsmith"
+  assert_not_contains "${out}" "KUBECONFIG_PATH is not readable"
+  assert_not_contains "${report}" "KUBECONFIG_PATH is not readable"
+  [[ ! -s "${kubectl_log}" ]] || fail "preflight should stay static and avoid live kubectl for unreadable KUBECONFIG_PATH"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-secret-value"
+  pass "S7 preflight ignores unreadable KUBECONFIG_PATH in dry-run and avoids live kubectl"
+}
+
+test_substrate_preflight_rejects_unknown_argument() {
+  local out="${TMP_DIR}/preflight-unknown-argument.out"
+  local status
+  set +e
+  "${ROOT_DIR}/scripts/preflight.sh" --definitely-unknown >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -ne 0 ]] || fail "preflight should reject unknown arguments"
+  assert_contains "${out}" "unknown argument: --definitely-unknown"
+  pass "S7 preflight rejects unknown arguments"
+}
+
 test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing() {
   local env_dir="${TMP_DIR}/doctor-live-env"
   local stub_bin="${TMP_DIR}/doctor-live-bin"
@@ -3878,6 +3957,9 @@ test_download_online_requires_rwx_smoke_artifact_lock
 test_download_online_rejects_mutable_rwx_smoke_image_ref
 test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
+test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias
+test_substrate_preflight_unreadable_kubeconfig_stays_static
+test_substrate_preflight_rejects_unknown_argument
 test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing
 test_substrate_only_doctor_live_fails_before_kubectl_when_kubeconfig_is_unreadable
 test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound

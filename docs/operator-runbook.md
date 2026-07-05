@@ -19,7 +19,7 @@ cluster mutation is enabled:
 2. Run an installer in validate-first mode.
 3. Run `validate-env.sh`.
 4. Run `validate-juicefs-contract.sh`.
-5. Run `doctor.sh --dry-run`.
+5. Run `preflight.sh` or `doctor.sh --dry-run` for static substrate checks.
 6. When the cluster is reachable, rerun doctor without `--dry-run` and provide
    either `--offline-cache` with `name: minio-client` and `name: rwx-smoke` in
    `images.lock`, or explicit `--s3-probe-image` and `--rwx-smoke-image`
@@ -40,6 +40,10 @@ the app repo.
 
 Current behavior is intentionally layered:
 
+- `preflight.sh` is a substrate-repo command, not a third repo and not an
+  external evidence surface. It accepts `--env`, `--secrets`,
+  `--cache`/`--offline-cache`, and `--report`, then delegates to
+  `doctor.sh --dry-run`.
 - `doctor.sh --dry-run` proves static contracts: split env/secrets, configured
   namespace, PostgreSQL URL shape, S3 endpoint/bucket/key presence, rendered
   JuiceFS Secret/StorageClass/PVC, RWX access mode, and optional offline cache.
@@ -58,6 +62,11 @@ Current behavior is intentionally layered:
 
 In an environment without a working kubectl context, live doctor should not be
 green. Use `--dry-run` for static contract validation.
+
+Preflight does not run app checks, Botified checks, API smoke, live kubectl,
+psql, S3 probes, RWX smoke, Helm, k3s install, downloads, or image import. It
+does not replace live doctor, clean-VM install evidence, disconnected-VM
+validation, or existing-cloud validation.
 
 ## Secret Handling
 
