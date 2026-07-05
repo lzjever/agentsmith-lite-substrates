@@ -176,70 +176,36 @@ render_postgres_secret_manifest() {
   mv "${tmp}" "${output}"
 }
 
-postgres_sql_literal() {
-  local escaped
-  escaped="${1//\'/\'\'}"
-  printf "'%s'" "${escaped}"
+postgres_render_template() {
+  local input="$1"
+  local output="$2"
+  local content="$3"
+  if grep -Eq '\$\{[A-Z0-9_]+\}' <<<"${content}"; then
+    die "Postgres manifest template has unresolved placeholders after rendering: ${input}"
+  fi
+  printf '%s\n' "${content}" >"${output}"
 }
 
-postgres_sql_identifier() {
-  local escaped
-  escaped="${1//\"/\"\"}"
-  printf '"%s"' "${escaped}"
-}
-
-postgres_init_sql_from_env() {
+render_postgres_init_job() {
   local env_file="$1"
   local secrets_file="$2"
-  local app_user app_password app_db meta_user meta_password meta_db
-  local app_user_ident app_password_lit app_user_lit app_db_ident app_db_lit
-  local meta_user_ident meta_password_lit meta_user_lit meta_db_ident meta_db_lit
+  local manifest_dir="$3"
+  local output="$4"
+  local postgres_image="$5"
+  local namespace content
+
+  need_file "${manifest_dir}/postgres-init-job.yaml"
+  [[ "${postgres_image}" =~ @sha256:[0-9a-f]{64}$ ]] \
+    || die "postgres image must be digest-pinned before rendering init Job"
 
   postgres_validate_self_hosted_urls "${env_file}" "${secrets_file}"
-  app_user="${postgres_app_USER}"
-  app_password="${postgres_app_PASSWORD}"
-  app_db="${postgres_app_DATABASE}"
-  meta_user="${postgres_meta_USER}"
-  meta_password="${postgres_meta_PASSWORD}"
-  meta_db="${postgres_meta_DATABASE}"
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  [[ -n "${namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering Postgres init Job"
 
-  app_user_ident="$(postgres_sql_identifier "${app_user}")"
-  app_password_lit="$(postgres_sql_literal "${app_password}")"
-  app_user_lit="$(postgres_sql_literal "${app_user}")"
-  app_db_ident="$(postgres_sql_identifier "${app_db}")"
-  app_db_lit="$(postgres_sql_literal "${app_db}")"
-  meta_user_ident="$(postgres_sql_identifier "${meta_user}")"
-  meta_password_lit="$(postgres_sql_literal "${meta_password}")"
-  meta_user_lit="$(postgres_sql_literal "${meta_user}")"
-  meta_db_ident="$(postgres_sql_identifier "${meta_db}")"
-  meta_db_lit="$(postgres_sql_literal "${meta_db}")"
-
-  cat <<EOF_SQL
-\\set ON_ERROR_STOP on
-DO \$agentsmith_lite_postgres_init\$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ${app_user_lit}) THEN
-    CREATE ROLE ${app_user_ident} LOGIN PASSWORD ${app_password_lit};
-  ELSE
-    ALTER ROLE ${app_user_ident} LOGIN PASSWORD ${app_password_lit};
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ${meta_user_lit}) THEN
-    CREATE ROLE ${meta_user_ident} LOGIN PASSWORD ${meta_password_lit};
-  ELSE
-    ALTER ROLE ${meta_user_ident} LOGIN PASSWORD ${meta_password_lit};
-  END IF;
-END
-\$agentsmith_lite_postgres_init\$;
-
-SELECT format('CREATE DATABASE %I OWNER %I', ${app_db_lit}, ${app_user_lit})
-WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = ${app_db_lit})\\gexec
-ALTER DATABASE ${app_db_ident} OWNER TO ${app_user_ident};
-GRANT ALL PRIVILEGES ON DATABASE ${app_db_ident} TO ${app_user_ident};
-
-SELECT format('CREATE DATABASE %I OWNER %I', ${meta_db_lit}, ${meta_user_lit})
-WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = ${meta_db_lit})\\gexec
-ALTER DATABASE ${meta_db_ident} OWNER TO ${meta_user_ident};
-GRANT ALL PRIVILEGES ON DATABASE ${meta_db_ident} TO ${meta_user_ident};
-EOF_SQL
+  content="$(<"${manifest_dir}/postgres-init-job.yaml")"
+  content="${content//\$\{KUBE_NAMESPACE\}/${namespace}}"
+  content="${content//\$\{POSTGRES_IMAGE\}/${postgres_image}}"
+  content="${content//\$\{POSTGRES_HOST\}/${postgres_app_HOST}}"
+  content="${content//\$\{POSTGRES_PORT\}/${postgres_app_PORT}}"
+  postgres_render_template "${manifest_dir}/postgres-init-job.yaml" "${output}" "${content}"
 }

@@ -174,8 +174,9 @@ non-secret JuiceFS CSI Helm values, installs
 the cached `charts/juicefs-csi.tgz` with cached `bin/helm`, renders and applies
 the self-hosted PostgreSQL Secret before the PostgreSQL StatefulSet, waits for
 `statefulset/postgres`, initializes/verifies the app DB and JuiceFS metadata
-DB/user through `kubectl exec -i ... psql` stdin SQL, renders/applies the MinIO
-Secret before the MinIO StatefulSet, waits for `statefulset/minio`,
+DB/user with a one-shot cached digest-pinned PostgreSQL Job, deletes that Job,
+renders/applies the MinIO Secret before the MinIO StatefulSet, waits for
+`statefulset/minio`,
 creates/verifies `S3_BUCKET` with a one-shot MinIO client Job, deletes that Job,
 runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
 image, applies the StorageClass/PVC contract only after the format Job reports a

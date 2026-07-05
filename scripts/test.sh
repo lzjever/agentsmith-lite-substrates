@@ -853,6 +853,10 @@ set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"${CALL_LOG}"
 case "$*" in
   *postgresql://*|*postgres://*|*postgres-secret-value*|*juicefs-secret-value*|*minio-secret-value*|*minio-access-key*|*S3_SECRET_KEY*|*JUICEFS_META_URL*) exit 54 ;;
+  *"exec -i statefulset/postgres"*)
+    printf 'forbidden postgres exec\n' >&2
+    exit 59
+    ;;
 esac
 is_exec=false
 has_stdin=false
@@ -886,6 +890,26 @@ case "$*" in
     ;;
   *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
     printf '%s\n' "${JUICEFS_FAKE_PVC_PHASE:-Bound}"
+    ;;
+  *"wait --for=condition=complete job/agentsmith-lite-postgres-init"*)
+    [[ "${POSTGRES_FAKE_INIT_WAIT_MODE:-ok}" != "fail" ]] || {
+      printf 'postgres init wait failed\n' >&2
+      exit 52
+    }
+    ;;
+  *"logs job/agentsmith-lite-postgres-init"*)
+    case "${POSTGRES_FAKE_INIT_LOG_MODE:-ok}" in
+      fail)
+        printf 'postgres init logs unavailable\n' >&2
+        exit 53
+        ;;
+      missing-ready)
+        printf 'postgres init completed without readiness marker\n'
+        ;;
+      *)
+        printf 'postgres init ready\n'
+        ;;
+    esac
     ;;
   *"wait --for=condition=complete job/agentsmith-lite-minio-bucket-init"*)
     [[ "${MINIO_FAKE_BUCKET_WAIT_MODE:-ok}" != "fail" ]] || {
@@ -1963,7 +1987,6 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   local forbidden_bin="${TMP_DIR}/p1-live-path-bin"
   local forbidden_log="${TMP_DIR}/p1-live-forbidden.log"
   local airgap_dir="${TMP_DIR}/p1-live-airgap"
-  local exec_stdin_dir="${TMP_DIR}/p1-live-exec-stdin"
   local report="${output}/doctor-report.json"
   local rendered="${output}/rendered/offline-install"
   write_p1_offline_cache "${cache}"
@@ -1972,11 +1995,8 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   write_config "${config}" "custom-ns" "${output}/kubeconfig"
 
   CALL_LOG="${call_log}" \
-    EXEC_STDIN_DIR="${exec_stdin_dir}" \
     FORBIDDEN_LOG="${forbidden_log}" \
     K3S_AIRGAP_DIR="${airgap_dir}" \
-    POSTGRES_PASSWORD="postgres-secret-value" \
-    JUICEFS_META_PASSWORD="juicefs-secret-value" \
     PATH="${forbidden_bin}:${PATH}" \
     "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
       printf '%s\n' "install-offline output:" >&2
@@ -1996,6 +2016,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${rendered}/namespace.yaml" "  name: agentsmith"
   test -f "${rendered}/postgres-secret.yaml" || fail "install-offline did not render Postgres Secret"
   test "$(stat -c '%a' "${rendered}/postgres-secret.yaml")" = "600" || fail "install-offline did not keep rendered Postgres Secret owner-only"
+  test -f "${rendered}/postgres-init-job.yaml" || fail "install-offline did not render Postgres init Job"
   test -f "${rendered}/minio-secret.yaml" || fail "install-offline did not render MinIO Secret"
   test "$(stat -c '%a' "${rendered}/minio-secret.yaml")" = "600" || fail "install-offline did not keep rendered MinIO Secret owner-only"
   test -f "${rendered}/minio-bucket-init-job.yaml" || fail "install-offline did not render MinIO bucket init Job"
@@ -2009,6 +2030,34 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsPassword:"
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsDatabase:"
   assert_contains "${rendered}/postgres-secret.yaml" "namespace: custom-ns"
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: agentsmith-lite-postgres-init"
+  assert_contains "${rendered}/postgres-init-job.yaml" "namespace: custom-ns"
+  assert_contains "${rendered}/postgres-init-job.yaml" "image: docker.io/library/postgres@sha256:"
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: POSTGRES_HOST"
+  assert_contains "${rendered}/postgres-init-job.yaml" "value: \"postgres.custom-ns.svc.cluster.local\""
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: POSTGRES_PORT"
+  assert_contains "${rendered}/postgres-init-job.yaml" "value: \"5432\""
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: POSTGRES_USER"
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: POSTGRES_PASSWORD"
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: POSTGRES_DB"
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: JUICEFS_META_USER"
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: JUICEFS_META_PASSWORD"
+  assert_contains "${rendered}/postgres-init-job.yaml" "name: JUICEFS_META_DB"
+  assert_contains "${rendered}/postgres-init-job.yaml" "secretKeyRef:"
+  assert_contains "${rendered}/postgres-init-job.yaml" "key: username"
+  assert_contains "${rendered}/postgres-init-job.yaml" "key: password"
+  assert_contains "${rendered}/postgres-init-job.yaml" "key: database"
+  assert_contains "${rendered}/postgres-init-job.yaml" "key: juicefsUsername"
+  assert_contains "${rendered}/postgres-init-job.yaml" "key: juicefsPassword"
+  assert_contains "${rendered}/postgres-init-job.yaml" "key: juicefsDatabase"
+  assert_contains "${rendered}/postgres-init-job.yaml" "psql -v ON_ERROR_STOP=1"
+  assert_contains "${rendered}/postgres-init-job.yaml" "-Atc 'select 1'"
+  assert_contains "${rendered}/postgres-init-job.yaml" "postgres init ready"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "postgresql://"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "postgres-secret-value"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "juicefs-secret-value"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "minio-access-key"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "minio-secret-value"
   assert_contains "${rendered}/minio-secret.yaml" "name: agentsmith-lite-minio"
   assert_contains "${rendered}/minio-secret.yaml" "namespace: custom-ns"
   assert_contains "${rendered}/minio-secret.yaml" "access-key:"
@@ -2081,10 +2130,11 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns rollout status statefulset/postgres --timeout=180s" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns exec -i statefulset/postgres -- sh -c psql -v ON_ERROR_STOP=1 -U \"\${POSTGRES_USER}\" -d postgres" \
-    "kubectl exec stdin bytes=" \
-    "POSTGRES_PASSWORD postgres.custom-ns.svc.cluster.local 5432 agentsmith agentsmith_lite" \
-    "JUICEFS_META_PASSWORD postgres.custom-ns.svc.cluster.local 5432 juicefs juicefs_meta" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-postgres-init --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-init-job.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=condition=complete job/agentsmith-lite-postgres-init --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns logs job/agentsmith-lite-postgres-init" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-postgres-init --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns rollout status statefulset/minio --timeout=180s" \
@@ -2102,34 +2152,16 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns wait --for=jsonpath={.status.phase}=Bound pvc/agentsmith-lite-files --timeout=180s" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace custom-ns"
+  assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-postgres-init --ignore-not-found=true" "2"
   assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-minio-bucket-init --ignore-not-found=true" "2"
   assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n custom-ns delete job agentsmith-lite-juicefs-format --ignore-not-found=true" "2"
   assert_not_contains "${call_log}" "apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml"
   assert_contains "${call_log}" "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz"
-  assert_contains "${call_log}" "-Atc \"select 1\""
+  assert_not_contains "${call_log}" "exec -i statefulset/postgres"
+  assert_not_contains "${call_log}" "kubectl exec stdin bytes="
   assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
   assert_contains "${call_log}" "INSTALL_K3S_EXEC=server --write-kubeconfig ${output}/kubeconfig --write-kubeconfig-mode 600"
   assert_contains "${call_log}" "K3S_BINARY_PATH=${cache}/bin/k3s"
-  local exec_stdin_files=()
-  local exec_stdin_file bootstrap_stdin_file=""
-  mapfile -t exec_stdin_files < <(find "${exec_stdin_dir}" -type f -name 'kubectl-exec-stdin.*.sql' -print | sort)
-  [[ "${#exec_stdin_files[@]}" -eq 3 ]] || fail "expected bootstrap plus app/JuiceFS database verification exec stdin captures, got ${#exec_stdin_files[@]}"
-  for exec_stdin_file in "${exec_stdin_files[@]}"; do
-    test "$(stat -c '%a' "${exec_stdin_file}")" = "600" || fail "captured exec stdin SQL was not owner-only"
-    assert_not_contains "${exec_stdin_file}" "postgresql://"
-    assert_not_contains "${exec_stdin_file}" "postgres://"
-    if grep -Fq "CREATE DATABASE" "${exec_stdin_file}"; then
-      bootstrap_stdin_file="${exec_stdin_file}"
-    else
-      test "$(stat -c '%s' "${exec_stdin_file}")" = "0" || fail "database verification exec stdin should not carry SQL or secrets"
-    fi
-  done
-  [[ -n "${bootstrap_stdin_file}" ]] || fail "kubectl exec -i did not receive bootstrap SQL on stdin"
-  assert_contains "${bootstrap_stdin_file}" "CREATE DATABASE"
-  assert_contains "${bootstrap_stdin_file}" "agentsmith_lite"
-  assert_contains "${bootstrap_stdin_file}" "juicefs_meta"
-  assert_contains "${bootstrap_stdin_file}" "postgres-secret-value"
-  assert_contains "${bootstrap_stdin_file}" "juicefs-secret-value"
   test -f "${airgap_dir}/k3s-airgap-images-amd64.tar.zst" || fail "install-offline did not copy k3s airgap archive into K3S_AIRGAP_DIR"
   cmp -s "${cache}/images/k3s/k3s-airgap-images-amd64.tar.zst" "${airgap_dir}/k3s-airgap-images-amd64.tar.zst" \
     || fail "copied k3s airgap archive differs from cached artifact"
@@ -2137,8 +2169,8 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${rendered}/postgres.yaml" "image: postgres:16"
   assert_not_contains "${rendered}/minio.yaml" "image: minio/minio:"
   assert_contains "${rendered}/postgres.yaml" "image: docker.io/library/postgres@sha256:"
-  assert_contains "${rendered}/postgres.yaml" "name: JUICEFS_META_PASSWORD"
-  assert_contains "${rendered}/postgres.yaml" "key: juicefsPassword"
+  assert_not_contains "${rendered}/postgres.yaml" "JUICEFS_META_PASSWORD"
+  assert_not_contains "${rendered}/postgres.yaml" "juicefsPassword"
   assert_contains "${rendered}/minio.yaml" "image: quay.io/minio/minio@sha256:"
   assert_contains "${out}" "doctor passed"
   assert_not_contains "${out}" "postgres-secret-value"
@@ -2169,7 +2201,6 @@ test_p1_real_offline_install_non_dry_run_fails_without_psql() {
   local report="${output}/doctor-report.json"
   local call_log="${TMP_DIR}/p1-live-no-psql-call.log"
   local airgap_dir="${TMP_DIR}/p1-live-no-psql-airgap"
-  local exec_stdin_dir="${TMP_DIR}/p1-live-no-psql-exec-stdin"
   local no_psql_path="${TMP_DIR}/p1-live-no-psql-path"
   local rendered="${output}/rendered/offline-install"
   write_p1_offline_cache "${cache}"
@@ -2179,10 +2210,7 @@ test_p1_real_offline_install_non_dry_run_fails_without_psql() {
   ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
 
   if CALL_LOG="${call_log}" \
-    EXEC_STDIN_DIR="${exec_stdin_dir}" \
     K3S_AIRGAP_DIR="${airgap_dir}" \
-    POSTGRES_PASSWORD="postgres-secret-value" \
-    JUICEFS_META_PASSWORD="juicefs-secret-value" \
     APP_SESSION_SECRET="app-session-secret-value-0123456789abcdef" \
     BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
     S3_ACCESS_KEY="minio-access-key" \
@@ -2199,7 +2227,10 @@ test_p1_real_offline_install_non_dry_run_fails_without_psql() {
   assert_not_contains "${report}" '"overallStatus": "passed"'
   assert_not_contains "${out}" "doctor passed"
   assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-init-job.yaml"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-postgres-init"
   assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace agentsmith"
+  assert_not_contains "${call_log}" "exec -i statefulset/postgres"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
   assert_not_contains "${out}" "minio-access-key"
@@ -2218,7 +2249,6 @@ test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
   local out="${TMP_DIR}/install-online-p1-live.out"
   local call_log="${TMP_DIR}/online-p1-live-call.log"
   local airgap_dir="${TMP_DIR}/online-p1-live-airgap"
-  local exec_stdin_dir="${TMP_DIR}/online-p1-live-exec-stdin"
   local forbidden_bin="${TMP_DIR}/online-p1-live-path-bin"
   local forbidden_log="${TMP_DIR}/online-p1-live-forbidden.log"
   local rendered="${output}/rendered/offline-install"
@@ -2228,11 +2258,8 @@ test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
   write_config "${config}" "agentsmith" "${output}/kubeconfig"
 
   CALL_LOG="${call_log}" \
-    EXEC_STDIN_DIR="${exec_stdin_dir}" \
     FORBIDDEN_LOG="${forbidden_log}" \
     K3S_AIRGAP_DIR="${airgap_dir}" \
-    POSTGRES_PASSWORD="postgres-secret-value" \
-    JUICEFS_META_PASSWORD="juicefs-secret-value" \
     PATH="${forbidden_bin}:${PATH}" \
     "${ROOT_DIR}/scripts/install-online.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1 || {
       printf '%s\n' "install-online output:" >&2
@@ -2244,6 +2271,7 @@ test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
   test -f "${output}/substrate.env" || fail "install-online did not write substrate.env"
   test -f "${output}/substrate.secrets.env" || fail "install-online did not write substrate.secrets.env"
   test -f "${rendered}/postgres.yaml" || fail "install-online did not render self-hosted Postgres through delegated p1 chain"
+  test -f "${rendered}/postgres-init-job.yaml" || fail "install-online did not render Postgres init Job through delegated p1 chain"
   test -f "${rendered}/minio.yaml" || fail "install-online did not render self-hosted MinIO through delegated p1 chain"
   test -f "${rendered}/namespace.yaml" || fail "install-online did not render namespace bootstrap through delegated p1 chain"
   assert_line_order "${call_log}" \
@@ -2252,8 +2280,10 @@ test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/namespace.yaml" \
     "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-init-job.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace agentsmith"
+  assert_not_contains "${call_log}" "exec -i statefulset/postgres"
   assert_contains "${out}" "install-offline: running cached k3s installer"
   assert_contains "${out}" "doctor passed"
   assert_not_contains "${out}" "postgres-secret-value"
@@ -2305,8 +2335,11 @@ EOF_PSQL
   assert_not_contains "${call_log}" "install-k3s"
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "postgres.yaml"
+  assert_not_contains "${call_log}" "postgres-init-job.yaml"
+  assert_not_contains "${call_log}" "agentsmith-lite-postgres-init"
   assert_not_contains "${call_log}" "minio.yaml"
   [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "online existing-cloud rendered self-hosted Postgres"
+  [[ ! -e "${output}/rendered/offline-install/postgres-init-job.yaml" ]] || fail "online existing-cloud rendered self-hosted Postgres init Job"
   [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO"
   [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO bucket init Job"
   assert_not_contains "${out}" "postgres-secret-value"
@@ -2356,8 +2389,11 @@ test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
   assert_not_contains "${call_log}" "install-k3s"
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "postgres.yaml"
+  assert_not_contains "${call_log}" "postgres-init-job.yaml"
+  assert_not_contains "${call_log}" "agentsmith-lite-postgres-init"
   assert_not_contains "${call_log}" "minio.yaml"
   [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "online existing-cloud rendered self-hosted Postgres after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/postgres-init-job.yaml" ]] || fail "online existing-cloud rendered self-hosted Postgres init Job after failed validation"
   [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO after failed validation"
   [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO bucket init Job after failed validation"
   assert_not_contains "${out}" "postgres-secret-value"
@@ -2384,6 +2420,50 @@ test_online_install_p0_contract_non_dry_run_fails() {
   fi
   assert_contains "${out}" "cannot perform live online install from a P0 static cache skeleton"
   pass "P1 online installer rejects p0-contract caches outside dry-run"
+}
+
+test_postgres_init_job_renders_digest_pinned_image_and_secret_refs() {
+  local env_dir="${TMP_DIR}/postgres-init-env"
+  local output="${TMP_DIR}/postgres-init-job.yaml"
+  local out="${TMP_DIR}/postgres-init-render.out"
+  local image="docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  write_valid_env_pair "${env_dir}"
+
+  bash -c 'set -euo pipefail; source "$1/scripts/lib/postgres.sh"; render_postgres_init_job "$2" "$3" "$1/manifests/postgres" "$4" "$5"' \
+    _ "${ROOT_DIR}" "${env_dir}/substrate.env" "${env_dir}/substrate.secrets.env" "${output}" "${image}" >"${out}" 2>&1
+
+  assert_contains "${output}" "name: agentsmith-lite-postgres-init"
+  assert_contains "${output}" "image: ${image}"
+  assert_contains "${output}" "name: POSTGRES_HOST"
+  assert_contains "${output}" "value: \"postgres.agentsmith.svc.cluster.local\""
+  assert_contains "${output}" "name: POSTGRES_PORT"
+  assert_contains "${output}" "value: \"5432\""
+  assert_contains "${output}" "name: POSTGRES_USER"
+  assert_contains "${output}" "name: POSTGRES_PASSWORD"
+  assert_contains "${output}" "name: POSTGRES_DB"
+  assert_contains "${output}" "name: JUICEFS_META_USER"
+  assert_contains "${output}" "name: JUICEFS_META_PASSWORD"
+  assert_contains "${output}" "name: JUICEFS_META_DB"
+  assert_contains "${output}" "secretKeyRef:"
+  assert_contains "${output}" "key: username"
+  assert_contains "${output}" "key: password"
+  assert_contains "${output}" "key: database"
+  assert_contains "${output}" "key: juicefsUsername"
+  assert_contains "${output}" "key: juicefsPassword"
+  assert_contains "${output}" "key: juicefsDatabase"
+  assert_contains "${output}" "CREATE ROLE"
+  assert_contains "${output}" "CREATE DATABASE"
+  assert_contains "${output}" "-Atc 'select 1'"
+  assert_contains "${output}" "postgres init ready"
+  assert_not_contains "${output}" "postgres-secret-value"
+  assert_not_contains "${output}" "juicefs-secret-value"
+  assert_not_contains "${output}" "postgresql://"
+  assert_not_contains "${output}" "postgres://"
+  assert_not_contains "${output}" "minio-access-key"
+  assert_not_contains "${output}" "minio-secret-value"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  pass "Postgres init Job renders digest-pinned image, Secret refs, and redacted init/verify flow"
 }
 
 test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs() {
@@ -2454,6 +2534,53 @@ test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc() {
   assert_not_contains "${call_log}" "juicefs-secret-value"
   assert_not_contains "${call_log}" "minio-secret-value"
   pass "P1 offline installer fails JuiceFS format mismatch before applying PVC contract"
+}
+
+test_p1_real_offline_install_cleans_postgres_init_job_on_wait_failure() {
+  local cache="${TMP_DIR}/offline-cache-p1-postgres-wait-fail"
+  local config="${TMP_DIR}/substrates-p1-postgres-wait-fail.yaml"
+  local output="${TMP_DIR}/offline-p1-postgres-wait-fail-out"
+  local out="${TMP_DIR}/install-offline-p1-postgres-wait-fail.out"
+  local call_log="${TMP_DIR}/p1-postgres-wait-fail-call.log"
+  local airgap_dir="${TMP_DIR}/p1-postgres-wait-fail-airgap"
+  local rendered="${output}/rendered/offline-install"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}" "agentsmith" "${output}/kubeconfig"
+
+  if CALL_LOG="${call_log}" \
+    K3S_AIRGAP_DIR="${airgap_dir}" \
+    POSTGRES_FAKE_INIT_WAIT_MODE="fail" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline succeeded even though Postgres init wait failed"
+  fi
+
+  assert_contains "${out}" "Postgres init Job failed"
+  test -f "${rendered}/postgres-init-job.yaml" || fail "install-offline did not render Postgres init Job before wait failure"
+  assert_line_order "${call_log}" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-secret.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/postgres --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-postgres-init --ignore-not-found=true" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-init-job.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-postgres-init --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-postgres-init" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-postgres-init --ignore-not-found=true"
+  assert_occurrence_count "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete job agentsmith-lite-postgres-init --ignore-not-found=true" "2"
+  assert_not_contains "${call_log}" "apply -f ${rendered}/minio-secret.yaml"
+  assert_not_contains "${call_log}" "exec -i statefulset/postgres"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "minio-access-key"
+  assert_not_contains "${call_log}" "minio-secret-value"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "postgres-secret-value"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "juicefs-secret-value"
+  assert_not_contains "${rendered}/postgres-init-job.yaml" "postgresql://"
+  pass "P1 offline installer cleans Postgres init Job after wait failure without leaking credentials"
 }
 
 test_p1_real_offline_install_cleans_minio_bucket_init_job_on_wait_failure() {
@@ -2663,6 +2790,8 @@ EOF_PSQL
 
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-init-job.yaml"
+  assert_not_contains "${call_log}" "agentsmith-lite-postgres-init"
   assert_not_contains "${call_log}" "rollout status statefulset/postgres"
   assert_not_contains "${call_log}" "exec -i statefulset/postgres"
   assert_not_contains "${call_log}" "minio-secret.yaml"
@@ -2671,6 +2800,7 @@ EOF_PSQL
   assert_not_contains "${call_log}" "minio-bucket-init"
   [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret"
   [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet"
+  [[ ! -e "${output}/rendered/offline-install/postgres-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres init Job"
   [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job"
   [[ ! -e "${output}/rendered/offline-install/juicefs-format-job.yaml" ]] || fail "existing-cloud rendered a self-hosted JuiceFS format Job"
   assert_contains "${out}" "doctor passed"
@@ -2728,10 +2858,13 @@ EOF_PSQL
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-init-job.yaml"
+  assert_not_contains "${call_log}" "agentsmith-lite-postgres-init"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio-secret.yaml"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio.yaml"
   [[ ! -e "${output}/rendered/offline-install/postgres-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres Secret after failed CSIDriver validation"
   [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres StatefulSet after failed CSIDriver validation"
+  [[ ! -e "${output}/rendered/offline-install/postgres-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres init Job after failed CSIDriver validation"
   [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret after failed CSIDriver validation"
   [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet after failed CSIDriver validation"
   [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job after failed CSIDriver validation"
@@ -2788,10 +2921,13 @@ test_existing_cloud_offline_install_fails_without_psql() {
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-init-job.yaml"
+  assert_not_contains "${call_log}" "agentsmith-lite-postgres-init"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio-secret.yaml"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio.yaml"
   [[ ! -e "${output}/rendered/offline-install/postgres-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres Secret after failed validation"
   [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres StatefulSet after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/postgres-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres init Job after failed validation"
   [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret after failed validation"
   [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet after failed validation"
   [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job after failed validation"
@@ -4385,8 +4521,10 @@ test_online_install_existing_cloud_non_dry_run_delegates_validation_only
 test_online_install_existing_cloud_non_dry_run_fails_without_psql
 test_online_install_p0_contract_non_dry_run_fails
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
+test_postgres_init_job_renders_digest_pinned_image_and_secret_refs
 test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs
 test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc
+test_p1_real_offline_install_cleans_postgres_init_job_on_wait_failure
 test_p1_real_offline_install_cleans_minio_bucket_init_job_on_wait_failure
 test_p1_real_offline_install_cleans_juicefs_format_job_on_log_failure
 test_minio_bucket_init_job_keeps_credentials_out_of_mc_argv

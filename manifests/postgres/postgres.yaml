@@ -49,11 +49,6 @@ spec:
                 secretKeyRef:
                   name: agentsmith-lite-postgres
                   key: password
-            - name: JUICEFS_META_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: agentsmith-lite-postgres
-                  key: juicefsPassword
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data

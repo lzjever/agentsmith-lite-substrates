@@ -1,0 +1,114 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agentsmith-lite-postgres-init
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-init
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: postgres-init
+          image: ${POSTGRES_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_HOST
+              value: "${POSTGRES_HOST}"
+            - name: POSTGRES_PORT
+              value: "${POSTGRES_PORT}"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: database
+            - name: JUICEFS_META_USER
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: juicefsUsername
+            - name: JUICEFS_META_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: juicefsPassword
+            - name: JUICEFS_META_DB
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: juicefsDatabase
+          command:
+            - /bin/sh
+            - -ceu
+            - |
+              : "${POSTGRES_HOST:?}"
+              : "${POSTGRES_PORT:?}"
+              : "${POSTGRES_USER:?}"
+              : "${POSTGRES_PASSWORD:?}"
+              : "${POSTGRES_DB:?}"
+              : "${JUICEFS_META_USER:?}"
+              : "${JUICEFS_META_PASSWORD:?}"
+              : "${JUICEFS_META_DB:?}"
+
+              export PGPASSWORD="$POSTGRES_PASSWORD"
+              psql -v ON_ERROR_STOP=1 \
+                -v app_user="$POSTGRES_USER" \
+                -v app_password="$POSTGRES_PASSWORD" \
+                -v app_db="$POSTGRES_DB" \
+                -v meta_user="$JUICEFS_META_USER" \
+                -v meta_password="$JUICEFS_META_PASSWORD" \
+                -v meta_db="$JUICEFS_META_DB" \
+                -h "$POSTGRES_HOST" \
+                -p "$POSTGRES_PORT" \
+                -U "$POSTGRES_USER" \
+                -d postgres <<'SQL'
+              SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_user')\gexec
+              SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')\gexec
+
+              SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'meta_user', :'meta_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'meta_user')\gexec
+              SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'meta_user', :'meta_password')\gexec
+
+              SELECT format('CREATE DATABASE %I OWNER %I', :'app_db', :'app_user')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'app_db')\gexec
+              SELECT format('ALTER DATABASE %I OWNER TO %I', :'app_db', :'app_user')\gexec
+              SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'app_db', :'app_user')\gexec
+
+              SELECT format('CREATE DATABASE %I OWNER %I', :'meta_db', :'meta_user')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'meta_db')\gexec
+              SELECT format('ALTER DATABASE %I OWNER TO %I', :'meta_db', :'meta_user')\gexec
+              SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'meta_db', :'meta_user')\gexec
+              SQL
+
+              PGPASSWORD="$POSTGRES_PASSWORD" \
+                psql -v ON_ERROR_STOP=1 \
+                  -h "$POSTGRES_HOST" \
+                  -p "$POSTGRES_PORT" \
+                  -U "$POSTGRES_USER" \
+                  -d "$POSTGRES_DB" \
+                  -Atc 'select 1' >/dev/null
+
+              PGPASSWORD="$JUICEFS_META_PASSWORD" \
+                psql -v ON_ERROR_STOP=1 \
+                  -h "$POSTGRES_HOST" \
+                  -p "$POSTGRES_PORT" \
+                  -U "$JUICEFS_META_USER" \
+                  -d "$JUICEFS_META_DB" \
+                  -Atc 'select 1' >/dev/null
+
+              printf 'postgres init ready\n'

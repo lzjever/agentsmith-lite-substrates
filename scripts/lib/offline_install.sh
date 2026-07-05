@@ -249,6 +249,7 @@ offline_install_render_manifests() {
   render_postgres_secret_manifest "${env_file}" "${secrets_file}" "${render_dir}/postgres-secret.yaml"
   render_minio_secret_manifest "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-secret.yaml"
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/postgres/postgres.yaml" "${render_dir}/postgres.yaml" "${namespace}" "${postgres_image}"
+  render_postgres_init_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/postgres" "${render_dir}/postgres-init-job.yaml" "${postgres_image}"
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/minio/minio.yaml" "${render_dir}/minio.yaml" "${namespace}" "${minio_image}"
   render_minio_bucket_init_job "${env_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-bucket-init-job.yaml" "${minio_client_image}"
   render_juicefs_format_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}/juicefs-format-job.yaml" "${juicefs_csi_image}"
@@ -441,30 +442,40 @@ offline_install_format_juicefs() {
 offline_install_init_postgres_databases() {
   local cache_dir="$1"
   local env_file="$2"
-  local secrets_file="$3"
-  local namespace sql
+  local render_dir="$3"
+  local namespace job_name logs apply_status wait_status logs_status
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
-  postgres_validate_self_hosted_urls "${env_file}" "${secrets_file}"
-  sql="$(postgres_init_sql_from_env "${env_file}" "${secrets_file}")"
   info "install-offline: initializing PostgreSQL app and JuiceFS metadata databases"
-  printf '%s\n' "${sql}" \
-    | offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" exec -i statefulset/postgres -- sh -c 'psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d postgres'
-  offline_install_verify_postgres_database "${cache_dir}" "${env_file}" "${namespace}" "POSTGRES_PASSWORD" "${postgres_app_HOST}" "${postgres_app_PORT}" "${postgres_app_USER}" "${postgres_app_DATABASE}"
-  offline_install_verify_postgres_database "${cache_dir}" "${env_file}" "${namespace}" "JUICEFS_META_PASSWORD" "${postgres_meta_HOST}" "${postgres_meta_PORT}" "${postgres_meta_USER}" "${postgres_meta_DATABASE}"
-}
+  job_name="agentsmith-lite-postgres-init"
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
 
-offline_install_verify_postgres_database() {
-  local cache_dir="$1"
-  local env_file="$2"
-  local namespace="$3"
-  local password_env="$4"
-  local host="$5"
-  local port="$6"
-  local user="$7"
-  local database="$8"
+  set +e
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres-init-job.yaml"
+  apply_status=$?
+  wait_status=0
+  logs_status=0
+  logs=""
+  if [[ "${apply_status}" -eq 0 ]]; then
+    offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout=120s
+    wait_status=$?
+    logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
+    logs_status=$?
+  fi
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+  set -e
 
-  info "install-offline: verifying PostgreSQL database ${database} as ${user}"
-  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" exec -i statefulset/postgres -- sh -c 'case "$1" in POSTGRES_PASSWORD) PGPASSWORD="${POSTGRES_PASSWORD:-}" ;; JUICEFS_META_PASSWORD) PGPASSWORD="${JUICEFS_META_PASSWORD:-}" ;; *) exit 64 ;; esac; export PGPASSWORD; test -n "${PGPASSWORD}" || exit 65; psql -v ON_ERROR_STOP=1 -h "$2" -p "$3" -U "$4" -d "$5" -Atc "select 1"' sh "${password_env}" "${host}" "${port}" "${user}" "${database}" < /dev/null
+  if [[ "${apply_status}" -ne 0 ]]; then
+    die "Postgres init Job apply failed; refusing to continue"
+  fi
+  if [[ "${wait_status}" -ne 0 ]]; then
+    die "Postgres init Job failed; refusing to continue"
+  fi
+  if [[ "${logs_status}" -ne 0 ]]; then
+    die "Postgres init Job logs could not be read; refusing to continue"
+  fi
+  if ! grep -Fq "postgres init ready" <<<"${logs}"; then
+    die "Postgres init Job did not report database readiness"
+  fi
 }
 
 run_p1_real_existing_cloud_validation() {
@@ -505,7 +516,7 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres-secret.yaml"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres.yaml"
   offline_install_wait_postgres_ready "${cache_dir}" "${env_file}"
-  offline_install_init_postgres_databases "${cache_dir}" "${env_file}" "${secrets_file}"
+  offline_install_init_postgres_databases "${cache_dir}" "${env_file}" "${render_dir}"
   info "install-offline: applying rendered MinIO manifests"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/minio-secret.yaml"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/minio.yaml"
