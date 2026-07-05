@@ -4,12 +4,10 @@ SCRIPT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_LIB_DIR}/common.sh"
 
-config_value() {
+config_raw_value() {
   local file="$1"
   local path="$2"
-  local default="${3:-}"
-  local found
-  found="$(awk -v wanted="${path}" '
+  awk -v wanted="${path}" '
     function trim(v) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
       gsub(/^"|"$/, "", v)
@@ -22,7 +20,7 @@ config_value() {
       split(line, parts, ":")
       section=trim(parts[1])
       value=trim(substr(line, index(line, ":") + 1))
-      if (value != "" && section == wanted) {
+      if (section == wanted) {
         print value
         found=1
       }
@@ -41,11 +39,85 @@ config_value() {
       }
     }
     END { if (!found) exit 1 }
-  ' "${file}" 2>/dev/null || true)"
+  ' "${file}"
+}
+
+config_value() {
+  local file="$1"
+  local path="$2"
+  local default="${3:-}"
+  local found
+  found="$(config_raw_value "${file}" "${path}" 2>/dev/null || true)"
   if [[ -n "${found}" ]]; then
     printf '%s' "${found}"
   else
     printf '%s' "${default}"
+  fi
+}
+
+config_required_value() {
+  local file="$1"
+  local path="$2"
+  local value
+  if ! value="$(config_raw_value "${file}" "${path}" 2>/dev/null)"; then
+    die "config contract requires ${path}"
+  fi
+  [[ -n "${value}" ]] || die "config contract requires non-empty ${path}"
+  printf '%s' "${value}"
+}
+
+validate_config_contract() {
+  local config_file="$1"
+  need_file "${config_file}"
+
+  local mode provider auth_mode csi_driver
+  mode="$(config_required_value "${config_file}" "mode")"
+  case "${mode}" in
+    self-hosted|existing-cloud) ;;
+    *) die "config contract mode must be self-hosted or existing-cloud" ;;
+  esac
+
+  local required_key
+  for required_key in \
+    kubernetes.namespace \
+    objectStorage.provider \
+    objectStorage.bucket \
+    juicefs.storageClass \
+    juicefs.pvcName \
+    auth.mode \
+    ingress.publicBaseUrl
+  do
+    config_required_value "${config_file}" "${required_key}" >/dev/null
+  done
+
+  provider="$(config_required_value "${config_file}" "objectStorage.provider")"
+  case "${provider}" in
+    minio|s3) ;;
+    *) die "config contract objectStorage.provider must be minio or s3" ;;
+  esac
+
+  auth_mode="$(config_required_value "${config_file}" "auth.mode")"
+  case "${auth_mode}" in
+    builtin_admin|oidc) ;;
+    *) die "config contract auth.mode must be builtin_admin or oidc" ;;
+  esac
+
+  if csi_driver="$(config_raw_value "${config_file}" "juicefs.csiDriver" 2>/dev/null)"; then
+    [[ "${csi_driver}" == "csi.juicefs.com" ]] || die "config contract juicefs.csiDriver must be csi.juicefs.com"
+  fi
+
+  if [[ "${mode}" == "existing-cloud" ]]; then
+    for required_key in \
+      postgres.appUrlFromEnv \
+      postgres.juicefsMetaUrlFromEnv \
+      objectStorage.accessKeyFromEnv \
+      objectStorage.secretKeyFromEnv
+    do
+      config_required_value "${config_file}" "${required_key}" >/dev/null
+    done
+    if [[ "${auth_mode}" == "oidc" ]]; then
+      config_required_value "${config_file}" "auth.clientSecretFromEnv" >/dev/null
+    fi
   fi
 }
 
@@ -63,6 +135,7 @@ write_env_contract_from_config() {
   local force="${4:-false}"
 
   need_file "${config_file}"
+  validate_config_contract "${config_file}"
   mkdir -p "${output_dir}"
 
   local mode namespace kubeconfig_path kube_context kubeconfig_output

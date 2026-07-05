@@ -1067,6 +1067,80 @@ test_validate_env_rejects_loose_secret_mode() {
   pass "S1 env/secrets contract rejects loose secret file permissions"
 }
 
+test_config_contract_rejects_invalid_mode() {
+  local cache="${TMP_DIR}/config-contract-invalid-mode-cache"
+  local config="${TMP_DIR}/config-contract-invalid-mode.yaml"
+  local output="${TMP_DIR}/config-contract-invalid-mode-out"
+  local out="${TMP_DIR}/config-contract-invalid-mode.out"
+  local tmp="${config}.tmp"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  awk '{ if ($0 == "mode: self-hosted") print "mode: existing_cloud"; else print }' "${config}" >"${tmp}"
+  mv "${tmp}" "${config}"
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted an invalid config mode"
+  fi
+  assert_contains "${out}" "config contract mode must be self-hosted or existing-cloud"
+  pass "S1 config contract rejects invalid mode typos"
+}
+
+test_config_contract_rejects_missing_bucket() {
+  local cache="${TMP_DIR}/config-contract-missing-bucket-cache"
+  local config="${TMP_DIR}/config-contract-missing-bucket.yaml"
+  local output="${TMP_DIR}/config-contract-missing-bucket-out"
+  local out="${TMP_DIR}/config-contract-missing-bucket.out"
+  local tmp="${config}.tmp"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  awk '$0 != "  bucket: agentsmith-lite-files" { print }' "${config}" >"${tmp}"
+  mv "${tmp}" "${config}"
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a config missing objectStorage.bucket"
+  fi
+  assert_contains "${out}" "config contract requires objectStorage.bucket"
+  pass "S1 config contract rejects missing objectStorage.bucket"
+}
+
+test_config_contract_rejects_existing_cloud_app_url_typo() {
+  local cache="${TMP_DIR}/config-contract-app-url-typo-cache"
+  local config="${TMP_DIR}/config-contract-app-url-typo.yaml"
+  local output="${TMP_DIR}/config-contract-app-url-typo-out"
+  local out="${TMP_DIR}/config-contract-app-url-typo.out"
+  local tmp="${config}.tmp"
+  write_offline_cache "${cache}"
+  write_existing_cloud_config "${config}"
+  awk '{ if ($0 == "  appUrlFromEnv: POSTGRES_APP_URL") print "  appUrlFromENV: POSTGRES_APP_URL"; else print }' "${config}" >"${tmp}"
+  mv "${tmp}" "${config}"
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a typo in postgres.appUrlFromEnv"
+  fi
+  assert_contains "${out}" "config contract requires postgres.appUrlFromEnv"
+  pass "S1 config contract rejects existing-cloud appUrlFromEnv typos"
+}
+
+test_config_contract_accepts_valid_modes() {
+  local cache="${TMP_DIR}/config-contract-valid-cache"
+  local self_config="${TMP_DIR}/config-contract-self-hosted.yaml"
+  local self_output="${TMP_DIR}/config-contract-self-hosted-out"
+  local existing_config="${TMP_DIR}/config-contract-existing-cloud.yaml"
+  local existing_output="${TMP_DIR}/config-contract-existing-cloud-out"
+  local out="${TMP_DIR}/config-contract-valid.out"
+  write_offline_cache "${cache}"
+  write_config "${self_config}"
+  "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${self_config}" --output "${self_output}" --dry-run >"${out}" 2>&1
+  test -f "${self_output}/substrate.env" || fail "valid self-hosted config did not write substrate.env"
+
+  write_existing_cloud_config "${existing_config}"
+  POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
+    S3_ACCESS_KEY="existing-access-key" \
+    S3_SECRET_KEY="existing-secret-value" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${existing_config}" --output "${existing_output}" --dry-run >>"${out}" 2>&1
+  test -f "${existing_output}/substrate.env" || fail "valid existing-cloud config did not write substrate.env"
+  assert_contains "${existing_output}/substrate.env" "S3_BUCKET=agentsmith-lite-files"
+  pass "S1 config contract accepts valid self-hosted and existing-cloud configs"
+}
+
 test_offline_install_validates_cache_without_network() {
   local cache="${TMP_DIR}/offline-cache"
   local config="${TMP_DIR}/substrates.yaml"
@@ -3322,6 +3396,10 @@ test_forbidden_copy_guard() {
 test_validate_env_split_and_redaction
 test_validate_env_rejects_secret_leak
 test_validate_env_rejects_loose_secret_mode
+test_config_contract_rejects_invalid_mode
+test_config_contract_rejects_missing_bucket
+test_config_contract_rejects_existing_cloud_app_url_typo
+test_config_contract_accepts_valid_modes
 test_offline_install_validates_cache_without_network
 test_offline_cache_rejects_public_download_contract
 test_offline_cache_rejects_public_download_references_in_checksums
