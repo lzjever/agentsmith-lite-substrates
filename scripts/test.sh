@@ -142,11 +142,12 @@ EOF_CONFIG
 
 write_existing_cloud_config() {
   local file="$1"
-  cat >"${file}" <<'EOF_CONFIG'
+  local kubeconfig_path="${2:-out/kubeconfig}"
+  cat >"${file}" <<EOF_CONFIG
 mode: existing-cloud
 kubernetes:
   namespace: agentsmith
-  kubeconfigPath: out/kubeconfig
+  kubeconfigPath: ${kubeconfig_path}
   context: production
 postgres:
   appUrlFromEnv: POSTGRES_APP_URL
@@ -170,6 +171,17 @@ auth:
 ingress:
   publicBaseUrl: https://agentsmith.example.com
 EOF_CONFIG
+}
+
+write_kubeconfig_fixture() {
+  local file="$1"
+  local old_umask
+  old_umask="$(umask)"
+  mkdir -p "$(dirname "${file}")"
+  umask 077
+  printf 'apiVersion: v1\nkind: Config\n' >"${file}"
+  chmod 0600 "${file}"
+  umask "${old_umask}"
 }
 
 sha256_file() {
@@ -784,6 +796,12 @@ case "${INSTALL_K3S_EXEC:-}" in
   *"server --write-kubeconfig "*" --write-kubeconfig-mode 600"*) ;;
   *) exit 33 ;;
 esac
+kubeconfig_path="${INSTALL_K3S_EXEC#*--write-kubeconfig }"
+kubeconfig_path="${kubeconfig_path%% *}"
+mkdir -p "$(dirname "${kubeconfig_path}")"
+umask 077
+printf 'apiVersion: v1\nkind: Config\n' >"${kubeconfig_path}"
+chmod 0600 "${kubeconfig_path}"
 EOF_INSTALL
 
   cat >"${cache}/scripts/import-images.sh" <<'EOF_IMPORT'
@@ -1919,13 +1937,15 @@ test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
 test_online_install_existing_cloud_non_dry_run_delegates_validation_only() {
   local cache="${TMP_DIR}/online-cache-existing-cloud"
   local config="${TMP_DIR}/substrates-online-existing-cloud.yaml"
+  local kubeconfig="${TMP_DIR}/online-existing-cloud-kubeconfig"
   local output="${TMP_DIR}/online-existing-cloud-out"
   local out="${TMP_DIR}/install-online-existing-cloud.out"
   local call_log="${TMP_DIR}/online-existing-cloud-call.log"
   local stub_bin="${TMP_DIR}/online-existing-cloud-bin"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
-  write_existing_cloud_config "${config}"
+  write_existing_cloud_config "${config}" "${kubeconfig}"
+  write_kubeconfig_fixture "${kubeconfig}"
   mkdir -p "${stub_bin}"
   cat >"${stub_bin}/psql" <<'EOF_PSQL'
 #!/usr/bin/env bash
@@ -1948,7 +1968,7 @@ EOF_PSQL
 
   assert_contains "${out}" "existing-cloud mode; skipping self-hosted PostgreSQL, MinIO, and k3s mutation"
   assert_contains "${out}" "doctor passed"
-  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${kubeconfig} --context production get namespace agentsmith"
   assert_not_contains "${call_log}" "install-k3s"
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "postgres.yaml"
@@ -1970,6 +1990,7 @@ EOF_PSQL
 test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
   local cache="${TMP_DIR}/online-cache-existing-cloud-no-psql"
   local config="${TMP_DIR}/substrates-online-existing-cloud-no-psql.yaml"
+  local kubeconfig="${TMP_DIR}/online-existing-cloud-no-psql-kubeconfig"
   local output="${TMP_DIR}/online-existing-cloud-no-psql-out"
   local out="${TMP_DIR}/install-online-existing-cloud-no-psql.out"
   local report="${output}/doctor-report.json"
@@ -1977,7 +1998,8 @@ test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
   local no_psql_path="${TMP_DIR}/online-existing-cloud-no-psql-path"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
-  write_existing_cloud_config "${config}"
+  write_existing_cloud_config "${config}" "${kubeconfig}"
+  write_kubeconfig_fixture "${kubeconfig}"
   write_path_without_psql "${no_psql_path}"
   ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
 
@@ -1997,7 +2019,7 @@ test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
   assert_contains "${out}" "psql not found; app database connectivity was not verified"
   assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
   assert_contains "${report}" '"overallStatus": "partial"'
-  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${kubeconfig} --context production get namespace agentsmith"
   assert_not_contains "${call_log}" "install-k3s"
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "postgres.yaml"
@@ -2193,13 +2215,15 @@ test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation() {
 test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres() {
   local cache="${TMP_DIR}/offline-cache-existing-cloud"
   local config="${TMP_DIR}/substrates-existing-cloud.yaml"
+  local kubeconfig="${TMP_DIR}/existing-cloud-kubeconfig"
   local output="${TMP_DIR}/offline-existing-cloud-out"
   local out="${TMP_DIR}/install-offline-existing-cloud.out"
   local call_log="${TMP_DIR}/existing-cloud-call.log"
   local stub_bin="${TMP_DIR}/existing-cloud-bin"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
-  write_existing_cloud_config "${config}"
+  write_existing_cloud_config "${config}" "${kubeconfig}"
+  write_kubeconfig_fixture "${kubeconfig}"
   mkdir -p "${stub_bin}"
   cat >"${stub_bin}/psql" <<'EOF_PSQL'
 #!/usr/bin/env bash
@@ -2246,6 +2270,7 @@ EOF_PSQL
 test_existing_cloud_offline_install_fails_when_juicefs_csidriver_is_missing() {
   local cache="${TMP_DIR}/offline-cache-existing-cloud-missing-csidriver"
   local config="${TMP_DIR}/substrates-existing-cloud-missing-csidriver.yaml"
+  local kubeconfig="${TMP_DIR}/existing-cloud-missing-csidriver-kubeconfig"
   local output="${TMP_DIR}/offline-existing-cloud-missing-csidriver-out"
   local out="${TMP_DIR}/install-offline-existing-cloud-missing-csidriver.out"
   local report="${output}/doctor-report.json"
@@ -2253,7 +2278,8 @@ test_existing_cloud_offline_install_fails_when_juicefs_csidriver_is_missing() {
   local stub_bin="${TMP_DIR}/existing-cloud-missing-csidriver-bin"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
-  write_existing_cloud_config "${config}"
+  write_existing_cloud_config "${config}" "${kubeconfig}"
+  write_kubeconfig_fixture "${kubeconfig}"
   mkdir -p "${stub_bin}"
   cat >"${stub_bin}/psql" <<'EOF_PSQL'
 #!/usr/bin/env bash
@@ -2276,8 +2302,8 @@ EOF_PSQL
   assert_contains "${out}" "live JuiceFS CSIDriver csi.juicefs.com is missing"
   assert_contains "${report}" '"overallStatus": "failed"'
   assert_contains "${report}" "live JuiceFS CSIDriver csi.juicefs.com is missing"
-  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
-  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get csidriver csi.juicefs.com"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${kubeconfig} --context production get namespace agentsmith"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${kubeconfig} --context production get csidriver csi.juicefs.com"
   assert_not_contains "${call_log}" "get storageclass agentsmith-lite-juicefs-rwx"
   assert_not_contains "${call_log}" "agentsmith-lite-rwx-smoke"
   assert_not_contains "${call_log}" "install-k3s"
@@ -2310,6 +2336,7 @@ EOF_PSQL
 test_existing_cloud_offline_install_fails_without_psql() {
   local cache="${TMP_DIR}/offline-cache-existing-cloud-no-psql"
   local config="${TMP_DIR}/substrates-existing-cloud-no-psql.yaml"
+  local kubeconfig="${TMP_DIR}/existing-cloud-no-psql-kubeconfig"
   local output="${TMP_DIR}/offline-existing-cloud-no-psql-out"
   local out="${TMP_DIR}/install-offline-existing-cloud-no-psql.out"
   local report="${output}/doctor-report.json"
@@ -2317,7 +2344,8 @@ test_existing_cloud_offline_install_fails_without_psql() {
   local no_psql_path="${TMP_DIR}/existing-cloud-no-psql-path"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
-  write_existing_cloud_config "${config}"
+  write_existing_cloud_config "${config}" "${kubeconfig}"
+  write_kubeconfig_fixture "${kubeconfig}"
   write_path_without_psql "${no_psql_path}"
   ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
 
@@ -2337,7 +2365,7 @@ test_existing_cloud_offline_install_fails_without_psql() {
   assert_contains "${out}" "psql not found; app database connectivity was not verified"
   assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
   assert_contains "${report}" '"overallStatus": "partial"'
-  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${kubeconfig} --context production get namespace agentsmith"
   assert_not_contains "${call_log}" "install-k3s"
   assert_not_contains "${call_log}" "import-images"
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
@@ -2880,6 +2908,57 @@ EOF_PSQL
   assert_not_contains "${out}" "postgresql://"
   assert_not_contains "${report}" "postgresql://"
   pass "S7 doctor live mode fails instead of going green when S3/RWX probe images are missing"
+}
+
+test_substrate_only_doctor_live_fails_before_kubectl_when_kubeconfig_is_unreadable() {
+  local env_dir="${TMP_DIR}/doctor-live-unreadable-kubeconfig-env"
+  local stub_bin="${TMP_DIR}/doctor-live-unreadable-kubeconfig-bin"
+  local report="${TMP_DIR}/doctor-live-unreadable-kubeconfig-report.json"
+  local out="${TMP_DIR}/doctor-live-unreadable-kubeconfig.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-unreadable-kubeconfig-kubectl.log"
+  local missing_kubeconfig="${env_dir}/missing-kubeconfig"
+  local status
+  write_valid_env_pair "${env_dir}"
+  replace_env_value "${env_dir}/substrate.env" KUBECONFIG_PATH "${missing_kubeconfig}"
+  mkdir -p "${stub_bin}"
+  : >"${kubectl_log}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+exit 42
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when KUBECONFIG_PATH is unreadable, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "k8s"'
+  assert_contains "${report}" '"status": "failed"'
+  assert_contains "${report}" "KUBECONFIG_PATH is not readable: ${missing_kubeconfig}"
+  assert_contains "${out}" "KUBECONFIG_PATH is not readable: ${missing_kubeconfig}"
+  [[ ! -s "${kubectl_log}" ]] || fail "doctor live mode should fail unreadable KUBECONFIG_PATH before calling kubectl"
+  assert_not_contains "${kubectl_log}" "kubectl "
+  assert_not_contains "${kubectl_log}" "agentsmith-lite-s3-probe"
+  assert_not_contains "${kubectl_log}" "agentsmith-lite-rwx-smoke"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-access-key"
+  assert_not_contains "${report}" "minio-secret-value"
+  pass "S7 doctor live mode fails unreadable KUBECONFIG_PATH before kubectl or live mutations"
 }
 
 test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound() {
@@ -3749,6 +3828,7 @@ test_download_online_rejects_mutable_rwx_smoke_image_ref
 test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing
+test_substrate_only_doctor_live_fails_before_kubectl_when_kubeconfig_is_unreadable
 test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound
 test_substrate_only_doctor_live_fails_when_juicefs_csidriver_is_missing
 test_substrate_only_doctor_live_fails_and_cleans_up_when_s3_probe_wait_fails

@@ -268,11 +268,15 @@ kubectl_args=()
 kubectl_cmd=()
 kubectl_available=false
 cluster_reachable=false
+kubeconfig_unreadable=false
 
 if [[ "${dry_run}" == "true" ]]; then
   add_check "k8s" "passed" "dry-run static: namespace is configured as ${namespace}"
 else
-  if [[ -n "${KUBECTL_BIN:-}" ]]; then
+  if [[ -n "${kubeconfig_path}" && ( ! -f "${kubeconfig_path}" || ! -r "${kubeconfig_path}" ) ]]; then
+    kubeconfig_unreadable=true
+    add_check "k8s" "failed" "KUBECONFIG_PATH is not readable: ${kubeconfig_path}"
+  elif [[ -n "${KUBECTL_BIN:-}" ]]; then
     if [[ -x "${KUBECTL_BIN}" ]]; then
       kubectl_cmd=("${KUBECTL_BIN}")
       kubectl_available=true
@@ -315,6 +319,8 @@ doctor_check_postgres_url \
 if [[ -n "${s3_endpoint}" && -n "${s3_region}" && -n "${s3_bucket}" && -n "${s3_force_path_style}" && -n "${s3_access}" && -n "${s3_secret}" ]]; then
   if [[ "${dry_run}" == "true" ]]; then
     add_check "s3" "passed" "dry-run static: S3 endpoint, region, bucket, path-style, and key presence are valid; skipped read/write/delete probe" "substrate-csi-secret"
+  elif [[ "${kubeconfig_unreadable}" == "true" ]]; then
+    add_check "s3" "partial" "KUBECONFIG_PATH is not readable; live S3 read/write/delete probe was not verified" "substrate-csi-secret"
   elif [[ "${kubectl_available}" != "true" ]]; then
     add_check "s3" "partial" "kubectl not found; live S3 read/write/delete probe was not verified" "substrate-csi-secret"
   elif [[ "${cluster_reachable}" != "true" ]]; then
@@ -340,6 +346,9 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
     if [[ "${dry_run}" == "true" ]]; then
       add_check "juicefs-csi" "passed" "dry-run static: rendered JuiceFS Secret, StorageClass, and PVC contract is valid" "substrate-csi-secret"
       add_check "rwx" "passed" "dry-run static: PVC contract requests ReadWriteMany; skipped two-Job RWX smoke"
+    elif [[ "${kubeconfig_unreadable}" == "true" ]]; then
+      add_check "juicefs-csi" "partial" "KUBECONFIG_PATH is not readable; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
+      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires a readable KUBECONFIG_PATH; RWX was not verified"
     elif [[ "${kubectl_available}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "kubectl not found; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
       add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires kubectl; RWX was not verified"

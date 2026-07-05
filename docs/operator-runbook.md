@@ -50,6 +50,8 @@ Current behavior is intentionally layered:
   CSIDriver plus JuiceFS StorageClass/Secret/PVC, the PVC phase being `Bound`,
   and a two-Job RWX smoke that mounts the configured PVC from writer and reader
   Jobs.
+- If `KUBECONFIG_PATH` is configured for live doctor, it must point to a
+  readable file before any kubectl-backed S3 or RWX mutation probe can run.
 - Checks that cannot be verified are reported as `partial` or `failed`; skipped
   live checks are not treated as a green pass. If S3 config is present and the
   cluster is reachable, a missing or mutable S3 probe image is a failure.
