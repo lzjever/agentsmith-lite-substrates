@@ -233,9 +233,10 @@ write_p1_offline_cache() {
   mkdir -p "${dir}/bin" "${dir}/charts" "${dir}/images/k3s" "${dir}/images/oci" "${dir}/manifests/namespace-bootstrap" "${dir}/scripts"
   printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/bin/k3s"
   printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/bin/kubectl"
+  printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/bin/helm"
   printf '#!/usr/bin/env sh\nexit 0\n' >"${dir}/scripts/install-k3s.sh"
   printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf "import-images dry-run\\n"\n' >"${dir}/scripts/import-images.sh"
-  chmod +x "${dir}/bin/k3s" "${dir}/bin/kubectl" "${dir}/scripts/install-k3s.sh" "${dir}/scripts/import-images.sh"
+  chmod +x "${dir}/bin/k3s" "${dir}/bin/kubectl" "${dir}/bin/helm" "${dir}/scripts/install-k3s.sh" "${dir}/scripts/import-images.sh"
   printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: agentsmith\n' >"${dir}/manifests/namespace-bootstrap/namespace.yaml"
   printf 'k3s airgap archive fixture\n' >"${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst"
   printf 'juicefs csi chart fixture\n' >"${dir}/charts/juicefs-csi.tgz"
@@ -243,10 +244,16 @@ write_p1_offline_cache() {
   printf 'minio oci archive fixture\n' >"${dir}/images/oci/minio.tar"
   printf 'minio client oci archive fixture\n' >"${dir}/images/oci/minio-client.tar"
   printf 'juicefs csi oci archive fixture\n' >"${dir}/images/oci/juicefs-csi.tar"
+  printf 'juicefs csi liveness probe oci archive fixture\n' >"${dir}/images/oci/juicefs-csi-liveness-probe.tar"
+  printf 'juicefs csi node driver registrar oci archive fixture\n' >"${dir}/images/oci/juicefs-csi-node-driver-registrar.tar"
+  printf 'juicefs csi provisioner oci archive fixture\n' >"${dir}/images/oci/juicefs-csi-provisioner.tar"
+  printf 'juicefs csi resizer oci archive fixture\n' >"${dir}/images/oci/juicefs-csi-resizer.tar"
 
-  local k3s_sum kubectl_sum install_sum import_sum namespace_sum airgap_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum lock_sum manifest_sum
+  local k3s_sum kubectl_sum helm_sum install_sum import_sum namespace_sum airgap_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum
+  local liveness_sum registrar_sum provisioner_sum resizer_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   kubectl_sum="$(sha256_file "${dir}/bin/kubectl")"
+  helm_sum="$(sha256_file "${dir}/bin/helm")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
   import_sum="$(sha256_file "${dir}/scripts/import-images.sh")"
   namespace_sum="$(sha256_file "${dir}/manifests/namespace-bootstrap/namespace.yaml")"
@@ -256,6 +263,10 @@ write_p1_offline_cache() {
   minio_sum="$(sha256_file "${dir}/images/oci/minio.tar")"
   minio_client_sum="$(sha256_file "${dir}/images/oci/minio-client.tar")"
   juicefs_sum="$(sha256_file "${dir}/images/oci/juicefs-csi.tar")"
+  liveness_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-liveness-probe.tar")"
+  registrar_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar")"
+  provisioner_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-provisioner.tar")"
+  resizer_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-resizer.tar")"
 
   if [[ "${variant}" == "missing-image-sha" ]]; then
     cat >"${dir}/images/images.lock" <<EOF_LOCK
@@ -273,7 +284,7 @@ images:
     archive: images/oci/minio-client.tar
     sha256: ${minio_client_sum}
   - name: juicefs-csi
-    image: docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    image: docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     archive: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
 EOF_LOCK
@@ -301,9 +312,25 @@ EOF_LOCK
       fi
       cat <<EOF_LOCK
   - name: juicefs-csi
-    image: docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    image: docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     archive: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
+  - name: juicefs-csi-liveness-probe
+    image: registry.k8s.io/sig-storage/livenessprobe:v2.12.0@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    archive: images/oci/juicefs-csi-liveness-probe.tar
+    sha256: ${liveness_sum}
+  - name: juicefs-csi-node-driver-registrar
+    image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    archive: images/oci/juicefs-csi-node-driver-registrar.tar
+    sha256: ${registrar_sum}
+  - name: juicefs-csi-provisioner
+    image: registry.k8s.io/sig-storage/csi-provisioner:v2.2.2@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    archive: images/oci/juicefs-csi-provisioner.tar
+    sha256: ${provisioner_sum}
+  - name: juicefs-csi-resizer
+    image: registry.k8s.io/sig-storage/csi-resizer:v1.9.0@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    archive: images/oci/juicefs-csi-resizer.tar
+    sha256: ${resizer_sum}
 EOF_LOCK
     } >"${dir}/images/images.lock"
   fi
@@ -326,6 +353,9 @@ artifacts:
   - path: bin/kubectl
     sha256: ${kubectl_sum}
     kind: kubectl-binary
+  - path: bin/helm
+    sha256: ${helm_sum}
+    kind: helm-binary
   - path: scripts/import-images.sh
     sha256: ${import_sum}
     kind: script
@@ -356,6 +386,18 @@ EOF_MANIFEST
   - path: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
     kind: oci-archive
+  - path: images/oci/juicefs-csi-liveness-probe.tar
+    sha256: ${liveness_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi-node-driver-registrar.tar
+    sha256: ${registrar_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi-provisioner.tar
+    sha256: ${provisioner_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi-resizer.tar
+    sha256: ${resizer_sum}
+    kind: oci-archive
 EOF_MANIFEST
   } >"${dir}/manifest.yaml"
   manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
@@ -366,6 +408,7 @@ ${k3s_sum}  bin/k3s
 ${install_sum}  scripts/install-k3s.sh
 ${airgap_sum}  images/k3s/k3s-airgap-images-amd64.tar.zst
 ${kubectl_sum}  bin/kubectl
+${helm_sum}  bin/helm
 ${import_sum}  scripts/import-images.sh
 ${namespace_sum}  manifests/namespace-bootstrap/namespace.yaml
 ${lock_sum}  images/images.lock
@@ -380,6 +423,10 @@ EOF_SUMS
     fi
     cat <<EOF_SUMS
 ${juicefs_sum}  images/oci/juicefs-csi.tar
+${liveness_sum}  images/oci/juicefs-csi-liveness-probe.tar
+${registrar_sum}  images/oci/juicefs-csi-node-driver-registrar.tar
+${provisioner_sum}  images/oci/juicefs-csi-provisioner.tar
+${resizer_sum}  images/oci/juicefs-csi-resizer.tar
 EOF_SUMS
   } >"${dir}/checksums.txt"
 }
@@ -601,6 +648,44 @@ remove_images_lock_archive_and_sha_for_name() {
   mv "${tmp}" "${cache}/images/images.lock"
 }
 
+remove_images_lock_entry_for_name() {
+  local cache="$1"
+  local name="$2"
+  local tmp="${cache}/images/images.lock.tmp"
+  awk -v wanted="${name}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    function flush() {
+      if (block != "") {
+        if (entry_name != wanted) {
+          printf "%s", block
+        }
+        block=""
+        entry_name=""
+      }
+    }
+    /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      flush()
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", value)
+      entry_name=trim(value)
+      block=$0 "\n"
+      next
+    }
+    block != "" {
+      block=block $0 "\n"
+      next
+    }
+    { print }
+    END { flush() }
+  ' "${cache}/images/images.lock" >"${tmp}"
+  mv "${tmp}" "${cache}/images/images.lock"
+}
+
 replace_images_lock_image_ref() {
   local cache="$1"
   local name="$2"
@@ -719,8 +804,43 @@ esac
 exit 0
 EOF_KUBECTL
 
-  chmod +x "${cache}/scripts/install-k3s.sh" "${cache}/scripts/import-images.sh" "${cache}/bin/kubectl"
-  refresh_cache_artifacts "${cache}" "scripts/install-k3s.sh" "scripts/import-images.sh" "bin/kubectl"
+  cat >"${cache}/bin/helm" <<'EOF_HELM'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${CALL_LOG:?CALL_LOG is required}"
+printf 'helm %s\n' "$*" >>"${CALL_LOG}"
+case "$*" in
+  *postgresql://*|*postgres://*|*postgres-secret-value*|*juicefs-secret-value*|*minio-secret-value*|*minio-access-key*|*S3_SECRET_KEY*|*JUICEFS_META_URL*) exit 64 ;;
+esac
+chart_seen=false
+values_seen=false
+previous=""
+for arg in "$@"; do
+  if [[ "${arg}" == */charts/juicefs-csi.tgz ]]; then
+    [[ -f "${arg}" ]] || exit 61
+    chart_seen=true
+  fi
+  if [[ "${previous}" == "-f" ]]; then
+    [[ -f "${arg}" ]] || exit 62
+    case "$(basename "${arg}")" in
+      juicefs-csi-values.yaml) values_seen=true ;;
+      *) exit 63 ;;
+    esac
+  fi
+  previous="${arg}"
+done
+[[ "${chart_seen}" == "true" ]] || exit 65
+[[ "${values_seen}" == "true" ]] || exit 66
+[[ " $* " == *" upgrade --install juicefs-csi-driver "* ]] || exit 67
+[[ " $* " == *" --namespace kube-system "* ]] || exit 68
+[[ " $* " == *" --create-namespace "* ]] || exit 69
+[[ " $* " == *" --wait "* ]] || exit 70
+[[ " $* " == *" --timeout "* ]] || exit 71
+exit 0
+EOF_HELM
+
+  chmod +x "${cache}/scripts/install-k3s.sh" "${cache}/scripts/import-images.sh" "${cache}/bin/kubectl" "${cache}/bin/helm"
+  refresh_cache_artifacts "${cache}" "scripts/install-k3s.sh" "scripts/import-images.sh" "bin/kubectl" "bin/helm"
 }
 
 write_forbidden_path_bin() {
@@ -752,35 +872,54 @@ write_downloader_fixtures() {
   printf '#!/usr/bin/env sh\nprintf "install k3s fixture\\n"\n' >"${dir}/install-k3s.sh"
   printf 'k3s airgap archive fixture from downloader\n' >"${dir}/k3s-airgap-images-amd64.tar.zst"
   printf '#!/usr/bin/env sh\nprintf "kubectl fixture\\n"\n' >"${dir}/kubectl"
+  printf '#!/usr/bin/env sh\nprintf "helm fixture\\n"\n' >"${dir}/helm"
   printf 'juicefs csi chart fixture from downloader\n' >"${dir}/juicefs-csi.tgz"
   printf 'postgres oci archive fixture from downloader\n' >"${dir}/postgres.tar"
   printf 'minio oci archive fixture from downloader\n' >"${dir}/minio.tar"
   printf 'minio client oci archive fixture from downloader\n' >"${dir}/minio-client.tar"
   printf 'juicefs csi oci archive fixture from downloader\n' >"${dir}/juicefs-csi.tar"
+  printf 'juicefs csi liveness probe oci archive fixture from downloader\n' >"${dir}/juicefs-csi-liveness-probe.tar"
+  printf 'juicefs csi node driver registrar oci archive fixture from downloader\n' >"${dir}/juicefs-csi-node-driver-registrar.tar"
+  printf 'juicefs csi provisioner oci archive fixture from downloader\n' >"${dir}/juicefs-csi-provisioner.tar"
+  printf 'juicefs csi resizer oci archive fixture from downloader\n' >"${dir}/juicefs-csi-resizer.tar"
 }
 
 write_artifact_lock() {
   local fixtures="$1"
   local lock_file="$2"
   local variant="${3:-valid}"
-  local k3s_sha install_sha airgap_sha kubectl_sha csi_chart_sha postgres_sha minio_sha minio_client_sha juicefs_sha
+  local k3s_sha install_sha airgap_sha kubectl_sha helm_sha csi_chart_sha postgres_sha minio_sha minio_client_sha juicefs_sha
+  local liveness_sha registrar_sha provisioner_sha resizer_sha
   k3s_sha="$(sha256_file "${fixtures}/k3s")"
   install_sha="$(sha256_file "${fixtures}/install-k3s.sh")"
   airgap_sha="$(sha256_file "${fixtures}/k3s-airgap-images-amd64.tar.zst")"
   kubectl_sha="$(sha256_file "${fixtures}/kubectl")"
+  helm_sha="$(sha256_file "${fixtures}/helm")"
   csi_chart_sha="$(sha256_file "${fixtures}/juicefs-csi.tgz")"
   postgres_sha="$(sha256_file "${fixtures}/postgres.tar")"
   minio_sha="$(sha256_file "${fixtures}/minio.tar")"
   minio_client_sha="$(sha256_file "${fixtures}/minio-client.tar")"
   juicefs_sha="$(sha256_file "${fixtures}/juicefs-csi.tar")"
+  liveness_sha="$(sha256_file "${fixtures}/juicefs-csi-liveness-probe.tar")"
+  registrar_sha="$(sha256_file "${fixtures}/juicefs-csi-node-driver-registrar.tar")"
+  provisioner_sha="$(sha256_file "${fixtures}/juicefs-csi-provisioner.tar")"
+  resizer_sha="$(sha256_file "${fixtures}/juicefs-csi-resizer.tar")"
 
   local postgres_image="docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   local minio_client_image="quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  local juicefs_csi_image="docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  local liveness_image="registry.k8s.io/sig-storage/livenessprobe:v2.12.0@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   if [[ "${variant}" == "mutable-image" ]]; then
     postgres_image="docker.io/library/postgres:16"
   fi
   if [[ "${variant}" == "mutable-minio-client-image" ]]; then
     minio_client_image="quay.io/minio/mc:latest"
+  fi
+  if [[ "${variant}" == "mutable-csi-sidecar-image" ]]; then
+    liveness_image="registry.k8s.io/sig-storage/livenessprobe:latest"
+  fi
+  if [[ "${variant}" == "untagged-helm-image" ]]; then
+    juicefs_csi_image="docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   fi
   if [[ "${variant}" == "sha-mismatch" ]]; then
     k3s_sha="0000000000000000000000000000000000000000000000000000000000000000"
@@ -795,6 +934,8 @@ K3S_AIRGAP_IMAGES_URL=$(file_url "${fixtures}/k3s-airgap-images-amd64.tar.zst")
 K3S_AIRGAP_IMAGES_SHA256=${airgap_sha}
 KUBECTL_BINARY_URL=$(file_url "${fixtures}/kubectl")
 KUBECTL_BINARY_SHA256=${kubectl_sha}
+HELM_BINARY_URL=$(file_url "${fixtures}/helm")
+HELM_BINARY_SHA256=${helm_sha}
 JUICEFS_CSI_ARTIFACT_URL=$(file_url "${fixtures}/juicefs-csi.tgz")
 JUICEFS_CSI_ARTIFACT_SHA256=${csi_chart_sha}
 POSTGRES_IMAGE=${postgres_image}
@@ -806,9 +947,21 @@ MINIO_ARCHIVE_SHA256=${minio_sha}
 MINIO_CLIENT_IMAGE=${minio_client_image}
 MINIO_CLIENT_ARCHIVE_URL=$(file_url "${fixtures}/minio-client.tar")
 MINIO_CLIENT_ARCHIVE_SHA256=${minio_client_sha}
-JUICEFS_CSI_IMAGE=docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+JUICEFS_CSI_IMAGE=${juicefs_csi_image}
 JUICEFS_CSI_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi.tar")
 JUICEFS_CSI_ARCHIVE_SHA256=${juicefs_sha}
+JUICEFS_CSI_LIVENESS_PROBE_IMAGE=${liveness_image}
+JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi-liveness-probe.tar")
+JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_SHA256=${liveness_sha}
+JUICEFS_CSI_NODE_DRIVER_REGISTRAR_IMAGE=registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi-node-driver-registrar.tar")
+JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_SHA256=${registrar_sha}
+JUICEFS_CSI_PROVISIONER_IMAGE=registry.k8s.io/sig-storage/csi-provisioner:v2.2.2@sha256:1111111111111111111111111111111111111111111111111111111111111111
+JUICEFS_CSI_PROVISIONER_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi-provisioner.tar")
+JUICEFS_CSI_PROVISIONER_ARCHIVE_SHA256=${provisioner_sha}
+JUICEFS_CSI_RESIZER_IMAGE=registry.k8s.io/sig-storage/csi-resizer:v1.9.0@sha256:2222222222222222222222222222222222222222222222222222222222222222
+JUICEFS_CSI_RESIZER_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi-resizer.tar")
+JUICEFS_CSI_RESIZER_ARCHIVE_SHA256=${resizer_sha}
 EOF_LOCK
 
   if [[ "${variant}" == "missing-key" ]]; then
@@ -819,6 +972,11 @@ EOF_LOCK
   if [[ "${variant}" == "missing-minio-client-key" ]]; then
     local tmp="${lock_file}.tmp"
     grep -v '^MINIO_CLIENT_IMAGE=' "${lock_file}" >"${tmp}"
+    mv "${tmp}" "${lock_file}"
+  fi
+  if [[ "${variant}" == "missing-csi-sidecar-key" ]]; then
+    local tmp="${lock_file}.tmp"
+    grep -v '^JUICEFS_CSI_LIVENESS_PROBE_IMAGE=' "${lock_file}" >"${tmp}"
     mv "${tmp}" "${lock_file}"
   fi
   if [[ "${variant}" == "mutable-minio-client-image" ]]; then
@@ -1032,6 +1190,63 @@ test_p1_real_offline_cache_requires_artifacts_and_archive_sha() {
   pass "S5 p1-real offline-cache contract requires k3s, kubectl, airgap, CSI, dependency images, and archive sha"
 }
 
+test_p1_real_offline_cache_requires_cached_helm() {
+  local cache="${TMP_DIR}/offline-cache-p1-missing-helm"
+  local config="${TMP_DIR}/substrates-p1-missing-helm.yaml"
+  local output="${TMP_DIR}/offline-p1-missing-helm-out"
+  local out="${TMP_DIR}/install-offline-p1-missing-helm.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  remove_manifest_artifact_entry "${cache}/manifest.yaml" "bin/helm"
+  refresh_manifest_checksum_entry "${cache}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a p1-real cache missing bin/helm"
+  fi
+  assert_contains "${out}" "missing required p1-real artifact bin/helm with kind helm-binary"
+  pass "P6.5 p1-real offline-cache contract requires cached Helm binary"
+}
+
+test_p1_real_offline_cache_requires_csi_sidecar_archives_and_lock_entries() {
+  local config="${TMP_DIR}/substrates-p1-missing-csi-sidecar.yaml"
+  local spec name archive cache output out
+  write_config "${config}"
+
+  for spec in \
+    "juicefs-csi-liveness-probe|images/oci/juicefs-csi-liveness-probe.tar" \
+    "juicefs-csi-node-driver-registrar|images/oci/juicefs-csi-node-driver-registrar.tar" \
+    "juicefs-csi-provisioner|images/oci/juicefs-csi-provisioner.tar" \
+    "juicefs-csi-resizer|images/oci/juicefs-csi-resizer.tar"
+  do
+    IFS='|' read -r name archive <<<"${spec}"
+    cache="${TMP_DIR}/offline-cache-p1-missing-${name}"
+    output="${TMP_DIR}/offline-p1-missing-${name}-out"
+    out="${TMP_DIR}/install-offline-p1-missing-${name}.out"
+    write_p1_offline_cache "${cache}"
+    remove_images_lock_entry_for_name "${cache}" "${name}"
+    refresh_cache_artifacts "${cache}" "images/images.lock"
+
+    if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+      fail "install-offline accepted a p1-real cache missing ${name} images.lock entry"
+    fi
+    assert_contains "${out}" "p1-real images.lock is missing dependency image entry: ${name}"
+
+    cache="${TMP_DIR}/offline-cache-p1-missing-${name}-manifest"
+    output="${TMP_DIR}/offline-p1-missing-${name}-manifest-out"
+    out="${TMP_DIR}/install-offline-p1-missing-${name}-manifest.out"
+    write_p1_offline_cache "${cache}"
+    remove_manifest_artifact_entry "${cache}/manifest.yaml" "${archive}"
+    refresh_manifest_checksum_entry "${cache}"
+
+    if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+      fail "install-offline accepted a p1-real cache missing ${archive} from manifest artifacts"
+    fi
+    assert_contains "${out}" "missing required p1-real artifact ${archive} with kind oci-archive"
+  done
+
+  pass "P6.5 p1-real offline-cache contract requires CSI sidecar archives and lock entries"
+}
+
 test_p1_real_offline_cache_requires_minio_client_oci_archive() {
   local cache="${TMP_DIR}/offline-cache-p1-missing-minio-client"
   local config="${TMP_DIR}/substrates-p1-missing-minio-client.yaml"
@@ -1157,6 +1372,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   test "$(stat -c '%a' "${rendered}/minio-secret.yaml")" = "600" || fail "install-offline did not keep rendered MinIO Secret owner-only"
   test -f "${rendered}/minio-bucket-init-job.yaml" || fail "install-offline did not render MinIO bucket init Job"
   test -f "${rendered}/juicefs-format-job.yaml" || fail "install-offline did not render JuiceFS format Job"
+  test -f "${rendered}/juicefs-csi-values.yaml" || fail "install-offline did not render JuiceFS CSI Helm values"
   assert_contains "${rendered}/postgres-secret.yaml" "name: agentsmith-lite-postgres"
   assert_contains "${rendered}/postgres-secret.yaml" "username:"
   assert_contains "${rendered}/postgres-secret.yaml" "password:"
@@ -1184,7 +1400,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "minio-access-key"
   assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "minio-secret-value"
   assert_contains "${rendered}/juicefs-format-job.yaml" "name: agentsmith-lite-juicefs-format"
-  assert_contains "${rendered}/juicefs-format-job.yaml" "image: docker.io/juicedata/juicefs-csi-driver@sha256:"
+  assert_contains "${rendered}/juicefs-format-job.yaml" "image: docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:"
   assert_contains "${rendered}/juicefs-format-job.yaml" "name: JUICEFS_VOLUME_NAME"
   assert_contains "${rendered}/juicefs-format-job.yaml" "name: JUICEFS_META_URL"
   assert_contains "${rendered}/juicefs-format-job.yaml" "name: JUICEFS_BUCKET"
@@ -1203,11 +1419,35 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${rendered}/juicefs-format-job.yaml" "juicefs-secret-value"
   assert_not_contains "${rendered}/juicefs-format-job.yaml" "minio-access-key"
   assert_not_contains "${rendered}/juicefs-format-job.yaml" "minio-secret-value"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "driverName: csi.juicefs.com"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "repository: docker.io/juicedata/juicefs-csi-driver"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" 'tag: "v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"'
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "livenessProbeImage:"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "repository: registry.k8s.io/sig-storage/livenessprobe"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" 'tag: "v2.12.0@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"'
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "nodeDriverRegistrarImage:"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "repository: registry.k8s.io/sig-storage/csi-node-driver-registrar"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "csiProvisionerImage:"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "repository: registry.k8s.io/sig-storage/csi-provisioner"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "csiResizerImage:"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "repository: registry.k8s.io/sig-storage/csi-resizer"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "dashboard:"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "snapshot:"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "storageClasses:"
+  assert_contains "${rendered}/juicefs-csi-values.yaml" "enabled: false"
+  assert_not_contains "${rendered}/juicefs-csi-values.yaml" "postgresql://juicefs:"
+  assert_not_contains "${rendered}/juicefs-csi-values.yaml" "JUICEFS_META_URL"
+  assert_not_contains "${rendered}/juicefs-csi-values.yaml" "S3_SECRET_KEY"
+  assert_not_contains "${rendered}/juicefs-csi-values.yaml" "postgres-secret-value"
+  assert_not_contains "${rendered}/juicefs-csi-values.yaml" "juicefs-secret-value"
+  assert_not_contains "${rendered}/juicefs-csi-values.yaml" "minio-access-key"
+  assert_not_contains "${rendered}/juicefs-csi-values.yaml" "minio-secret-value"
 
   assert_line_order "${call_log}" \
     "install-k3s" \
     "import-images args=" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${cache}/manifests/namespace-bootstrap/namespace.yaml" \
+    "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz --namespace kube-system --create-namespace --wait --timeout 180s -f ${rendered}/juicefs-csi-values.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres-secret.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/postgres.yaml" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/postgres --timeout=180s" \
@@ -1227,6 +1467,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith logs job/agentsmith-lite-juicefs-format" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith delete -f ${rendered}/juicefs-format-job.yaml --ignore-not-found=true" \
     "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml"
+  assert_contains "${call_log}" "helm --kubeconfig ${output}/kubeconfig --context agentsmith-lite upgrade --install juicefs-csi-driver ${cache}/charts/juicefs-csi.tgz"
   assert_contains "${call_log}" "-Atc \"select 1\""
   assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
   assert_contains "${call_log}" "INSTALL_K3S_EXEC=server --write-kubeconfig ${output}/kubeconfig --write-kubeconfig-mode 600"
@@ -1285,7 +1526,7 @@ test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs() {
   local env_dir="${TMP_DIR}/juicefs-format-env"
   local output="${TMP_DIR}/juicefs-format-job.yaml"
   local out="${TMP_DIR}/juicefs-format-render.out"
-  local image="docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  local image="docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   write_valid_env_pair "${env_dir}"
 
   bash -c 'set -euo pipefail; source "$1/scripts/lib/juicefs.sh"; render_juicefs_format_job "$2" "$3" "$1/manifests/juicefs-csi" "$4" "$5"' \
@@ -1609,19 +1850,38 @@ test_download_online_generates_p1_real_cache_from_artifact_lock() {
   assert_contains "${cache}/manifest.yaml" "cacheMode: p1-real"
   assert_contains "${cache}/manifest.yaml" "path: scripts/import-images.sh"
   assert_contains "${cache}/manifest.yaml" "path: manifests/namespace-bootstrap/namespace.yaml"
+  assert_contains "${cache}/manifest.yaml" "path: bin/helm"
+  assert_contains "${cache}/manifest.yaml" "path: images/oci/juicefs-csi-liveness-probe.tar"
+  assert_contains "${cache}/manifest.yaml" "path: images/oci/juicefs-csi-node-driver-registrar.tar"
+  assert_contains "${cache}/manifest.yaml" "path: images/oci/juicefs-csi-provisioner.tar"
+  assert_contains "${cache}/manifest.yaml" "path: images/oci/juicefs-csi-resizer.tar"
   assert_contains "${cache}/checksums.txt" "scripts/import-images.sh"
   assert_contains "${cache}/checksums.txt" "manifests/namespace-bootstrap/namespace.yaml"
+  assert_contains "${cache}/checksums.txt" "bin/helm"
+  assert_contains "${cache}/checksums.txt" "images/oci/juicefs-csi-liveness-probe.tar"
   assert_contains "${cache}/images/images.lock" "image: docker.io/library/postgres@sha256:"
   assert_contains "${cache}/images/images.lock" "archive: images/oci/postgres.tar"
   assert_contains "${cache}/images/images.lock" "name: minio-client"
   assert_contains "${cache}/images/images.lock" "image: quay.io/minio/mc@sha256:"
   assert_contains "${cache}/images/images.lock" "archive: images/oci/minio-client.tar"
+  assert_contains "${cache}/images/images.lock" "name: juicefs-csi"
+  assert_contains "${cache}/images/images.lock" "image: docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:"
+  assert_contains "${cache}/images/images.lock" "name: juicefs-csi-liveness-probe"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/juicefs-csi-liveness-probe.tar"
+  assert_contains "${cache}/images/images.lock" "name: juicefs-csi-node-driver-registrar"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/juicefs-csi-node-driver-registrar.tar"
+  assert_contains "${cache}/images/images.lock" "name: juicefs-csi-provisioner"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/juicefs-csi-provisioner.tar"
+  assert_contains "${cache}/images/images.lock" "name: juicefs-csi-resizer"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/juicefs-csi-resizer.tar"
+  test -x "${cache}/bin/helm" || fail "download-online did not write executable bin/helm"
   test -x "${cache}/scripts/import-images.sh" || fail "download-online did not write executable scripts/import-images.sh"
   test -f "${cache}/manifests/namespace-bootstrap/namespace.yaml" || fail "download-online did not write namespace bootstrap manifest"
   "${cache}/scripts/import-images.sh" --dry-run >"${import_out}" 2>&1
   assert_contains "${import_out}" "images/images.lock"
   assert_contains "${import_out}" "images/oci/postgres.tar"
   assert_contains "${import_out}" "images/oci/minio-client.tar"
+  assert_contains "${import_out}" "images/oci/juicefs-csi-resizer.tar"
 
   "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${install_out}" 2>&1
   assert_contains "${install_out}" "validated p1-real cache contract"
@@ -1727,6 +1987,53 @@ test_download_online_rejects_mutable_minio_client_image_ref() {
   assert_contains "${out}" "MINIO_CLIENT_IMAGE must be digest-pinned"
   assert_not_contains "${out}" "quay.io/minio/mc:latest"
   pass "P1 downloader requires digest-pinned minio-client image"
+}
+
+test_download_online_requires_csi_sidecar_artifact_lock() {
+  local fixtures="${TMP_DIR}/download-fixtures-missing-csi-sidecar"
+  local lock_file="${TMP_DIR}/offline-artifacts-missing-csi-sidecar.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-missing-csi-sidecar"
+  local out="${TMP_DIR}/download-online-missing-csi-sidecar.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "missing-csi-sidecar-key"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted an artifact lock missing CSI sidecar coordinates"
+  fi
+  assert_contains "${out}" "artifact lock is missing required key JUICEFS_CSI_LIVENESS_PROBE_IMAGE"
+  pass "P6.5 downloader requires CSI sidecar artifact lock coordinates"
+}
+
+test_download_online_rejects_mutable_csi_sidecar_image_ref() {
+  local fixtures="${TMP_DIR}/download-fixtures-mutable-csi-sidecar"
+  local lock_file="${TMP_DIR}/offline-artifacts-mutable-csi-sidecar.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-mutable-csi-sidecar"
+  local out="${TMP_DIR}/download-online-mutable-csi-sidecar.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "mutable-csi-sidecar-image"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted a mutable CSI sidecar image reference"
+  fi
+  assert_contains "${out}" "JUICEFS_CSI_LIVENESS_PROBE_IMAGE must be digest-pinned"
+  assert_not_contains "${out}" "registry.k8s.io/sig-storage/livenessprobe:latest"
+  pass "P6.5 downloader requires digest-pinned CSI sidecar images"
+}
+
+test_download_online_rejects_untagged_helm_consumed_image_ref() {
+  local fixtures="${TMP_DIR}/download-fixtures-untagged-helm-image"
+  local lock_file="${TMP_DIR}/offline-artifacts-untagged-helm-image.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-untagged-helm-image"
+  local out="${TMP_DIR}/download-online-untagged-helm-image.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "untagged-helm-image"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted a Helm-consumed image reference without a tag"
+  fi
+  assert_contains "${out}" "JUICEFS_CSI_IMAGE must include a tag before @sha256 for Helm values rendering"
+  assert_not_contains "${out}" "docker.io/juicedata/juicefs-csi-driver@sha256:"
+  pass "P6.5 downloader rejects Helm-consumed image refs that cannot be split into repository and tag"
 }
 
 test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
@@ -1902,6 +2209,8 @@ test_p1_real_offline_cache_rejects_images_lock_archive_path_escape
 test_offline_cache_scans_urls_before_cache_mode_errors_without_leaking
 test_offline_cache_rejects_url_suffix_fields_with_file_urls
 test_p1_real_offline_cache_requires_artifacts_and_archive_sha
+test_p1_real_offline_cache_requires_cached_helm
+test_p1_real_offline_cache_requires_csi_sidecar_archives_and_lock_entries
 test_p1_real_offline_cache_requires_minio_client_oci_archive
 test_p1_real_offline_cache_requires_minio_client_images_lock_archive_sha
 test_p1_real_offline_cache_rejects_mutable_minio_client_image_ref
@@ -1927,6 +2236,9 @@ test_download_online_rejects_mutable_image_ref
 test_download_online_rejects_missing_required_key
 test_download_online_requires_minio_client_artifact_lock
 test_download_online_rejects_mutable_minio_client_image_ref
+test_download_online_requires_csi_sidecar_artifact_lock
+test_download_online_rejects_mutable_csi_sidecar_image_ref
+test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified
 test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails

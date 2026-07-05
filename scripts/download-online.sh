@@ -131,10 +131,12 @@ write_p1_real_cache() {
 
   artifact_lock_validate_syntax "${lock_file}"
 
-  local k3s_url k3s_sha install_url install_sha airgap_url airgap_sha kubectl_url kubectl_sha
+  local k3s_url k3s_sha install_url install_sha airgap_url airgap_sha kubectl_url kubectl_sha helm_url helm_sha
   local csi_chart_url csi_chart_sha postgres_image postgres_url postgres_sha minio_image minio_url minio_sha
   local minio_client_image minio_client_url minio_client_sha
   local juicefs_image juicefs_url juicefs_sha
+  local liveness_image liveness_url liveness_sha registrar_image registrar_url registrar_sha
+  local provisioner_image provisioner_url provisioner_sha resizer_image resizer_url resizer_sha
   k3s_url="$(artifact_lock_required_url "${lock_file}" "K3S_BINARY_URL")"
   k3s_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_BINARY_SHA256")"
   install_url="$(artifact_lock_required_url "${lock_file}" "K3S_INSTALL_SCRIPT_URL")"
@@ -143,6 +145,8 @@ write_p1_real_cache() {
   airgap_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_AIRGAP_IMAGES_SHA256")"
   kubectl_url="$(artifact_lock_required_url "${lock_file}" "KUBECTL_BINARY_URL")"
   kubectl_sha="$(artifact_lock_required_sha256 "${lock_file}" "KUBECTL_BINARY_SHA256")"
+  helm_url="$(artifact_lock_required_url "${lock_file}" "HELM_BINARY_URL")"
+  helm_sha="$(artifact_lock_required_sha256 "${lock_file}" "HELM_BINARY_SHA256")"
   csi_chart_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_ARTIFACT_URL")"
   csi_chart_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_ARTIFACT_SHA256")"
   postgres_image="$(artifact_lock_required_digest_image "${lock_file}" "POSTGRES_IMAGE")"
@@ -154,9 +158,21 @@ write_p1_real_cache() {
   minio_client_image="$(artifact_lock_required_digest_image "${lock_file}" "MINIO_CLIENT_IMAGE")"
   minio_client_url="$(artifact_lock_required_url "${lock_file}" "MINIO_CLIENT_ARCHIVE_URL")"
   minio_client_sha="$(artifact_lock_required_sha256 "${lock_file}" "MINIO_CLIENT_ARCHIVE_SHA256")"
-  juicefs_image="$(artifact_lock_required_digest_image "${lock_file}" "JUICEFS_CSI_IMAGE")"
+  juicefs_image="$(artifact_lock_required_helm_image "${lock_file}" "JUICEFS_CSI_IMAGE")"
   juicefs_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_ARCHIVE_URL")"
   juicefs_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_ARCHIVE_SHA256")"
+  liveness_image="$(artifact_lock_required_helm_image "${lock_file}" "JUICEFS_CSI_LIVENESS_PROBE_IMAGE")"
+  liveness_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_URL")"
+  liveness_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_SHA256")"
+  registrar_image="$(artifact_lock_required_helm_image "${lock_file}" "JUICEFS_CSI_NODE_DRIVER_REGISTRAR_IMAGE")"
+  registrar_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_URL")"
+  registrar_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_SHA256")"
+  provisioner_image="$(artifact_lock_required_helm_image "${lock_file}" "JUICEFS_CSI_PROVISIONER_IMAGE")"
+  provisioner_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_PROVISIONER_ARCHIVE_URL")"
+  provisioner_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_PROVISIONER_ARCHIVE_SHA256")"
+  resizer_image="$(artifact_lock_required_helm_image "${lock_file}" "JUICEFS_CSI_RESIZER_IMAGE")"
+  resizer_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_RESIZER_ARCHIVE_URL")"
+  resizer_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_RESIZER_ARCHIVE_SHA256")"
 
   prepare_output_dir "${dir}"
 
@@ -164,12 +180,17 @@ write_p1_real_cache() {
   download_verified_artifact "K3S_INSTALL_SCRIPT_URL" "${install_url}" "${install_sha}" "${dir}/scripts/install-k3s.sh"
   download_verified_artifact "K3S_AIRGAP_IMAGES_URL" "${airgap_url}" "${airgap_sha}" "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst"
   download_verified_artifact "KUBECTL_BINARY_URL" "${kubectl_url}" "${kubectl_sha}" "${dir}/bin/kubectl"
+  download_verified_artifact "HELM_BINARY_URL" "${helm_url}" "${helm_sha}" "${dir}/bin/helm"
   download_verified_artifact "JUICEFS_CSI_ARTIFACT_URL" "${csi_chart_url}" "${csi_chart_sha}" "${dir}/charts/juicefs-csi.tgz"
   download_verified_artifact "POSTGRES_ARCHIVE_URL" "${postgres_url}" "${postgres_sha}" "${dir}/images/oci/postgres.tar"
   download_verified_artifact "MINIO_ARCHIVE_URL" "${minio_url}" "${minio_sha}" "${dir}/images/oci/minio.tar"
   download_verified_artifact "MINIO_CLIENT_ARCHIVE_URL" "${minio_client_url}" "${minio_client_sha}" "${dir}/images/oci/minio-client.tar"
   download_verified_artifact "JUICEFS_CSI_ARCHIVE_URL" "${juicefs_url}" "${juicefs_sha}" "${dir}/images/oci/juicefs-csi.tar"
-  chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl"
+  download_verified_artifact "JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_URL" "${liveness_url}" "${liveness_sha}" "${dir}/images/oci/juicefs-csi-liveness-probe.tar"
+  download_verified_artifact "JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_URL" "${registrar_url}" "${registrar_sha}" "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar"
+  download_verified_artifact "JUICEFS_CSI_PROVISIONER_ARCHIVE_URL" "${provisioner_url}" "${provisioner_sha}" "${dir}/images/oci/juicefs-csi-provisioner.tar"
+  download_verified_artifact "JUICEFS_CSI_RESIZER_ARCHIVE_URL" "${resizer_url}" "${resizer_sha}" "${dir}/images/oci/juicefs-csi-resizer.tar"
+  chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl" "${dir}/bin/helm"
 
   cat >"${dir}/scripts/import-images.sh" <<'EOF_IMPORT'
 #!/usr/bin/env bash
@@ -332,11 +353,13 @@ EOF_IMPORT
 
   cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
 
-  local k3s_sum install_sum airgap_sum kubectl_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum lock_sum manifest_sum
+  local k3s_sum install_sum airgap_sum kubectl_sum helm_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum
+  local liveness_sum registrar_sum provisioner_sum resizer_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
   airgap_sum="$(sha256_file "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")"
   kubectl_sum="$(sha256_file "${dir}/bin/kubectl")"
+  helm_sum="$(sha256_file "${dir}/bin/helm")"
   import_sum="$(sha256_file "${dir}/scripts/import-images.sh")"
   namespace_sum="$(sha256_file "${dir}/manifests/namespace-bootstrap/namespace.yaml")"
   csi_chart_sum="$(sha256_file "${dir}/charts/juicefs-csi.tgz")"
@@ -344,6 +367,10 @@ EOF_IMPORT
   minio_sum="$(sha256_file "${dir}/images/oci/minio.tar")"
   minio_client_sum="$(sha256_file "${dir}/images/oci/minio-client.tar")"
   juicefs_sum="$(sha256_file "${dir}/images/oci/juicefs-csi.tar")"
+  liveness_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-liveness-probe.tar")"
+  registrar_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar")"
+  provisioner_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-provisioner.tar")"
+  resizer_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-resizer.tar")"
 
   cat >"${dir}/images/images.lock" <<EOF_LOCK
 schemaVersion: agentsmith-lite.substrate.images/v1
@@ -364,6 +391,22 @@ images:
     image: ${juicefs_image}
     archive: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
+  - name: juicefs-csi-liveness-probe
+    image: ${liveness_image}
+    archive: images/oci/juicefs-csi-liveness-probe.tar
+    sha256: ${liveness_sum}
+  - name: juicefs-csi-node-driver-registrar
+    image: ${registrar_image}
+    archive: images/oci/juicefs-csi-node-driver-registrar.tar
+    sha256: ${registrar_sum}
+  - name: juicefs-csi-provisioner
+    image: ${provisioner_image}
+    archive: images/oci/juicefs-csi-provisioner.tar
+    sha256: ${provisioner_sum}
+  - name: juicefs-csi-resizer
+    image: ${resizer_image}
+    archive: images/oci/juicefs-csi-resizer.tar
+    sha256: ${resizer_sum}
 EOF_LOCK
   lock_sum="$(sha256_file "${dir}/images/images.lock")"
 
@@ -383,6 +426,9 @@ artifacts:
   - path: bin/kubectl
     sha256: ${kubectl_sum}
     kind: kubectl-binary
+  - path: bin/helm
+    sha256: ${helm_sum}
+    kind: helm-binary
   - path: scripts/import-images.sh
     sha256: ${import_sum}
     kind: script
@@ -407,6 +453,18 @@ artifacts:
   - path: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
     kind: oci-archive
+  - path: images/oci/juicefs-csi-liveness-probe.tar
+    sha256: ${liveness_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi-node-driver-registrar.tar
+    sha256: ${registrar_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi-provisioner.tar
+    sha256: ${provisioner_sum}
+    kind: oci-archive
+  - path: images/oci/juicefs-csi-resizer.tar
+    sha256: ${resizer_sum}
+    kind: oci-archive
 EOF_MANIFEST
   manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
 
@@ -416,6 +474,7 @@ ${k3s_sum}  bin/k3s
 ${install_sum}  scripts/install-k3s.sh
 ${airgap_sum}  images/k3s/k3s-airgap-images-amd64.tar.zst
 ${kubectl_sum}  bin/kubectl
+${helm_sum}  bin/helm
 ${import_sum}  scripts/import-images.sh
 ${namespace_sum}  manifests/namespace-bootstrap/namespace.yaml
 ${lock_sum}  images/images.lock
@@ -424,11 +483,15 @@ ${postgres_sum}  images/oci/postgres.tar
 ${minio_sum}  images/oci/minio.tar
 ${minio_client_sum}  images/oci/minio-client.tar
 ${juicefs_sum}  images/oci/juicefs-csi.tar
+${liveness_sum}  images/oci/juicefs-csi-liveness-probe.tar
+${registrar_sum}  images/oci/juicefs-csi-node-driver-registrar.tar
+${provisioner_sum}  images/oci/juicefs-csi-provisioner.tar
+${resizer_sum}  images/oci/juicefs-csi-resizer.tar
 EOF_SUMS
 
   validate_offline_cache "${dir}"
   info "wrote p1-real offline cache: ${dir}"
-  info "note: install-offline.sh can run the minimum cached p1-real chain including JuiceFS format bootstrap; JuiceFS driver install and RWX smoke remain follow-up work"
+  info "note: install-offline.sh can run the cached p1-real chain through JuiceFS CSI Helm install and format bootstrap; RWX smoke remains follow-up work"
 }
 
 if [[ -n "${artifact_lock}" ]]; then

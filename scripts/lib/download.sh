@@ -115,12 +115,16 @@ artifact_lock_required_digest_image() {
   local key="$2"
   local value
   value="$(artifact_lock_required_value "${file}" "${key}")"
-  [[ "${value}" =~ @sha256:[0-9a-f]{64}$ ]] || die "${key} must be digest-pinned with @sha256:<64 lowercase hex>"
-  case "${value}" in
-    *agentsmith-lite-api*|*agentsmith-lite-web*|*agentsmith-lite-app*|*botified-runner*)
-      die "${key} must not reference app-owned images"
-      ;;
-  esac
+  require_digest_pinned_image_ref "${key}" "${value}"
+  printf '%s' "${value}"
+}
+
+artifact_lock_required_helm_image() {
+  local file="$1"
+  local key="$2"
+  local value
+  value="$(artifact_lock_required_value "${file}" "${key}")"
+  require_helm_consumed_image_ref "${key}" "${value}"
   printf '%s' "${value}"
 }
 

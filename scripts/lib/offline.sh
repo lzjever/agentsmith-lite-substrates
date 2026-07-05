@@ -365,6 +365,7 @@ validate_p1_real_cache() {
   require_manifest_artifact "${manifest_file}" "k3s-install-script" "scripts/install-k3s.sh"
   require_manifest_artifact "${manifest_file}" "k3s-airgap-images" "images/k3s/k3s-airgap-images-amd64.tar.zst"
   require_manifest_artifact "${manifest_file}" "kubectl-binary" "bin/kubectl"
+  require_manifest_artifact "${manifest_file}" "helm-binary" "bin/helm"
   require_manifest_artifact "${manifest_file}" "script" "scripts/import-images.sh"
   require_manifest_artifact "${manifest_file}" "manifest" "manifests/namespace-bootstrap/namespace.yaml"
   require_manifest_artifact "${manifest_file}" "images-lock" "images/images.lock"
@@ -373,16 +374,38 @@ validate_p1_real_cache() {
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/minio.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/minio-client.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-liveness-probe.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-node-driver-registrar.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-provisioner.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-resizer.tar"
 
   require_executable_artifact "${cache_dir}" "bin/k3s"
   require_executable_artifact "${cache_dir}" "scripts/install-k3s.sh"
   require_executable_artifact "${cache_dir}" "bin/kubectl"
+  require_executable_artifact "${cache_dir}" "bin/helm"
   require_executable_artifact "${cache_dir}" "scripts/import-images.sh"
 
   require_image_lock_archive "${cache_dir}" "${lock_file}" "postgres" "images/oci/postgres.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "minio" "images/oci/minio.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "minio-client" "images/oci/minio-client.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi" "images/oci/juicefs-csi.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-liveness-probe" "images/oci/juicefs-csi-liveness-probe.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-node-driver-registrar" "images/oci/juicefs-csi-node-driver-registrar.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-provisioner" "images/oci/juicefs-csi-provisioner.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-resizer" "images/oci/juicefs-csi-resizer.tar"
+
+  local helm_image_name helm_image
+  for helm_image_name in \
+    juicefs-csi \
+    juicefs-csi-liveness-probe \
+    juicefs-csi-node-driver-registrar \
+    juicefs-csi-provisioner \
+    juicefs-csi-resizer
+  do
+    helm_image="$(images_lock_image_ref "${lock_file}" "${helm_image_name}")" \
+      || die "p1-real images.lock is missing dependency image entry: ${helm_image_name}"
+    require_helm_consumed_image_ref "images.lock entry ${helm_image_name}" "${helm_image}"
+  done
 }
 
 validate_offline_cache() {

@@ -16,10 +16,10 @@ This first public-ready skeleton is validate-first:
 - includes namespace bootstrap and offline image import helper artifacts in
   p1-real caches
 - validates p1-real manifest/checksum/images lock contracts, including required
-  bootstrap/import artifacts
+  bootstrap/import artifacts, cached Helm, and JuiceFS CSI sidecar archives
 - performs the p1-real non-dry-run offline chain with cached k3s installer,
-  cached OCI import helper, cached kubectl applies, and digest-pinned
-  PostgreSQL/MinIO manifests
+  cached OCI import helper, cached kubectl applies, cached Helm chart install,
+  and digest-pinned PostgreSQL/MinIO manifests
 - renders the self-hosted PostgreSQL Secret, waits for `statefulset/postgres`,
   and initializes/verifies the app DB plus JuiceFS metadata DB/user before any
   JuiceFS format bootstrap
@@ -27,11 +27,14 @@ This first public-ready skeleton is validate-first:
   creates/verifies `S3_BUCKET` with the cached MinIO client image
 - runs an idempotent `juicefs format` bootstrap Job with the cached
   digest-pinned JuiceFS CSI image before applying the JuiceFS PVC contract
+- installs the cached JuiceFS CSI Helm chart with cached driver and sidecar
+  images while leaving StorageClass/Secret/PVC ownership to the substrate
+  contract
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - runs a substrate-only doctor for static dry-run checks and partial live checks
 
-It does not yet install the JuiceFS CSI driver chart or run a live RWX smoke.
-Doctor may report `partial` for those still-open live checks.
+It does not yet run a live RWX smoke. Doctor may report `partial` for that
+still-open live check.
 
 ## Quick Start
 

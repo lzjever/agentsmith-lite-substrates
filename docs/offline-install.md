@@ -14,6 +14,7 @@ dist/offline-cache/
   bin/
     k3s
     kubectl
+    helm
   charts/
     juicefs-csi.tgz
   images/
@@ -25,6 +26,10 @@ dist/offline-cache/
       minio.tar
       minio-client.tar
       juicefs-csi.tar
+      juicefs-csi-liveness-probe.tar
+      juicefs-csi-node-driver-registrar.tar
+      juicefs-csi-provisioner.tar
+      juicefs-csi-resizer.tar
   manifests/
     namespace-bootstrap/
       namespace.yaml
@@ -67,6 +72,7 @@ Required artifact lock keys:
 - `K3S_INSTALL_SCRIPT_URL` / `K3S_INSTALL_SCRIPT_SHA256`
 - `K3S_AIRGAP_IMAGES_URL` / `K3S_AIRGAP_IMAGES_SHA256`
 - `KUBECTL_BINARY_URL` / `KUBECTL_BINARY_SHA256`
+- `HELM_BINARY_URL` / `HELM_BINARY_SHA256`
 - `JUICEFS_CSI_ARTIFACT_URL` / `JUICEFS_CSI_ARTIFACT_SHA256`
 - `POSTGRES_IMAGE` / `POSTGRES_ARCHIVE_URL` / `POSTGRES_ARCHIVE_SHA256`
 - `MINIO_IMAGE` / `MINIO_ARCHIVE_URL` / `MINIO_ARCHIVE_SHA256`
@@ -74,10 +80,23 @@ Required artifact lock keys:
   `MINIO_CLIENT_ARCHIVE_SHA256`
 - `JUICEFS_CSI_IMAGE` / `JUICEFS_CSI_ARCHIVE_URL` /
   `JUICEFS_CSI_ARCHIVE_SHA256`
+- `JUICEFS_CSI_LIVENESS_PROBE_IMAGE` /
+  `JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_URL` /
+  `JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_SHA256`
+- `JUICEFS_CSI_NODE_DRIVER_REGISTRAR_IMAGE` /
+  `JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_URL` /
+  `JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_SHA256`
+- `JUICEFS_CSI_PROVISIONER_IMAGE` / `JUICEFS_CSI_PROVISIONER_ARCHIVE_URL` /
+  `JUICEFS_CSI_PROVISIONER_ARCHIVE_SHA256`
+- `JUICEFS_CSI_RESIZER_IMAGE` / `JUICEFS_CSI_RESIZER_ARCHIVE_URL` /
+  `JUICEFS_CSI_RESIZER_ARCHIVE_SHA256`
 
 Image refs must be digest-pinned with `@sha256:<64 lowercase hex>`. The producer
 rejects mutable tags, missing required keys, invalid sha256 values, sha
-mismatches, app-owned images, and Botified runner images. It writes
+mismatches, app-owned images, and Botified runner images. JuiceFS CSI driver and
+CSI sidecar image refs must include a tag before the digest, such as
+`repository/name:v1.2.3@sha256:<digest>`, because the Helm chart consumes
+separate `repository` and `tag` values. It writes
 `manifest.yaml`, `checksums.txt`, `images/images.lock`, a namespace bootstrap
 manifest, and an offline `scripts/import-images.sh` helper without public
 download URLs in the cache manifest.
@@ -92,11 +111,14 @@ requires:
 - `images/k3s/k3s-airgap-images-amd64.tar.zst` with manifest kind
   `k3s-airgap-images`
 - `bin/kubectl` with manifest kind `kubectl-binary`
+- `bin/helm` with manifest kind `helm-binary`
 - `scripts/import-images.sh` with manifest kind `script` and executable mode
 - `manifests/namespace-bootstrap/namespace.yaml` with manifest kind `manifest`
 - `images/images.lock` with manifest kind `images-lock`
 - `charts/juicefs-csi.tgz` with manifest kind `juicefs-csi-artifact`
-- dependency image entries for PostgreSQL, MinIO, MinIO client, and JuiceFS CSI
+- dependency image entries for PostgreSQL, MinIO, MinIO client, JuiceFS CSI, and
+  the JuiceFS CSI liveness probe, node-driver-registrar, provisioner, and
+  resizer sidecars
 - digest-pinned image references
 - archive paths and per-archive sha256 values in `images.lock`
 
@@ -117,16 +139,17 @@ Without `--dry-run`, a P0 skeleton fails immediately as not installable. A
 p1-real cache runs the cached `scripts/install-k3s.sh` with offline download
 guards, runs the cached `scripts/import-images.sh`, applies the cached namespace
 bootstrap with `bin/kubectl`, renders the JuiceFS CSI Secret plus
-StorageClass/PVC contract, renders and applies the self-hosted PostgreSQL
-Secret before the PostgreSQL StatefulSet, waits for `statefulset/postgres`,
-initializes/verifies the app DB and JuiceFS metadata DB/user through
-`kubectl exec -i ... psql` stdin SQL, renders/applies the MinIO Secret before
-the MinIO StatefulSet, waits for `statefulset/minio`, creates/verifies
-`S3_BUCKET` with a one-shot MinIO client Job, deletes that Job, runs an
-idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI image,
-applies the StorageClass/PVC contract only after the format Job reports a
+StorageClass/PVC contract, renders non-secret JuiceFS CSI Helm values, installs
+the cached `charts/juicefs-csi.tgz` with cached `bin/helm`, renders and applies
+the self-hosted PostgreSQL Secret before the PostgreSQL StatefulSet, waits for
+`statefulset/postgres`, initializes/verifies the app DB and JuiceFS metadata
+DB/user through `kubectl exec -i ... psql` stdin SQL, renders/applies the MinIO
+Secret before the MinIO StatefulSet, waits for `statefulset/minio`,
+creates/verifies `S3_BUCKET` with a one-shot MinIO client Job, deletes that Job,
+runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
+image, applies the StorageClass/PVC contract only after the format Job reports a
 matching volume, and finally runs `scripts/doctor.sh --offline-cache ...`.
 
-The p1-real installer still does not install the JuiceFS CSI driver chart or run
-a live RWX smoke. Doctor `partial` is allowed for those incomplete live checks;
-doctor `failed` still fails the install.
+The p1-real installer still does not run a live RWX smoke. Doctor `partial` is
+allowed for those incomplete live checks; doctor `failed` still fails the
+install.

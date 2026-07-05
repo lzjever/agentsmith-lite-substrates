@@ -86,6 +86,44 @@ truthy() {
   esac
 }
 
+require_digest_pinned_image_ref() {
+  local label="$1"
+  local image_ref="$2"
+  [[ "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]] \
+    || die "${label} must be digest-pinned with @sha256:<64 lowercase hex>"
+  case "${image_ref}" in
+    *agentsmith-lite-api*|*agentsmith-lite-web*|*agentsmith-lite-app*|*botified-runner*)
+      die "${label} must not reference app-owned images"
+      ;;
+  esac
+}
+
+require_helm_consumed_image_ref() {
+  local label="$1"
+  local image_ref="$2"
+  local repo_tag last_segment
+  require_digest_pinned_image_ref "${label}" "${image_ref}"
+  repo_tag="${image_ref%@sha256:*}"
+  last_segment="${repo_tag##*/}"
+  [[ "${last_segment}" == *:* ]] \
+    || die "${label} must include a tag before @sha256 for Helm values rendering"
+}
+
+helm_image_repository_tag() {
+  local label="$1"
+  local image_ref="$2"
+  local digest_part repo_tag last_segment tag repository
+  require_helm_consumed_image_ref "${label}" "${image_ref}"
+  digest_part="${image_ref##*@}"
+  repo_tag="${image_ref%@sha256:*}"
+  last_segment="${repo_tag##*/}"
+  tag="${last_segment##*:}"
+  repository="${repo_tag%:${tag}}"
+  [[ -n "${repository}" && -n "${tag}" ]] \
+    || die "${label} must split into non-empty Helm repository and tag"
+  printf '%s\t%s@%s\n' "${repository}" "${tag}" "${digest_part}"
+}
+
 safe_remove_dir() {
   local target="$1"
   [[ -n "${target}" ]] || die "refusing to remove an empty path"

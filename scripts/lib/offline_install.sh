@@ -27,6 +27,20 @@ offline_install_kubectl() {
   "${kubectl_bin}" "${kubectl_args[@]}" "$@"
 }
 
+offline_install_helm() {
+  local cache_dir="$1"
+  local env_file="$2"
+  shift 2
+  local helm_bin kubeconfig_path kube_context
+  local helm_args=()
+  helm_bin="$(cache_relative_path "${cache_dir}" "bin/helm" "helm binary")"
+  kubeconfig_path="$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
+  kube_context="$(env_value_or_empty "${env_file}" KUBE_CONTEXT)"
+  [[ -n "${kubeconfig_path}" ]] && helm_args+=(--kubeconfig "${kubeconfig_path}")
+  [[ -n "${kube_context}" ]] && helm_args+=(--context "${kube_context}")
+  "${helm_bin}" "${helm_args[@]}" "$@"
+}
+
 offline_install_run_k3s_installer() {
   local cache_dir="$1"
   local env_file="$2"
@@ -54,6 +68,75 @@ offline_install_run_k3s_installer() {
     K3S_BINARY_PATH="${k3s_bin}" \
     INSTALL_K3S_EXEC="${install_exec}" \
     "${install_script}"
+}
+
+offline_install_render_juicefs_csi_helm_values() {
+  local env_file="$1"
+  local lock_file="$2"
+  local output="$3"
+  local driver_name
+  local juicefs_csi_image liveness_image registrar_image provisioner_image resizer_image
+  local driver_record liveness_record registrar_record provisioner_record resizer_record
+  local driver_repo driver_tag liveness_repo liveness_tag registrar_repo registrar_tag
+  local provisioner_repo provisioner_tag resizer_repo resizer_tag
+
+  driver_name="$(env_value_or_empty "${env_file}" JUICEFS_CSI_DRIVER)"
+  [[ -n "${driver_name}" ]] || die "JUICEFS_CSI_DRIVER must be set before rendering JuiceFS CSI Helm values"
+
+  juicefs_csi_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi")" \
+    || die "p1-real images.lock is missing dependency image entry: juicefs-csi"
+  liveness_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi-liveness-probe")" \
+    || die "p1-real images.lock is missing dependency image entry: juicefs-csi-liveness-probe"
+  registrar_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi-node-driver-registrar")" \
+    || die "p1-real images.lock is missing dependency image entry: juicefs-csi-node-driver-registrar"
+  provisioner_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi-provisioner")" \
+    || die "p1-real images.lock is missing dependency image entry: juicefs-csi-provisioner"
+  resizer_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi-resizer")" \
+    || die "p1-real images.lock is missing dependency image entry: juicefs-csi-resizer"
+
+  driver_record="$(helm_image_repository_tag "images.lock entry juicefs-csi" "${juicefs_csi_image}")"
+  liveness_record="$(helm_image_repository_tag "images.lock entry juicefs-csi-liveness-probe" "${liveness_image}")"
+  registrar_record="$(helm_image_repository_tag "images.lock entry juicefs-csi-node-driver-registrar" "${registrar_image}")"
+  provisioner_record="$(helm_image_repository_tag "images.lock entry juicefs-csi-provisioner" "${provisioner_image}")"
+  resizer_record="$(helm_image_repository_tag "images.lock entry juicefs-csi-resizer" "${resizer_image}")"
+
+  IFS=$'\t' read -r driver_repo driver_tag <<<"${driver_record}"
+  IFS=$'\t' read -r liveness_repo liveness_tag <<<"${liveness_record}"
+  IFS=$'\t' read -r registrar_repo registrar_tag <<<"${registrar_record}"
+  IFS=$'\t' read -r provisioner_repo provisioner_tag <<<"${provisioner_record}"
+  IFS=$'\t' read -r resizer_repo resizer_tag <<<"${resizer_record}"
+
+  cat >"${output}" <<EOF_VALUES
+driverName: ${driver_name}
+image:
+  repository: ${driver_repo}
+  tag: "${driver_tag}"
+  pullPolicy: IfNotPresent
+sidecars:
+  livenessProbeImage:
+    repository: ${liveness_repo}
+    tag: "${liveness_tag}"
+    pullPolicy: IfNotPresent
+  nodeDriverRegistrarImage:
+    repository: ${registrar_repo}
+    tag: "${registrar_tag}"
+    pullPolicy: IfNotPresent
+  csiProvisionerImage:
+    repository: ${provisioner_repo}
+    tag: "${provisioner_tag}"
+    pullPolicy: IfNotPresent
+  csiResizerImage:
+    repository: ${resizer_repo}
+    tag: "${resizer_tag}"
+    pullPolicy: IfNotPresent
+dashboard:
+  enabled: false
+snapshot:
+  enabled: false
+storageClasses:
+  - name: agentsmith-lite-managed-outside-chart
+    enabled: false
+EOF_VALUES
 }
 
 offline_install_render_workload_manifest() {
@@ -104,6 +187,7 @@ offline_install_render_manifests() {
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/minio/minio.yaml" "${render_dir}/minio.yaml" "${namespace}" "${minio_image}"
   render_minio_bucket_init_job "${env_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-bucket-init-job.yaml" "${minio_client_image}"
   render_juicefs_format_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}/juicefs-format-job.yaml" "${juicefs_csi_image}"
+  offline_install_render_juicefs_csi_helm_values "${env_file}" "${lock_file}" "${render_dir}/juicefs-csi-values.yaml"
 }
 
 offline_install_import_images() {
@@ -112,6 +196,25 @@ offline_install_import_images() {
   import_script="$(cache_relative_path "${cache_dir}" "scripts/import-images.sh" "image import script")"
   info "install-offline: importing cached OCI archives"
   "${import_script}"
+}
+
+offline_install_install_juicefs_csi_chart() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local render_dir="$3"
+  local chart values
+  chart="$(cache_relative_path "${cache_dir}" "charts/juicefs-csi.tgz" "JuiceFS CSI chart artifact")"
+  values="${render_dir}/juicefs-csi-values.yaml"
+  need_file "${values}"
+
+  info "install-offline: installing JuiceFS CSI chart with cached Helm"
+  offline_install_helm "${cache_dir}" "${env_file}" \
+    upgrade --install juicefs-csi-driver "${chart}" \
+    --namespace kube-system \
+    --create-namespace \
+    --wait \
+    --timeout 180s \
+    -f "${values}"
 }
 
 offline_install_run_doctor() {
@@ -266,6 +369,8 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${namespace_manifest}"
 
   offline_install_render_manifests "${cache_dir}" "${env_file}" "${secrets_file}" "${render_dir}"
+
+  offline_install_install_juicefs_csi_chart "${cache_dir}" "${env_file}" "${render_dir}"
 
   info "install-offline: applying rendered Postgres manifests"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres-secret.yaml"
