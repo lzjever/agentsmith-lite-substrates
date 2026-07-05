@@ -102,7 +102,9 @@ CSI sidecar image refs must include a tag before the digest, such as
 separate `repository` and `tag` values. It writes
 `manifest.yaml`, `checksums.txt`, `images/images.lock`, a namespace bootstrap
 manifest, and an offline `scripts/import-images.sh` helper without public
-download URLs in the cache manifest.
+download URLs in the cache manifest. The generated import helper uses the
+cache's executable `bin/k3s ctr`; it does not require or invoke a host `ctr`
+from `PATH`.
 
 ## Online Entry With an Existing Cache
 

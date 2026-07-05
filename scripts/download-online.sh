@@ -206,7 +206,7 @@ usage() {
 Usage: scripts/import-images.sh [--dry-run] [--containerd-namespace k8s.io]
 
 Imports OCI archives listed in images/images.lock from this offline cache into
-the local containerd store with ctr. It performs no network access.
+the local k3s/containerd store with cached bin/k3s ctr. It performs no network access.
 EOF_USAGE
 }
 
@@ -340,8 +340,9 @@ if [[ "${dry_run}" == "true" ]]; then
   exit 0
 fi
 
-command -v ctr >/dev/null 2>&1 || {
-  printf 'error: ctr is required to import OCI archives. Run this after k3s/containerd is installed, or rerun with --dry-run.\n' >&2
+cached_k3s="${cache_dir}/bin/k3s"
+[[ -x "${cached_k3s}" ]] || {
+  printf 'error: cached k3s is required at %s to import OCI archives. Run this with a p1-real offline cache, or rerun with --dry-run.\n' "${cached_k3s}" >&2
   exit 1
 }
 
@@ -351,7 +352,7 @@ for archive_path in "${archive_paths[@]}"; do
     exit 1
   }
   printf 'Importing %s into containerd namespace %s\n' "${archive_path}" "${containerd_namespace}"
-  ctr -n "${containerd_namespace}" images import "${archive_path}"
+  "${cached_k3s}" ctr -n "${containerd_namespace}" images import "${archive_path}"
 done
 EOF_IMPORT
   chmod +x "${dir}/scripts/import-images.sh"

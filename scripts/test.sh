@@ -861,7 +861,7 @@ write_forbidden_path_bin() {
   local dir="$1"
   mkdir -p "${dir}"
   local tool
-  for tool in kubectl curl wget docker helm; do
+  for tool in kubectl curl wget docker helm ctr; do
     cat >"${dir}/${tool}" <<'EOF_FORBIDDEN'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -2260,6 +2260,90 @@ test_download_online_import_helper_rejects_archive_path_escape_in_dry_run() {
   pass "P1 downloader import-images helper rejects archive path escape during dry-run"
 }
 
+test_download_online_import_helper_uses_cached_k3s_ctr() {
+  local fixtures="${TMP_DIR}/download-fixtures-import-cached-k3s"
+  local lock_file="${TMP_DIR}/offline-artifacts-import-cached-k3s.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-import-cached-k3s"
+  local download_out="${TMP_DIR}/download-online-import-cached-k3s.out"
+  local import_out="${TMP_DIR}/import-downloaded-cached-k3s.out"
+  local k3s_call_log="${TMP_DIR}/import-cached-k3s-call.log"
+  local forbidden_bin="${TMP_DIR}/import-cached-k3s-path-bin"
+  local forbidden_log="${TMP_DIR}/import-cached-k3s-forbidden.log"
+  local import_count
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${download_out}" 2>&1
+  cat >"${cache}/bin/k3s" <<'EOF_K3S'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${K3S_CTR_LOG:?K3S_CTR_LOG is required}"
+printf 'k3s %s\n' "$*" >>"${K3S_CTR_LOG}"
+case "$*" in
+  "ctr -n k8s.io images import "*) ;;
+  *) exit 77 ;;
+esac
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "import" ]]; then
+    [[ -f "${arg}" ]] || exit 78
+  fi
+  previous="${arg}"
+done
+EOF_K3S
+  chmod +x "${cache}/bin/k3s"
+  write_forbidden_path_bin "${forbidden_bin}"
+
+  K3S_CTR_LOG="${k3s_call_log}" \
+    FORBIDDEN_LOG="${forbidden_log}" \
+    PATH="${forbidden_bin}:${PATH}" \
+    "${cache}/scripts/import-images.sh" >"${import_out}" 2>&1 || {
+      printf '%s\n' "import-images output:" >&2
+      sed -n '1,120p' "${import_out}" >&2
+      fail "generated import-images.sh did not import through cached k3s ctr"
+    }
+
+  [[ ! -s "${forbidden_log}" ]] || fail "generated import-images.sh used host ctr from PATH: $(<"${forbidden_log}")"
+  import_count="$(grep -c '^k3s ctr -n k8s.io images import ' "${k3s_call_log}" || true)"
+  [[ "${import_count}" -eq 9 ]] || fail "expected cached k3s ctr to import 9 OCI archives, got ${import_count}"
+  assert_contains "${k3s_call_log}" "k3s ctr -n k8s.io images import ${cache}/images/oci/postgres.tar"
+  assert_contains "${k3s_call_log}" "k3s ctr -n k8s.io images import ${cache}/images/oci/minio-client.tar"
+  assert_contains "${k3s_call_log}" "k3s ctr -n k8s.io images import ${cache}/images/oci/juicefs-csi-resizer.tar"
+  assert_contains "${k3s_call_log}" "k3s ctr -n k8s.io images import ${cache}/images/oci/rwx-smoke.tar"
+  pass "P1 downloader import-images helper uses cached k3s ctr instead of host ctr"
+}
+
+test_download_online_import_helper_requires_cached_k3s_for_live_import() {
+  local fixtures="${TMP_DIR}/download-fixtures-import-requires-k3s"
+  local lock_file="${TMP_DIR}/offline-artifacts-import-requires-k3s.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-import-requires-k3s"
+  local download_out="${TMP_DIR}/download-online-import-requires-k3s.out"
+  local missing_out="${TMP_DIR}/import-downloaded-missing-k3s.out"
+  local not_executable_out="${TMP_DIR}/import-downloaded-not-executable-k3s.out"
+  local forbidden_bin="${TMP_DIR}/import-requires-k3s-path-bin"
+  local forbidden_log="${TMP_DIR}/import-requires-k3s-forbidden.log"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${download_out}" 2>&1
+  write_forbidden_path_bin "${forbidden_bin}"
+
+  rm -f "${cache}/bin/k3s"
+  if FORBIDDEN_LOG="${forbidden_log}" PATH="${forbidden_bin}:${PATH}" "${cache}/scripts/import-images.sh" >"${missing_out}" 2>&1; then
+    fail "generated import-images.sh accepted a missing cached k3s binary"
+  fi
+  assert_contains "${missing_out}" "cached k3s is required"
+
+  printf '#!/usr/bin/env sh\nexit 0\n' >"${cache}/bin/k3s"
+  chmod 0644 "${cache}/bin/k3s"
+  if FORBIDDEN_LOG="${forbidden_log}" PATH="${forbidden_bin}:${PATH}" "${cache}/scripts/import-images.sh" >"${not_executable_out}" 2>&1; then
+    fail "generated import-images.sh accepted a non-executable cached k3s binary"
+  fi
+  assert_contains "${not_executable_out}" "cached k3s is required"
+  [[ ! -s "${forbidden_log}" ]] || fail "generated import-images.sh used host ctr while cached k3s was unavailable: $(<"${forbidden_log}")"
+  pass "P1 downloader import-images helper requires executable cached k3s for live import"
+}
+
 test_download_online_rejects_sha_mismatch() {
   local fixtures="${TMP_DIR}/download-fixtures-sha"
   local lock_file="${TMP_DIR}/offline-artifacts-sha.env"
@@ -3277,6 +3361,8 @@ test_offline_cache_rejects_manifest_artifact_missing_from_checksums
 test_p1_real_offline_cache_rejects_missing_dependency_oci_manifest_entry
 test_download_online_generates_p1_real_cache_from_artifact_lock
 test_download_online_import_helper_rejects_archive_path_escape_in_dry_run
+test_download_online_import_helper_uses_cached_k3s_ctr
+test_download_online_import_helper_requires_cached_k3s_for_live_import
 test_download_online_rejects_sha_mismatch
 test_download_online_rejects_mutable_image_ref
 test_download_online_rejects_missing_required_key
