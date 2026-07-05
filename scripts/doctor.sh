@@ -36,6 +36,8 @@ s3_probe_image=""
 rwx_smoke_image=""
 report_file=""
 dry_run=false
+context_entrypoint="doctor"
+context_install_mode="unspecified"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -73,6 +75,16 @@ while [[ $# -gt 0 ]]; do
       report_file="${2:-}"
       shift 2
       ;;
+    --entrypoint)
+      require_cli_value "$1" "${2-}"
+      context_entrypoint="${2:-}"
+      shift 2
+      ;;
+    --install-mode)
+      require_cli_value "$1" "${2-}"
+      context_install_mode="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -85,6 +97,14 @@ done
 
 [[ -n "${env_file}" ]] || die "--env is required"
 [[ -n "${secrets_file}" ]] || die "--secrets is required"
+case "${context_entrypoint}" in
+  doctor|preflight|install-online|install-offline) ;;
+  *) die "--entrypoint must be doctor, preflight, install-online, or install-offline" ;;
+esac
+case "${context_install_mode}" in
+  self-hosted|existing-cloud|unspecified) ;;
+  *) die "--install-mode must be self-hosted, existing-cloud, or unspecified" ;;
+esac
 if [[ -z "${report_file}" ]]; then
   report_file="$(dirname "${env_file}")/doctor-report.json"
 fi
@@ -112,6 +132,72 @@ add_check() {
       ;;
   esac
   printf '%s: %s - %s\n' "${name}" "${status}" "${message}"
+}
+
+doctor_safe_cache_file() {
+  local cache_dir="$1"
+  local rel="$2"
+  local cache_root file resolved
+
+  [[ -n "${cache_dir}" && -d "${cache_dir}" ]] || return 1
+  cache_root="$(cd "${cache_dir}" && pwd -P)" || return 1
+  file="${cache_root}/${rel}"
+  [[ -f "${file}" && -r "${file}" ]] || return 1
+  resolved="$(realpath "${file}" 2>/dev/null || readlink -f "${file}" 2>/dev/null || true)"
+  [[ -n "${resolved}" ]] || resolved="${file}"
+  case "${resolved}" in
+    "${cache_root}/"*) ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "${resolved}"
+}
+
+doctor_context_cache_mode() {
+  local cache_dir="$1"
+  local manifest_file mode
+
+  if [[ -z "${cache_dir}" ]]; then
+    printf '%s\n' "none"
+    return 0
+  fi
+  if ! manifest_file="$(doctor_safe_cache_file "${cache_dir}" "manifest.yaml")"; then
+    printf '%s\n' "invalid"
+    return 0
+  fi
+  mode="$(awk '
+    /^[[:space:]]*cacheMode:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*cacheMode:[[:space:]]*/, "", value)
+      gsub(/^"|"$/, "", value)
+      gsub(/^\047|\047$/, "", value)
+      print value
+      found=1
+    }
+    END { if (!found) exit 1 }
+  ' "${manifest_file}" 2>/dev/null || true)"
+  case "${mode}" in
+    p0-contract|p1-real)
+      printf '%s\n' "${mode}"
+      ;;
+    *)
+      printf '%s\n' "invalid"
+      ;;
+  esac
+}
+
+doctor_context_file_sha256() {
+  local cache_dir="$1"
+  local rel="$2"
+  local file sum
+
+  if ! file="$(doctor_safe_cache_file "${cache_dir}" "${rel}")"; then
+    return 0
+  fi
+  sum="$(sha256_file "${file}" 2>/dev/null || true)"
+  if [[ "${sum}" =~ ^[0-9a-f]{64}$ ]]; then
+    printf '%s\n' "${sum}"
+  fi
+  return 0
 }
 
 doctor_check_postgres_url() {
@@ -281,7 +367,7 @@ if [[ "${dry_run}" == "true" ]]; then
 else
   if [[ -n "${kubeconfig_path}" && ( ! -f "${kubeconfig_path}" || ! -r "${kubeconfig_path}" ) ]]; then
     kubeconfig_unreadable=true
-    add_check "k8s" "failed" "KUBECONFIG_PATH is not readable: ${kubeconfig_path}"
+    add_check "k8s" "failed" "configured KUBECONFIG_PATH is not readable"
   elif [[ -n "${KUBECTL_BIN:-}" ]]; then
     if [[ -x "${KUBECTL_BIN}" ]]; then
       kubectl_cmd=("${KUBECTL_BIN}")
@@ -326,7 +412,7 @@ if [[ -n "${s3_endpoint}" && -n "${s3_region}" && -n "${s3_bucket}" && -n "${s3_
   if [[ "${dry_run}" == "true" ]]; then
     add_check "s3" "passed" "dry-run static: S3 endpoint, region, bucket, path-style, and key presence are valid; skipped read/write/delete probe" "substrate-csi-secret"
   elif [[ "${kubeconfig_unreadable}" == "true" ]]; then
-    add_check "s3" "partial" "KUBECONFIG_PATH is not readable; live S3 read/write/delete probe was not verified" "substrate-csi-secret"
+    add_check "s3" "partial" "configured KUBECONFIG_PATH is not readable; live S3 read/write/delete probe was not verified" "substrate-csi-secret"
   elif [[ "${kubectl_available}" != "true" ]]; then
     add_check "s3" "partial" "kubectl not found; live S3 read/write/delete probe was not verified" "substrate-csi-secret"
   elif [[ "${cluster_reachable}" != "true" ]]; then
@@ -353,8 +439,8 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
       add_check "juicefs-csi" "passed" "dry-run static: rendered JuiceFS Secret, StorageClass, and PVC contract is valid" "substrate-csi-secret"
       add_check "rwx" "passed" "dry-run static: PVC contract requests ReadWriteMany; skipped two-Job RWX smoke"
     elif [[ "${kubeconfig_unreadable}" == "true" ]]; then
-      add_check "juicefs-csi" "partial" "KUBECONFIG_PATH is not readable; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
-      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires a readable KUBECONFIG_PATH; RWX was not verified"
+      add_check "juicefs-csi" "partial" "configured KUBECONFIG_PATH is not readable; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
+      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires a readable configured KUBECONFIG_PATH; RWX was not verified"
     elif [[ "${kubectl_available}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "kubectl not found; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
       add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires kubectl; RWX was not verified"
@@ -441,12 +527,40 @@ elif [[ "${partial}" == "true" ]]; then
   overall="partial"
 fi
 
+context_cache_mode="$(doctor_context_cache_mode "${offline_cache}")"
+context_manifest_sha256=""
+context_images_lock_sha256=""
+if [[ -n "${offline_cache}" ]]; then
+  context_manifest_sha256="$(doctor_context_file_sha256 "${offline_cache}" "manifest.yaml")"
+  context_images_lock_sha256="$(doctor_context_file_sha256 "${offline_cache}" "images/images.lock")"
+fi
+context_json=(
+  "    \"entrypoint\": \"$(json_escape "${context_entrypoint}")\""
+  "    \"installMode\": \"$(json_escape "${context_install_mode}")\""
+  "    \"cacheMode\": \"$(json_escape "${context_cache_mode}")\""
+)
+if [[ -n "${context_manifest_sha256}" ]]; then
+  context_json+=("    \"offlineCacheManifestSha256\": \"${context_manifest_sha256}\"")
+fi
+if [[ -n "${context_images_lock_sha256}" ]]; then
+  context_json+=("    \"imagesLockSha256\": \"${context_images_lock_sha256}\"")
+fi
+
 {
   printf '{\n'
   printf '  "schemaVersion": "agentsmith-lite.substrate.doctor/v1",\n'
   printf '  "dryRun": %s,\n' "${dry_run}"
   printf '  "overallStatus": "%s",\n' "${overall}"
   printf '  "scope": "substrate-only",\n'
+  printf '  "context": {\n'
+  for i in "${!context_json[@]}"; do
+    printf '%s' "${context_json[$i]}"
+    if [[ "${i}" -lt $((${#context_json[@]} - 1)) ]]; then
+      printf ','
+    fi
+    printf '\n'
+  done
+  printf '  },\n'
   printf '  "secretBoundary": "S3 and JuiceFS raw credentials are substrate/CSI scoped and redacted",\n'
   printf '  "checks": [\n'
   for i in "${!checks_json[@]}"; do

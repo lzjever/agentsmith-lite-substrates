@@ -290,6 +290,8 @@ offline_install_run_doctor() {
   local output_dir="$4"
   local require_passed="${5:-allow-partial}"
   local require_passed_context="${6:-existing-cloud live validation}"
+  local doctor_entrypoint="${7:-doctor}"
+  local doctor_install_mode="${8:-unspecified}"
   local kubectl_bin report_file status
   kubectl_bin="$(cache_relative_path "${cache_dir}" "bin/kubectl" "kubectl binary")"
   report_file="${output_dir}/doctor-report.json"
@@ -301,7 +303,9 @@ offline_install_run_doctor() {
     --env "${env_file}" \
     --secrets "${secrets_file}" \
     --offline-cache "${cache_dir}" \
-    --report "${report_file}"
+    --report "${report_file}" \
+    --entrypoint "${doctor_entrypoint}" \
+    --install-mode "${doctor_install_mode}"
   status=$?
   set -e
 
@@ -483,9 +487,11 @@ run_p1_real_existing_cloud_validation() {
   local env_file="$2"
   local secrets_file="$3"
   local output_dir="$4"
+  local doctor_entrypoint="${5:-install-offline}"
+  local doctor_install_mode="${6:-existing-cloud}"
 
   info "install-offline: existing-cloud mode; skipping self-hosted PostgreSQL, MinIO, and k3s mutation"
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed"
+  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed" "existing-cloud live validation" "${doctor_entrypoint}" "${doctor_install_mode}"
 }
 
 run_p1_real_offline_install() {
@@ -493,6 +499,8 @@ run_p1_real_offline_install() {
   local env_file="$2"
   local secrets_file="$3"
   local output_dir="$4"
+  local doctor_entrypoint="${5:-install-offline}"
+  local doctor_install_mode="${6:-self-hosted}"
   local render_dir namespace_manifest rendered_namespace_manifest
 
   render_dir="${output_dir}/rendered/offline-install"
@@ -528,5 +536,5 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
   offline_install_wait_juicefs_pvc_bound "${cache_dir}" "${env_file}"
 
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed" "self-hosted live install"
+  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed" "self-hosted live install" "${doctor_entrypoint}" "${doctor_install_mode}"
 }

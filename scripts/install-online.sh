@@ -87,10 +87,10 @@ else
   fi
   case "${install_mode}" in
     self-hosted)
-      run_p1_real_offline_install "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}"
+      run_p1_real_offline_install "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}" "install-online" "${install_mode}"
       ;;
     existing-cloud)
-      run_p1_real_existing_cloud_validation "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}"
+      run_p1_real_existing_cloud_validation "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}" "install-online" "${install_mode}"
       ;;
     *)
       die "mode must be self-hosted or existing-cloud"

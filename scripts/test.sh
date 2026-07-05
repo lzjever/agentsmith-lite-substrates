@@ -73,6 +73,23 @@ assert_occurrence_count() {
   [[ "${count}" == "${expected}" ]] || fail "expected ${file} to contain ${expected} occurrences of ${needle}, got ${count}"
 }
 
+assert_json_value() {
+  local file="$1"
+  local filter="$2"
+  local expected="$3"
+  local actual
+  actual="$(jq -r "${filter}" "${file}")"
+  [[ "${actual}" == "${expected}" ]] || fail "expected ${file} ${filter} to be ${expected}, got ${actual}"
+}
+
+assert_json_absent() {
+  local file="$1"
+  local filter="$2"
+  if jq -e "${filter}" "${file}" >/dev/null; then
+    fail "expected ${file} ${filter} to be absent"
+  fi
+}
+
 assert_cli_requires_value() {
   local label="$1"
   local flag="$2"
@@ -1989,8 +2006,11 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   local airgap_dir="${TMP_DIR}/p1-live-airgap"
   local report="${output}/doctor-report.json"
   local rendered="${output}/rendered/offline-install"
+  local manifest_sum lock_sum
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
+  manifest_sum="$(sha256_file "${cache}/manifest.yaml")"
+  lock_sum="$(sha256_file "${cache}/images/images.lock")"
   write_forbidden_path_bin "${forbidden_bin}"
   write_config "${config}" "custom-ns" "${output}/kubeconfig"
 
@@ -2189,6 +2209,11 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_not_contains "${report}" "juicefs-secret-value"
   assert_not_contains "${report}" "minio-access-key"
   assert_not_contains "${report}" "minio-secret-value"
+  assert_json_value "${report}" '.context.entrypoint' "install-offline"
+  assert_json_value "${report}" '.context.installMode' "self-hosted"
+  assert_json_value "${report}" '.context.cacheMode' "p1-real"
+  assert_json_value "${report}" '.context.offlineCacheManifestSha256' "${manifest_sum}"
+  assert_json_value "${report}" '.context.imagesLockSha256' "${lock_sum}"
   assert_contains "${report}" "live JuiceFS PVC phase is Bound"
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
 }
@@ -2303,10 +2328,14 @@ test_online_install_existing_cloud_non_dry_run_delegates_validation_only() {
   local kubeconfig="${TMP_DIR}/online-existing-cloud-kubeconfig"
   local output="${TMP_DIR}/online-existing-cloud-out"
   local out="${TMP_DIR}/install-online-existing-cloud.out"
+  local report="${output}/doctor-report.json"
   local call_log="${TMP_DIR}/online-existing-cloud-call.log"
   local stub_bin="${TMP_DIR}/online-existing-cloud-bin"
+  local manifest_sum lock_sum
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
+  manifest_sum="$(sha256_file "${cache}/manifest.yaml")"
+  lock_sum="$(sha256_file "${cache}/images/images.lock")"
   write_existing_cloud_config "${config}" "${kubeconfig}"
   write_kubeconfig_fixture "${kubeconfig}"
   mkdir -p "${stub_bin}"
@@ -2350,6 +2379,13 @@ EOF_PSQL
   assert_not_contains "${call_log}" "juicefs-secret-value"
   assert_not_contains "${call_log}" "existing-access-key"
   assert_not_contains "${call_log}" "existing-secret-value"
+  assert_json_value "${report}" '.context.entrypoint' "install-online"
+  assert_json_value "${report}" '.context.installMode' "existing-cloud"
+  assert_json_value "${report}" '.context.cacheMode' "p1-real"
+  assert_json_value "${report}" '.context.offlineCacheManifestSha256' "${manifest_sum}"
+  assert_json_value "${report}" '.context.imagesLockSha256' "${lock_sum}"
+  assert_not_contains "${report}" "${kubeconfig}"
+  assert_not_contains "${report}" "existing-postgres.example.com"
   pass "P1 online existing-cloud installer delegates non-dry-run to validation only"
 }
 
@@ -2762,10 +2798,14 @@ test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres() {
   local kubeconfig="${TMP_DIR}/existing-cloud-kubeconfig"
   local output="${TMP_DIR}/offline-existing-cloud-out"
   local out="${TMP_DIR}/install-offline-existing-cloud.out"
+  local report="${output}/doctor-report.json"
   local call_log="${TMP_DIR}/existing-cloud-call.log"
   local stub_bin="${TMP_DIR}/existing-cloud-bin"
+  local manifest_sum lock_sum
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
+  manifest_sum="$(sha256_file "${cache}/manifest.yaml")"
+  lock_sum="$(sha256_file "${cache}/images/images.lock")"
   write_existing_cloud_config "${config}" "${kubeconfig}"
   write_kubeconfig_fixture "${kubeconfig}"
   mkdir -p "${stub_bin}"
@@ -2812,6 +2852,13 @@ EOF_PSQL
   assert_not_contains "${call_log}" "juicefs-secret-value"
   assert_not_contains "${call_log}" "existing-access-key"
   assert_not_contains "${call_log}" "existing-secret-value"
+  assert_json_value "${report}" '.context.entrypoint' "install-offline"
+  assert_json_value "${report}" '.context.installMode' "existing-cloud"
+  assert_json_value "${report}" '.context.cacheMode' "p1-real"
+  assert_json_value "${report}" '.context.offlineCacheManifestSha256' "${manifest_sum}"
+  assert_json_value "${report}" '.context.imagesLockSha256' "${lock_sum}"
+  assert_not_contains "${report}" "${kubeconfig}"
+  assert_not_contains "${report}" "existing-postgres.example.com"
   pass "existing-cloud p1-real install validates without mutating self-hosted Postgres"
 }
 
@@ -3370,12 +3417,20 @@ test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
   local cache="${TMP_DIR}/doctor-cache"
   local report="${TMP_DIR}/doctor-report.json"
   local out="${TMP_DIR}/doctor.out"
+  local manifest_sum lock_sum
   write_valid_env_pair "${env_dir}"
   write_offline_cache "${cache}"
+  manifest_sum="$(sha256_file "${cache}/manifest.yaml")"
+  lock_sum="$(sha256_file "${cache}/images/images.lock")"
   "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --dry-run --report "${report}" >"${out}" 2>&1
   assert_contains "${report}" '"dryRun": true'
   assert_contains "${report}" '"overallStatus": "passed"'
   assert_contains "${report}" '"scope": "substrate-only"'
+  assert_json_value "${report}" '.context.entrypoint' "doctor"
+  assert_json_value "${report}" '.context.installMode' "unspecified"
+  assert_json_value "${report}" '.context.cacheMode' "p0-contract"
+  assert_json_value "${report}" '.context.offlineCacheManifestSha256' "${manifest_sum}"
+  assert_json_value "${report}" '.context.imagesLockSha256' "${lock_sum}"
   assert_contains "${report}" '"k8s"'
   assert_contains "${report}" '"postgres-app"'
   assert_contains "${report}" '"postgres-juicefs-meta"'
@@ -3387,6 +3442,11 @@ test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
   assert_contains "${report}" 'raw credentials are substrate/CSI scoped'
   assert_not_contains "${report}" "app-images"
   assert_not_contains "${report}" "botified"
+  assert_not_contains "${report}" "${env_dir}"
+  assert_not_contains "${report}" "${cache}"
+  assert_not_contains "${report}" "${report}"
+  assert_not_contains "${out}" "http://minio.agentsmith.svc.cluster.local:9000"
+  assert_not_contains "${report}" "http://minio.agentsmith.svc.cluster.local:9000"
   assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${report}" "minio-secret-value"
   pass "S7 substrate-only doctor dry-run proves static contracts, offline-cache, and redaction"
@@ -3397,13 +3457,21 @@ test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias() {
   local cache="${TMP_DIR}/preflight-cache"
   local report="${TMP_DIR}/preflight-report.json"
   local out="${TMP_DIR}/preflight.out"
+  local manifest_sum lock_sum
   write_valid_env_pair "${env_dir}"
   write_offline_cache "${cache}"
+  manifest_sum="$(sha256_file "${cache}/manifest.yaml")"
+  lock_sum="$(sha256_file "${cache}/images/images.lock")"
 
   "${ROOT_DIR}/scripts/preflight.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --cache "${cache}" --report "${report}" >"${out}" 2>&1
   assert_contains "${report}" '"dryRun": true'
   assert_contains "${report}" '"scope": "substrate-only"'
   assert_contains "${report}" '"overallStatus": "passed"'
+  assert_json_value "${report}" '.context.entrypoint' "preflight"
+  assert_json_value "${report}" '.context.installMode' "unspecified"
+  assert_json_value "${report}" '.context.cacheMode' "p0-contract"
+  assert_json_value "${report}" '.context.offlineCacheManifestSha256' "${manifest_sum}"
+  assert_json_value "${report}" '.context.imagesLockSha256' "${lock_sum}"
   assert_contains "${report}" '"offline-cache"'
   assert_contains "${report}" "P0 static cache skeleton is valid"
   assert_contains "${out}" "dry-run static"
@@ -3419,6 +3487,36 @@ test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias() {
   assert_not_contains "${report}" "app-images"
   assert_not_contains "${report}" "botified"
   pass "S7 preflight delegates to doctor dry-run, forwards --cache, and redacts secrets"
+}
+
+test_substrate_doctor_report_context_marks_invalid_cache_without_copying_raw_mode() {
+  local env_dir="${TMP_DIR}/doctor-invalid-cache-env"
+  local cache="${TMP_DIR}/doctor-invalid-cache"
+  local report="${TMP_DIR}/doctor-invalid-cache-report.json"
+  local out="${TMP_DIR}/doctor-invalid-cache.out"
+  local leaked_url="https://downloads.example.invalid/cache-mode"
+  local manifest_sum lock_sum status
+  write_valid_env_pair "${env_dir}"
+  write_offline_cache "${cache}"
+  replace_manifest_cache_mode "${cache}" "${leaked_url}"
+  manifest_sum="$(sha256_file "${cache}/manifest.yaml")"
+  lock_sum="$(sha256_file "${cache}/images/images.lock")"
+
+  set +e
+  "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --dry-run --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor should fail an invalid offline cache, got ${status}"
+  assert_json_value "${report}" '.context.entrypoint' "doctor"
+  assert_json_value "${report}" '.context.installMode' "unspecified"
+  assert_json_value "${report}" '.context.cacheMode' "invalid"
+  assert_json_value "${report}" '.context.offlineCacheManifestSha256' "${manifest_sum}"
+  assert_json_value "${report}" '.context.imagesLockSha256' "${lock_sum}"
+  assert_contains "${report}" '"offline-cache"'
+  assert_contains "${report}" '"status": "failed"'
+  assert_not_contains "${report}" "${leaked_url}"
+  assert_not_contains "${out}" "${leaked_url}"
+  pass "S7 doctor report context marks invalid cache without copying raw cacheMode values"
 }
 
 test_doctor_and_preflight_dry_run_reject_invalid_env_without_kubectl() {
@@ -3451,6 +3549,11 @@ EOF_KUBECTL
   [[ "${status}" -ne 0 ]] || fail "doctor dry-run accepted invalid S3_BUCKET"
   assert_contains "${doctor_out}" "S3_BUCKET must be an S3 bucket name"
   assert_contains "${doctor_report}" '"overallStatus": "failed"'
+  assert_json_value "${doctor_report}" '.context.entrypoint' "doctor"
+  assert_json_value "${doctor_report}" '.context.installMode' "unspecified"
+  assert_json_value "${doctor_report}" '.context.cacheMode' "none"
+  assert_json_absent "${doctor_report}" '.context.offlineCacheManifestSha256'
+  assert_json_absent "${doctor_report}" '.context.imagesLockSha256'
   [[ ! -s "${kubectl_log}" ]] || fail "doctor dry-run should reject invalid env before calling kubectl"
 
   set +e
@@ -3461,6 +3564,11 @@ EOF_KUBECTL
   [[ "${status}" -ne 0 ]] || fail "preflight accepted invalid S3_BUCKET"
   assert_contains "${preflight_out}" "S3_BUCKET must be an S3 bucket name"
   assert_contains "${preflight_report}" '"overallStatus": "failed"'
+  assert_json_value "${preflight_report}" '.context.entrypoint' "preflight"
+  assert_json_value "${preflight_report}" '.context.installMode' "unspecified"
+  assert_json_value "${preflight_report}" '.context.cacheMode' "none"
+  assert_json_absent "${preflight_report}" '.context.offlineCacheManifestSha256'
+  assert_json_absent "${preflight_report}" '.context.imagesLockSha256'
   [[ ! -s "${kubectl_log}" ]] || fail "preflight dry-run should reject invalid env before calling kubectl"
   assert_not_contains "${doctor_out}" "Bad_NS"
   assert_not_contains "${preflight_out}" "Bad_NS"
@@ -3623,8 +3731,10 @@ EOF_PSQL
   assert_contains "${report}" '"overallStatus": "failed"'
   assert_contains "${report}" '"name": "k8s"'
   assert_contains "${report}" '"status": "failed"'
-  assert_contains "${report}" "KUBECONFIG_PATH is not readable: ${missing_kubeconfig}"
-  assert_contains "${out}" "KUBECONFIG_PATH is not readable: ${missing_kubeconfig}"
+  assert_contains "${report}" "configured KUBECONFIG_PATH is not readable"
+  assert_contains "${out}" "configured KUBECONFIG_PATH is not readable"
+  assert_not_contains "${report}" "${missing_kubeconfig}"
+  assert_not_contains "${out}" "${missing_kubeconfig}"
   [[ ! -s "${kubectl_log}" ]] || fail "doctor live mode should fail unreadable KUBECONFIG_PATH before calling kubectl"
   assert_not_contains "${kubectl_log}" "kubectl "
   assert_not_contains "${kubectl_log}" "agentsmith-lite-s3-probe"
@@ -4554,6 +4664,7 @@ test_download_online_rejects_mutable_rwx_smoke_image_ref
 test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias
+test_substrate_doctor_report_context_marks_invalid_cache_without_copying_raw_mode
 test_doctor_and_preflight_dry_run_reject_invalid_env_without_kubectl
 test_substrate_preflight_unreadable_kubeconfig_stays_static
 test_substrate_preflight_rejects_unknown_argument

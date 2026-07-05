@@ -42,4 +42,4 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-exec "${ROOT_DIR}/scripts/doctor.sh" "${doctor_args[@]}" --dry-run
+exec "${ROOT_DIR}/scripts/doctor.sh" "${doctor_args[@]}" --dry-run --entrypoint preflight
