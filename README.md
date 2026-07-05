@@ -32,10 +32,9 @@ This first public-ready skeleton is validate-first:
   images while leaving StorageClass/Secret/PVC ownership to the substrate
   contract
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
-- runs a substrate-only doctor for static dry-run checks and partial live checks
-
-It does not yet run a live RWX smoke. Doctor may report `partial` for that
-still-open live check.
+- runs a substrate-only doctor for static dry-run checks and live K8s,
+  PostgreSQL, JuiceFS PVC, and two-Job RWX smoke checks; live S3 object probing
+  remains reported as `partial` until implemented
 
 ## Quick Start
 
@@ -56,6 +55,11 @@ scripts/doctor.sh \
   --secrets out/substrate.secrets.env \
   --dry-run
 ```
+
+Live doctor runs the RWX smoke only after the configured JuiceFS PVC is
+`Bound`. It reads the digest-pinned `name: rwx-smoke` image from
+`--offline-cache images/images.lock`, or from explicit
+`--rwx-smoke-image image@sha256:<digest>`.
 
 For an offline contract skeleton dry-run:
 

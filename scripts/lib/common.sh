@@ -86,16 +86,29 @@ truthy() {
   esac
 }
 
+is_app_owned_image_ref() {
+  local image_ref="$1"
+  local repo_ref
+  repo_ref="${image_ref%@sha256:*}"
+  case "${repo_ref}" in
+    *agentsmith-lite-api*|*agentsmith-lite-web*|*agentsmith-lite-app*|*botified-runner*)
+      return 0
+      ;;
+    agentsmith-lite/app|agentsmith-lite/app:*|*/agentsmith-lite/app|*/agentsmith-lite/app:*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 require_digest_pinned_image_ref() {
   local label="$1"
   local image_ref="$2"
   [[ "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]] \
     || die "${label} must be digest-pinned with @sha256:<64 lowercase hex>"
-  case "${image_ref}" in
-    *agentsmith-lite-api*|*agentsmith-lite-web*|*agentsmith-lite-app*|*botified-runner*)
-      die "${label} must not reference app-owned images"
-      ;;
-  esac
+  if is_app_owned_image_ref "${image_ref}"; then
+    die "${label} must not reference app-owned images"
+  fi
 }
 
 require_helm_consumed_image_ref() {

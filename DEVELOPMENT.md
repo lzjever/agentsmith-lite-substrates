@@ -16,13 +16,14 @@ The current test slices are:
 - S4: guard against copied legacy governance/reference surfaces
 - S5: `cacheMode: p1-real` offline cache contract, including k3s binary,
   install script, k3s airgap archive, kubectl/Helm binaries, dependency OCI
-  archives, JuiceFS CSI artifact, CSI sidecar image archives, and `images.lock`
-  archive sha256 validation
+  archives, JuiceFS CSI artifact, CSI sidecar image archives, the `rwx-smoke`
+  OCI archive, and `images.lock` archive sha256 validation
 - S6: rendered JuiceFS CSI contract, cross-checking env-rendered namespace,
   secretName, storageClass, pvcName, ReadWriteMany, and bucket URL
 - S7: doctor dry-run/live layering; dry-run proves static contracts, while live
-  kubectl/cluster/psql checks observe reachable resources and JuiceFS PVC
-  `Bound`; unverifiable S3/RWX checks are partial or failed
+  kubectl/cluster/psql checks observe reachable resources, JuiceFS PVC `Bound`,
+  and two-Job RWX behavior when a digest-pinned smoke image is available;
+  unverifiable S3 checks remain partial or failed
 
 ## Shell Style
 
@@ -39,7 +40,8 @@ The current test slices are:
 - P0 skeletons remain dry-run/contract-only. p1-real offline install performs
   the minimum cached k3s/import/kubectl apply chain, self-hosted PostgreSQL and
   MinIO bootstrap, cached JuiceFS CSI Helm chart install, and idempotent JuiceFS
-  format. Live RWX smoke remains open.
+  format. Live doctor then runs the RWX smoke from the cached digest-pinned
+  `rwx-smoke` image after the JuiceFS PVC is `Bound`.
 - The default `download-online.sh` output is still a P0 static contract
   skeleton. It is useful for contract generation and dry-run validation only.
 - A p1-real offline cache must be supplied with all required artifacts and

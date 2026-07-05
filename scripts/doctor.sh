@@ -8,10 +8,12 @@ source "${ROOT_DIR}/scripts/lib/env.sh"
 source "${ROOT_DIR}/scripts/lib/offline.sh"
 # shellcheck source=lib/postgres.sh
 source "${ROOT_DIR}/scripts/lib/postgres.sh"
+# shellcheck source=lib/rwx_smoke.sh
+source "${ROOT_DIR}/scripts/lib/rwx_smoke.sh"
 
 usage() {
   cat <<'EOF_USAGE'
-Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--dry-run] [--report out/doctor-report.json]
+Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--rwx-smoke-image image@sha256:<digest>] [--dry-run] [--report out/doctor-report.json]
 
 Substrate-only checks:
   K8s reachability/namespace, PostgreSQL URL/connectivity, S3 credential presence/probe,
@@ -28,6 +30,7 @@ EOF_USAGE
 env_file=""
 secrets_file=""
 offline_cache=""
+rwx_smoke_image=""
 report_file=""
 dry_run=false
 
@@ -43,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --offline-cache)
       offline_cache="${2:-}"
+      shift 2
+      ;;
+    --rwx-smoke-image)
+      rwx_smoke_image="${2:-}"
       shift 2
       ;;
     --dry-run)
@@ -72,6 +79,8 @@ fi
 checks_json=()
 failed=false
 partial=false
+resolved_rwx_smoke_image=""
+doctor_rwx_smoke_image_error=""
 
 add_check() {
   local name="$1"
@@ -132,6 +141,49 @@ doctor_check_postgres_url() {
   else
     add_check "${name}" "partial" "${partial_message}"
   fi
+}
+
+doctor_validate_rwx_smoke_image_ref() {
+  local image_ref="$1"
+  if [[ ! "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    doctor_rwx_smoke_image_error="RWX smoke image must be digest-pinned with @sha256:<64 lowercase hex>"
+    return 1
+  fi
+  if is_app_owned_image_ref "${image_ref}"; then
+    doctor_rwx_smoke_image_error="RWX smoke image must not reference app-owned images"
+    return 1
+  fi
+  return 0
+}
+
+doctor_resolve_rwx_smoke_image() {
+  local lock_file image_ref
+  resolved_rwx_smoke_image=""
+  doctor_rwx_smoke_image_error=""
+
+  if [[ -n "${rwx_smoke_image}" ]]; then
+    doctor_validate_rwx_smoke_image_ref "${rwx_smoke_image}" || return 1
+    resolved_rwx_smoke_image="${rwx_smoke_image}"
+    return 0
+  fi
+
+  if [[ -n "${offline_cache}" ]]; then
+    lock_file="${offline_cache}/images/images.lock"
+    if [[ ! -f "${lock_file}" ]]; then
+      doctor_rwx_smoke_image_error="RWX smoke image is required after PVC Bound; offline cache images.lock was not readable"
+      return 1
+    fi
+    if ! image_ref="$(images_lock_image_ref "${lock_file}" "rwx-smoke" 2>/dev/null)"; then
+      doctor_rwx_smoke_image_error="RWX smoke image is required after PVC Bound; offline cache images.lock is missing name: rwx-smoke"
+      return 1
+    fi
+    doctor_validate_rwx_smoke_image_ref "${image_ref}" || return 1
+    resolved_rwx_smoke_image="${image_ref}"
+    return 0
+  fi
+
+  doctor_rwx_smoke_image_error="RWX smoke image is required after PVC Bound; supply --offline-cache with images.lock name: rwx-smoke or --rwx-smoke-image"
+  return 1
 }
 
 if validate_output="$(validate_env_contract "${env_file}" "${secrets_file}" 2>&1)"; then
@@ -220,13 +272,13 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
     printf '%s\n' "${juicefs_output}"
     if [[ "${dry_run}" == "true" ]]; then
       add_check "juicefs-csi" "passed" "dry-run static: rendered JuiceFS Secret, StorageClass, and PVC contract is valid" "substrate-csi-secret"
-      add_check "rwx" "passed" "dry-run static: PVC contract requests ReadWriteMany; skipped two-pod RWX smoke"
+      add_check "rwx" "passed" "dry-run static: PVC contract requests ReadWriteMany; skipped two-Job RWX smoke"
     elif [[ "${kubectl_available}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "kubectl not found; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
-      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
+      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires kubectl; RWX was not verified"
     elif [[ "${cluster_reachable}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "cluster namespace is not reachable; live JuiceFS resources were not verified" "substrate-csi-secret"
-      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
+      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires a reachable namespace; RWX was not verified"
     elif "${kubectl_cmd[@]}" "${kubectl_args[@]}" get storageclass "${juicefs_storage_class}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get secret "${juicefs_secret_name}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" >/dev/null 2>&1; then
@@ -236,21 +288,34 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
         case "${pvc_phase}" in
           Bound)
             add_check "juicefs-csi" "passed" "live JuiceFS PVC phase is Bound" "substrate-csi-secret"
+            if doctor_resolve_rwx_smoke_image; then
+              if rwx_output="$(rwx_smoke_run "${namespace}" "${juicefs_pvc_name}" "${resolved_rwx_smoke_image}" "${kubectl_cmd[0]}" "${kubectl_args[@]}" 2>&1)"; then
+                printf '%s\n' "${rwx_output}"
+                add_check "rwx" "passed" "live two-job ReadWriteMany smoke passed against PVC ${juicefs_pvc_name}"
+              else
+                printf '%s\n' "${rwx_output}" >&2
+                add_check "rwx" "failed" "live two-job ReadWriteMany smoke failed; see doctor output for sanitized Job logs"
+              fi
+            else
+              add_check "rwx" "failed" "${doctor_rwx_smoke_image_error}"
+            fi
             ;;
           Pending|Lost)
             add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is ${pvc_phase}, expected Bound" "substrate-csi-secret"
+            add_check "rwx" "failed" "RWX was not verified because live JuiceFS PVC phase is ${pvc_phase}, expected Bound"
             ;;
           *)
             add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is not Bound" "substrate-csi-secret"
+            add_check "rwx" "failed" "RWX was not verified because live JuiceFS PVC phase is not Bound"
             ;;
         esac
       else
         add_check "juicefs-csi" "failed" "live JuiceFS PVC phase could not be read" "substrate-csi-secret"
+        add_check "rwx" "failed" "RWX was not verified because live JuiceFS PVC phase could not be read"
       fi
-      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
     else
       add_check "juicefs-csi" "failed" "live JuiceFS StorageClass, Secret, or PVC is missing" "substrate-csi-secret"
-      add_check "rwx" "partial" "live two-pod ReadWriteMany smoke is not implemented; RWX was not verified"
+      add_check "rwx" "failed" "RWX was not verified because live JuiceFS StorageClass, Secret, or PVC is missing"
     fi
   else
     printf '%s\n' "${juicefs_output}" >&2

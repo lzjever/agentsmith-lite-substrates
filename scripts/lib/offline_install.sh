@@ -242,7 +242,7 @@ offline_install_run_doctor() {
       info "install-offline: doctor passed"
       ;;
     2)
-      warn "install-offline: doctor reported partial; live S3/RWX and remaining smoke checks are still incomplete"
+      warn "install-offline: doctor reported partial; see doctor report for live checks that remain unverified"
       ;;
     *)
       die "doctor failed after offline install; see ${report_file}"

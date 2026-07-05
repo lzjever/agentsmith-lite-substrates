@@ -378,6 +378,7 @@ validate_p1_real_cache() {
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-node-driver-registrar.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-provisioner.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-resizer.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/rwx-smoke.tar"
 
   require_executable_artifact "${cache_dir}" "bin/k3s"
   require_executable_artifact "${cache_dir}" "scripts/install-k3s.sh"
@@ -393,6 +394,7 @@ validate_p1_real_cache() {
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-node-driver-registrar" "images/oci/juicefs-csi-node-driver-registrar.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-provisioner" "images/oci/juicefs-csi-provisioner.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-resizer" "images/oci/juicefs-csi-resizer.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "rwx-smoke" "images/oci/rwx-smoke.tar"
 
   local helm_image_name helm_image
   for helm_image_name in \
@@ -451,11 +453,9 @@ validate_offline_cache() {
     if [[ ! "${image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
       die "images.lock image is not digest-pinned: ${image}"
     fi
-    case "${image}" in
-      *agentsmith-lite-api*|*agentsmith-lite-web*|*agentsmith-lite-app*|*botified-runner*)
-        die "substrate offline cache must not include app-owned images: ${image}"
-        ;;
-    esac
+    if is_app_owned_image_ref "${image}"; then
+      die "substrate offline cache must not include app-owned images"
+    fi
   done < <(awk '/^[[:space:]]*image:/ { print $2 }' "${lock_file}")
 
   validate_images_lock_archives "${cache_dir}"

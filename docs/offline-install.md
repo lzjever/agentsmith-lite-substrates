@@ -30,6 +30,7 @@ dist/offline-cache/
       juicefs-csi-node-driver-registrar.tar
       juicefs-csi-provisioner.tar
       juicefs-csi-resizer.tar
+      rwx-smoke.tar
   manifests/
     namespace-bootstrap/
       namespace.yaml
@@ -90,6 +91,8 @@ Required artifact lock keys:
   `JUICEFS_CSI_PROVISIONER_ARCHIVE_SHA256`
 - `JUICEFS_CSI_RESIZER_IMAGE` / `JUICEFS_CSI_RESIZER_ARCHIVE_URL` /
   `JUICEFS_CSI_RESIZER_ARCHIVE_SHA256`
+- `RWX_SMOKE_IMAGE` / `RWX_SMOKE_ARCHIVE_URL` /
+  `RWX_SMOKE_ARCHIVE_SHA256`
 
 Image refs must be digest-pinned with `@sha256:<64 lowercase hex>`. The producer
 rejects mutable tags, missing required keys, invalid sha256 values, sha
@@ -116,9 +119,9 @@ requires:
 - `manifests/namespace-bootstrap/namespace.yaml` with manifest kind `manifest`
 - `images/images.lock` with manifest kind `images-lock`
 - `charts/juicefs-csi.tgz` with manifest kind `juicefs-csi-artifact`
-- dependency image entries for PostgreSQL, MinIO, MinIO client, JuiceFS CSI, and
+- dependency image entries for PostgreSQL, MinIO, MinIO client, JuiceFS CSI,
   the JuiceFS CSI liveness probe, node-driver-registrar, provisioner, and
-  resizer sidecars
+  resizer sidecars, and the `rwx-smoke` Job image
 - digest-pinned image references
 - archive paths and per-archive sha256 values in `images.lock`
 
@@ -149,8 +152,8 @@ creates/verifies `S3_BUCKET` with a one-shot MinIO client Job, deletes that Job,
 runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
 image, applies the StorageClass/PVC contract only after the format Job reports a
 matching volume, waits for the configured JuiceFS PVC to reach `Bound`, and
-finally runs `scripts/doctor.sh --offline-cache ...`.
-
-The p1-real installer still does not run a live RWX smoke. Doctor `partial` is
-allowed for those incomplete live checks; doctor `failed` still fails the
-install.
+finally runs `scripts/doctor.sh --offline-cache ...`. Live doctor reads the
+digest-pinned `name: rwx-smoke` image from that cache and runs writer/reader
+Jobs against the same PVC. Doctor `partial` is still allowed for live checks
+that are explicitly unverified, such as S3 object probing; doctor `failed` still
+fails the install.

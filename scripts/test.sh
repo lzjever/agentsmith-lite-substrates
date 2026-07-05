@@ -248,9 +248,10 @@ write_p1_offline_cache() {
   printf 'juicefs csi node driver registrar oci archive fixture\n' >"${dir}/images/oci/juicefs-csi-node-driver-registrar.tar"
   printf 'juicefs csi provisioner oci archive fixture\n' >"${dir}/images/oci/juicefs-csi-provisioner.tar"
   printf 'juicefs csi resizer oci archive fixture\n' >"${dir}/images/oci/juicefs-csi-resizer.tar"
+  printf 'rwx smoke oci archive fixture\n' >"${dir}/images/oci/rwx-smoke.tar"
 
   local k3s_sum kubectl_sum helm_sum install_sum import_sum namespace_sum airgap_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum
-  local liveness_sum registrar_sum provisioner_sum resizer_sum lock_sum manifest_sum
+  local liveness_sum registrar_sum provisioner_sum resizer_sum rwx_smoke_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   kubectl_sum="$(sha256_file "${dir}/bin/kubectl")"
   helm_sum="$(sha256_file "${dir}/bin/helm")"
@@ -267,6 +268,7 @@ write_p1_offline_cache() {
   registrar_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar")"
   provisioner_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-provisioner.tar")"
   resizer_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-resizer.tar")"
+  rwx_smoke_sum="$(sha256_file "${dir}/images/oci/rwx-smoke.tar")"
 
   if [[ "${variant}" == "missing-image-sha" ]]; then
     cat >"${dir}/images/images.lock" <<EOF_LOCK
@@ -331,6 +333,10 @@ EOF_LOCK
     image: registry.k8s.io/sig-storage/csi-resizer:v1.9.0@sha256:2222222222222222222222222222222222222222222222222222222222222222
     archive: images/oci/juicefs-csi-resizer.tar
     sha256: ${resizer_sum}
+  - name: rwx-smoke
+    image: ghcr.io/agentsmith-lite/rwx-smoke@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    archive: images/oci/rwx-smoke.tar
+    sha256: ${rwx_smoke_sum}
 EOF_LOCK
     } >"${dir}/images/images.lock"
   fi
@@ -398,6 +404,9 @@ EOF_MANIFEST
   - path: images/oci/juicefs-csi-resizer.tar
     sha256: ${resizer_sum}
     kind: oci-archive
+  - path: images/oci/rwx-smoke.tar
+    sha256: ${rwx_smoke_sum}
+    kind: oci-archive
 EOF_MANIFEST
   } >"${dir}/manifest.yaml"
   manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
@@ -427,6 +436,7 @@ ${liveness_sum}  images/oci/juicefs-csi-liveness-probe.tar
 ${registrar_sum}  images/oci/juicefs-csi-node-driver-registrar.tar
 ${provisioner_sum}  images/oci/juicefs-csi-provisioner.tar
 ${resizer_sum}  images/oci/juicefs-csi-resizer.tar
+${rwx_smoke_sum}  images/oci/rwx-smoke.tar
 EOF_SUMS
   } >"${dir}/checksums.txt"
 }
@@ -885,6 +895,7 @@ write_downloader_fixtures() {
   printf 'juicefs csi node driver registrar oci archive fixture from downloader\n' >"${dir}/juicefs-csi-node-driver-registrar.tar"
   printf 'juicefs csi provisioner oci archive fixture from downloader\n' >"${dir}/juicefs-csi-provisioner.tar"
   printf 'juicefs csi resizer oci archive fixture from downloader\n' >"${dir}/juicefs-csi-resizer.tar"
+  printf 'rwx smoke oci archive fixture from downloader\n' >"${dir}/rwx-smoke.tar"
 }
 
 write_artifact_lock() {
@@ -892,7 +903,7 @@ write_artifact_lock() {
   local lock_file="$2"
   local variant="${3:-valid}"
   local k3s_sha install_sha airgap_sha kubectl_sha helm_sha csi_chart_sha postgres_sha minio_sha minio_client_sha juicefs_sha
-  local liveness_sha registrar_sha provisioner_sha resizer_sha
+  local liveness_sha registrar_sha provisioner_sha resizer_sha rwx_smoke_sha
   k3s_sha="$(sha256_file "${fixtures}/k3s")"
   install_sha="$(sha256_file "${fixtures}/install-k3s.sh")"
   airgap_sha="$(sha256_file "${fixtures}/k3s-airgap-images-amd64.tar.zst")"
@@ -907,11 +918,13 @@ write_artifact_lock() {
   registrar_sha="$(sha256_file "${fixtures}/juicefs-csi-node-driver-registrar.tar")"
   provisioner_sha="$(sha256_file "${fixtures}/juicefs-csi-provisioner.tar")"
   resizer_sha="$(sha256_file "${fixtures}/juicefs-csi-resizer.tar")"
+  rwx_smoke_sha="$(sha256_file "${fixtures}/rwx-smoke.tar")"
 
   local postgres_image="docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   local minio_client_image="quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   local juicefs_csi_image="docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   local liveness_image="registry.k8s.io/sig-storage/livenessprobe:v2.12.0@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  local rwx_smoke_image="ghcr.io/agentsmith-lite/rwx-smoke@sha256:3333333333333333333333333333333333333333333333333333333333333333"
   if [[ "${variant}" == "mutable-image" ]]; then
     postgres_image="docker.io/library/postgres:16"
   fi
@@ -920,6 +933,9 @@ write_artifact_lock() {
   fi
   if [[ "${variant}" == "mutable-csi-sidecar-image" ]]; then
     liveness_image="registry.k8s.io/sig-storage/livenessprobe:latest"
+  fi
+  if [[ "${variant}" == "mutable-rwx-smoke-image" ]]; then
+    rwx_smoke_image="ghcr.io/agentsmith-lite/rwx-smoke:latest"
   fi
   if [[ "${variant}" == "untagged-helm-image" ]]; then
     juicefs_csi_image="docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -965,6 +981,9 @@ JUICEFS_CSI_PROVISIONER_ARCHIVE_SHA256=${provisioner_sha}
 JUICEFS_CSI_RESIZER_IMAGE=registry.k8s.io/sig-storage/csi-resizer:v1.9.0@sha256:2222222222222222222222222222222222222222222222222222222222222222
 JUICEFS_CSI_RESIZER_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi-resizer.tar")
 JUICEFS_CSI_RESIZER_ARCHIVE_SHA256=${resizer_sha}
+RWX_SMOKE_IMAGE=${rwx_smoke_image}
+RWX_SMOKE_ARCHIVE_URL=$(file_url "${fixtures}/rwx-smoke.tar")
+RWX_SMOKE_ARCHIVE_SHA256=${rwx_smoke_sha}
 EOF_LOCK
 
   if [[ "${variant}" == "missing-key" ]]; then
@@ -980,6 +999,11 @@ EOF_LOCK
   if [[ "${variant}" == "missing-csi-sidecar-key" ]]; then
     local tmp="${lock_file}.tmp"
     grep -v '^JUICEFS_CSI_LIVENESS_PROBE_IMAGE=' "${lock_file}" >"${tmp}"
+    mv "${tmp}" "${lock_file}"
+  fi
+  if [[ "${variant}" == "missing-rwx-smoke-key" ]]; then
+    local tmp="${lock_file}.tmp"
+    grep -v '^RWX_SMOKE_IMAGE=' "${lock_file}" >"${tmp}"
     mv "${tmp}" "${lock_file}"
   fi
   if [[ "${variant}" == "mutable-minio-client-image" ]]; then
@@ -1250,6 +1274,35 @@ test_p1_real_offline_cache_requires_csi_sidecar_archives_and_lock_entries() {
   pass "P6.5 p1-real offline-cache contract requires CSI sidecar archives and lock entries"
 }
 
+test_p1_real_offline_cache_requires_rwx_smoke_archive_and_lock_entry() {
+  local cache="${TMP_DIR}/offline-cache-p1-missing-rwx-smoke"
+  local config="${TMP_DIR}/substrates-p1-missing-rwx-smoke.yaml"
+  local output="${TMP_DIR}/offline-p1-missing-rwx-smoke-out"
+  local out="${TMP_DIR}/install-offline-p1-missing-rwx-smoke.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  remove_images_lock_entry_for_name "${cache}" "rwx-smoke"
+  refresh_cache_artifacts "${cache}" "images/images.lock"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a p1-real cache missing the rwx-smoke images.lock entry"
+  fi
+  assert_contains "${out}" "p1-real images.lock is missing dependency image entry: rwx-smoke"
+
+  cache="${TMP_DIR}/offline-cache-p1-missing-rwx-smoke-manifest"
+  output="${TMP_DIR}/offline-p1-missing-rwx-smoke-manifest-out"
+  out="${TMP_DIR}/install-offline-p1-missing-rwx-smoke-manifest.out"
+  write_p1_offline_cache "${cache}"
+  remove_manifest_artifact_entry "${cache}/manifest.yaml" "images/oci/rwx-smoke.tar"
+  refresh_manifest_checksum_entry "${cache}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a p1-real cache missing images/oci/rwx-smoke.tar from manifest artifacts"
+  fi
+  assert_contains "${out}" "missing required p1-real artifact images/oci/rwx-smoke.tar with kind oci-archive"
+  pass "S5 p1-real offline-cache contract requires cached rwx-smoke OCI archive and lock entry"
+}
+
 test_p1_real_offline_cache_requires_minio_client_oci_archive() {
   local cache="${TMP_DIR}/offline-cache-p1-missing-minio-client"
   local config="${TMP_DIR}/substrates-p1-missing-minio-client.yaml"
@@ -1298,6 +1351,25 @@ test_p1_real_offline_cache_rejects_mutable_minio_client_image_ref() {
   assert_contains "${out}" "images.lock image is not digest-pinned"
   assert_contains "${out}" "quay.io/minio/mc:latest"
   pass "S5 p1-real offline-cache contract requires digest-pinned minio-client image"
+}
+
+test_p1_real_offline_cache_rejects_app_owned_rwx_smoke_image_ref() {
+  local cache="${TMP_DIR}/offline-cache-p1-app-owned-rwx-smoke"
+  local config="${TMP_DIR}/substrates-p1-app-owned-rwx-smoke.yaml"
+  local output="${TMP_DIR}/offline-p1-app-owned-rwx-smoke-out"
+  local out="${TMP_DIR}/install-offline-p1-app-owned-rwx-smoke.out"
+  local app_image="agentsmith-lite/app@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  replace_images_lock_image_ref "${cache}" "rwx-smoke" "${app_image}"
+  refresh_cache_artifacts "${cache}" "images/images.lock"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted an app-owned rwx-smoke image reference"
+  fi
+  assert_contains "${out}" "substrate offline cache must not include app-owned images"
+  assert_not_contains "${out}" "${app_image}"
+  pass "S5 p1-real offline-cache contract rejects app-owned rwx-smoke image refs without leaking the ref"
 }
 
 test_p0_contract_offline_install_non_dry_run_still_fails() {
@@ -1861,10 +1933,12 @@ test_download_online_generates_p1_real_cache_from_artifact_lock() {
   assert_contains "${cache}/manifest.yaml" "path: images/oci/juicefs-csi-node-driver-registrar.tar"
   assert_contains "${cache}/manifest.yaml" "path: images/oci/juicefs-csi-provisioner.tar"
   assert_contains "${cache}/manifest.yaml" "path: images/oci/juicefs-csi-resizer.tar"
+  assert_contains "${cache}/manifest.yaml" "path: images/oci/rwx-smoke.tar"
   assert_contains "${cache}/checksums.txt" "scripts/import-images.sh"
   assert_contains "${cache}/checksums.txt" "manifests/namespace-bootstrap/namespace.yaml"
   assert_contains "${cache}/checksums.txt" "bin/helm"
   assert_contains "${cache}/checksums.txt" "images/oci/juicefs-csi-liveness-probe.tar"
+  assert_contains "${cache}/checksums.txt" "images/oci/rwx-smoke.tar"
   assert_contains "${cache}/images/images.lock" "image: docker.io/library/postgres@sha256:"
   assert_contains "${cache}/images/images.lock" "archive: images/oci/postgres.tar"
   assert_contains "${cache}/images/images.lock" "name: minio-client"
@@ -1880,6 +1954,9 @@ test_download_online_generates_p1_real_cache_from_artifact_lock() {
   assert_contains "${cache}/images/images.lock" "archive: images/oci/juicefs-csi-provisioner.tar"
   assert_contains "${cache}/images/images.lock" "name: juicefs-csi-resizer"
   assert_contains "${cache}/images/images.lock" "archive: images/oci/juicefs-csi-resizer.tar"
+  assert_contains "${cache}/images/images.lock" "name: rwx-smoke"
+  assert_contains "${cache}/images/images.lock" "image: ghcr.io/agentsmith-lite/rwx-smoke@sha256:"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/rwx-smoke.tar"
   test -x "${cache}/bin/helm" || fail "download-online did not write executable bin/helm"
   test -x "${cache}/scripts/import-images.sh" || fail "download-online did not write executable scripts/import-images.sh"
   test -f "${cache}/manifests/namespace-bootstrap/namespace.yaml" || fail "download-online did not write namespace bootstrap manifest"
@@ -1888,6 +1965,7 @@ test_download_online_generates_p1_real_cache_from_artifact_lock() {
   assert_contains "${import_out}" "images/oci/postgres.tar"
   assert_contains "${import_out}" "images/oci/minio-client.tar"
   assert_contains "${import_out}" "images/oci/juicefs-csi-resizer.tar"
+  assert_contains "${import_out}" "images/oci/rwx-smoke.tar"
 
   "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${install_out}" 2>&1
   assert_contains "${install_out}" "validated p1-real cache contract"
@@ -2026,6 +2104,37 @@ test_download_online_rejects_mutable_csi_sidecar_image_ref() {
   pass "P6.5 downloader requires digest-pinned CSI sidecar images"
 }
 
+test_download_online_requires_rwx_smoke_artifact_lock() {
+  local fixtures="${TMP_DIR}/download-fixtures-missing-rwx-smoke"
+  local lock_file="${TMP_DIR}/offline-artifacts-missing-rwx-smoke.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-missing-rwx-smoke"
+  local out="${TMP_DIR}/download-online-missing-rwx-smoke.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "missing-rwx-smoke-key"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted an artifact lock missing rwx-smoke coordinates"
+  fi
+  assert_contains "${out}" "artifact lock is missing required key RWX_SMOKE_IMAGE"
+  pass "P1 downloader requires rwx-smoke artifact lock coordinates"
+}
+
+test_download_online_rejects_mutable_rwx_smoke_image_ref() {
+  local fixtures="${TMP_DIR}/download-fixtures-mutable-rwx-smoke"
+  local lock_file="${TMP_DIR}/offline-artifacts-mutable-rwx-smoke.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-mutable-rwx-smoke"
+  local out="${TMP_DIR}/download-online-mutable-rwx-smoke.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "mutable-rwx-smoke-image"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted a mutable rwx-smoke image reference"
+  fi
+  assert_contains "${out}" "RWX_SMOKE_IMAGE must be digest-pinned"
+  assert_not_contains "${out}" "ghcr.io/agentsmith-lite/rwx-smoke:latest"
+  pass "P1 downloader requires digest-pinned rwx-smoke image"
+}
+
 test_download_online_rejects_untagged_helm_consumed_image_ref() {
   local fixtures="${TMP_DIR}/download-fixtures-untagged-helm-image"
   local lock_file="${TMP_DIR}/offline-artifacts-untagged-helm-image.env"
@@ -2069,7 +2178,7 @@ test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
   pass "S7 substrate-only doctor dry-run proves static contracts, offline-cache, and redaction"
 }
 
-test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified() {
+test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing() {
   local env_dir="${TMP_DIR}/doctor-live-env"
   local stub_bin="${TMP_DIR}/doctor-live-bin"
   local report="${TMP_DIR}/doctor-live-report.json"
@@ -2107,9 +2216,9 @@ EOF_PSQL
   KUBECTL_LOG="${kubectl_log}" PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${report}" >"${out}" 2>&1
   status=$?
   set -e
-  [[ "${status}" -eq 2 ]] || fail "doctor live mode should exit 2 for partial checks, got ${status}"
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when PVC is Bound but no RWX smoke image is configured, got ${status}"
   assert_contains "${report}" '"dryRun": false'
-  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${report}" '"overallStatus": "failed"'
   assert_contains "${report}" '"postgres-app"'
   assert_contains "${report}" '"postgres-juicefs-meta"'
   assert_contains "${report}" "app database accepted a simple query"
@@ -2117,7 +2226,7 @@ EOF_PSQL
   assert_contains "${report}" "live JuiceFS PVC phase is Bound"
   assert_contains "${report}" '"status": "partial"'
   assert_contains "${report}" "live S3 read/write/delete probe is not implemented"
-  assert_contains "${report}" "RWX was not verified"
+  assert_contains "${report}" "RWX smoke image is required"
   assert_contains "${kubectl_log}" "get storageclass agentsmith-lite-juicefs-rwx"
   assert_contains "${kubectl_log}" "-n agentsmith get secret agentsmith-lite-juicefs"
   assert_contains "${kubectl_log}" "-n agentsmith get pvc agentsmith-lite-files"
@@ -2138,7 +2247,259 @@ EOF_PSQL
   assert_not_contains "${psql_log}" "postgres://"
   assert_not_contains "${out}" "postgresql://"
   assert_not_contains "${report}" "postgresql://"
-  pass "S7 doctor live mode is not falsely green when S3/RWX live checks are unverified"
+  pass "S7 doctor live mode fails instead of going green when RWX smoke image is missing"
+}
+
+test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound() {
+  local env_dir="${TMP_DIR}/doctor-live-rwx-env"
+  local cache="${TMP_DIR}/doctor-live-rwx-cache"
+  local stub_bin="${TMP_DIR}/doctor-live-rwx-bin"
+  local applied_dir="${TMP_DIR}/doctor-live-rwx-applied"
+  local report="${TMP_DIR}/doctor-live-rwx-report.json"
+  local out="${TMP_DIR}/doctor-live-rwx.out"
+  local psql_log="${TMP_DIR}/doctor-live-rwx-psql.log"
+  local kubectl_log="${TMP_DIR}/doctor-live-rwx-kubectl.log"
+  local rendered="${TMP_DIR}/doctor-live-rwx-rendered.yaml"
+  local status
+  write_valid_env_pair "${env_dir}"
+  write_p1_offline_cache "${cache}"
+  mkdir -p "${stub_bin}" "${applied_dir}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+: "${KUBECTL_APPLIED_DIR:?KUBECTL_APPLIED_DIR is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "-f" && -f "${arg}" ]] && grep -Fq "agentsmith-lite-rwx-smoke" "${arg}"; then
+    index="$(find "${KUBECTL_APPLIED_DIR}" -type f -name 'apply-*.yaml' | wc -l | tr -d '[:space:]')"
+    cp "${arg}" "${KUBECTL_APPLIED_DIR}/apply-${index}.yaml"
+  fi
+  previous="${arg}"
+done
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: ok\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+: "${PSQL_LOG:?PSQL_LOG is required}"
+printf 'psql %s\n' "$*" >>"${PSQL_LOG}"
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" KUBECTL_APPLIED_DIR="${applied_dir}" PSQL_LOG="${psql_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 2 ]] || fail "doctor live mode should exit 2 only because S3 remains partial, got ${status}"
+
+  mapfile -t smoke_manifests < <(find "${applied_dir}" -type f -name 'apply-*.yaml' -print | sort)
+  [[ "${#smoke_manifests[@]}" -eq 2 ]] || fail "expected writer and reader RWX smoke manifests, got ${#smoke_manifests[@]}"
+  : >"${rendered}"
+  local manifest
+  for manifest in "${smoke_manifests[@]}"; do
+    cat "${manifest}" >>"${rendered}"
+  done
+
+  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${report}" '"name": "rwx"'
+  assert_contains "${report}" '"status": "passed"'
+  assert_contains "${report}" "live two-job ReadWriteMany smoke passed"
+  assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-reader-"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-writer-"
+  assert_contains "${kubectl_log}" "logs job/agentsmith-lite-rwx-smoke-reader-"
+  assert_contains "${kubectl_log}" "logs job/agentsmith-lite-rwx-smoke-writer-"
+  assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_contains "${rendered}" "image: ghcr.io/agentsmith-lite/rwx-smoke@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  assert_contains "${rendered}" "claimName: agentsmith-lite-files"
+  assert_contains "${rendered}" "app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor"
+  assert_contains "${rendered}" "agentsmith-lite/check: rwx-smoke"
+  assert_contains "${rendered}" "agentsmith-lite/run-id:"
+  assert_contains "${rendered}" "agentsmith-lite/role: writer"
+  assert_contains "${rendered}" "agentsmith-lite/role: reader"
+  assert_not_contains "${rendered}" "postgres-secret-value"
+  assert_not_contains "${rendered}" "juicefs-secret-value"
+  assert_not_contains "${rendered}" "minio-access-key"
+  assert_not_contains "${rendered}" "minio-secret-value"
+  assert_not_contains "${rendered}" "http://"
+  assert_not_contains "${rendered}" "https://"
+  assert_not_contains "${rendered}" "postgresql://"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-secret-value"
+  pass "S7 doctor live mode runs a two-Job RWX smoke against a Bound JuiceFS PVC"
+}
+
+test_substrate_only_doctor_live_fails_and_cleans_up_when_rwx_reader_wait_fails() {
+  local env_dir="${TMP_DIR}/doctor-live-rwx-wait-fail-env"
+  local cache="${TMP_DIR}/doctor-live-rwx-wait-fail-cache"
+  local stub_bin="${TMP_DIR}/doctor-live-rwx-wait-fail-bin"
+  local applied_dir="${TMP_DIR}/doctor-live-rwx-wait-fail-applied"
+  local report="${TMP_DIR}/doctor-live-rwx-wait-fail-report.json"
+  local out="${TMP_DIR}/doctor-live-rwx-wait-fail.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-rwx-wait-fail-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  write_p1_offline_cache "${cache}"
+  mkdir -p "${stub_bin}" "${applied_dir}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+: "${KUBECTL_APPLIED_DIR:?KUBECTL_APPLIED_DIR is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+previous=""
+for arg in "$@"; do
+  if [[ "${previous}" == "-f" && -f "${arg}" ]] && grep -Fq "agentsmith-lite-rwx-smoke" "${arg}"; then
+    index="$(find "${KUBECTL_APPLIED_DIR}" -type f -name 'apply-*.yaml' | wc -l | tr -d '[:space:]')"
+    cp "${arg}" "${KUBECTL_APPLIED_DIR}/apply-${index}.yaml"
+  fi
+  previous="${arg}"
+done
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+  *"wait --for=condition=complete job/agentsmith-lite-rwx-smoke-reader-"*)
+    exit 37
+    ;;
+  *" logs job/agentsmith-lite-rwx-smoke-"*)
+    printf 'agentsmith-lite-rwx-smoke: wait failure fixture\n'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" KUBECTL_APPLIED_DIR="${applied_dir}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --offline-cache "${cache}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should exit 1 when RWX reader wait fails, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "rwx"'
+  assert_contains "${report}" '"status": "failed"'
+  assert_contains "${report}" "live two-job ReadWriteMany smoke failed"
+  assert_contains "${kubectl_log}" "apply -f"
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-rwx-smoke-reader-"
+  assert_contains "${kubectl_log}" "logs job/agentsmith-lite-rwx-smoke-reader-"
+  assert_contains "${kubectl_log}" "logs job/agentsmith-lite-rwx-smoke-writer-"
+  assert_contains "${kubectl_log}" "delete job -l agentsmith-lite/run-id="
+  assert_contains "${kubectl_log}" "--ignore-not-found=true"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${report}" "postgres-secret-value"
+  assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-secret-value"
+  pass "S7 doctor live mode fails RWX smoke on reader wait failure and still cleans up"
+}
+
+test_substrate_only_doctor_live_rejects_mutable_rwx_smoke_image() {
+  local env_dir="${TMP_DIR}/doctor-live-rwx-mutable-env"
+  local stub_bin="${TMP_DIR}/doctor-live-rwx-mutable-bin"
+  local report="${TMP_DIR}/doctor-live-rwx-mutable-report.json"
+  local out="${TMP_DIR}/doctor-live-rwx-mutable.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-rwx-mutable-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --rwx-smoke-image "ghcr.io/agentsmith-lite/rwx-smoke:latest" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should reject mutable RWX smoke images, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "rwx"'
+  assert_contains "${report}" "RWX smoke image must be digest-pinned"
+  assert_not_contains "${kubectl_log}" " apply "
+  assert_not_contains "${kubectl_log}" " delete "
+  assert_not_contains "${out}" "ghcr.io/agentsmith-lite/rwx-smoke:latest"
+  assert_not_contains "${report}" "ghcr.io/agentsmith-lite/rwx-smoke:latest"
+  pass "S7 doctor live mode rejects mutable explicit RWX smoke image refs before creating Jobs"
+}
+
+test_substrate_only_doctor_live_rejects_app_owned_rwx_smoke_image() {
+  local env_dir="${TMP_DIR}/doctor-live-rwx-app-owned-env"
+  local stub_bin="${TMP_DIR}/doctor-live-rwx-app-owned-bin"
+  local report="${TMP_DIR}/doctor-live-rwx-app-owned-report.json"
+  local out="${TMP_DIR}/doctor-live-rwx-app-owned.out"
+  local kubectl_log="${TMP_DIR}/doctor-live-rwx-app-owned-kubectl.log"
+  local app_image="agentsmith-lite/app@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  local status
+  write_valid_env_pair "${env_dir}"
+  mkdir -p "${stub_bin}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+case "$*" in
+  *" get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
+    printf 'Bound'
+    ;;
+esac
+exit 0
+EOF_KUBECTL
+  cat >"${stub_bin}/psql" <<'EOF_PSQL'
+#!/usr/bin/env bash
+exit 0
+EOF_PSQL
+  chmod +x "${stub_bin}/kubectl" "${stub_bin}/psql"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --rwx-smoke-image "${app_image}" --report "${report}" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -eq 1 ]] || fail "doctor live mode should reject app-owned RWX smoke images, got ${status}"
+  assert_contains "${report}" '"overallStatus": "failed"'
+  assert_contains "${report}" '"name": "rwx"'
+  assert_contains "${report}" "RWX smoke image must not reference app-owned images"
+  assert_not_contains "${kubectl_log}" " apply "
+  assert_not_contains "${kubectl_log}" " delete "
+  assert_not_contains "${out}" "${app_image}"
+  assert_not_contains "${report}" "${app_image}"
+  pass "S7 doctor live mode rejects app-owned explicit RWX smoke image refs before creating Jobs"
 }
 
 test_substrate_only_doctor_live_fails_when_pvc_phase_is_pending() {
@@ -2381,9 +2742,11 @@ test_offline_cache_rejects_url_suffix_fields_with_file_urls
 test_p1_real_offline_cache_requires_artifacts_and_archive_sha
 test_p1_real_offline_cache_requires_cached_helm
 test_p1_real_offline_cache_requires_csi_sidecar_archives_and_lock_entries
+test_p1_real_offline_cache_requires_rwx_smoke_archive_and_lock_entry
 test_p1_real_offline_cache_requires_minio_client_oci_archive
 test_p1_real_offline_cache_requires_minio_client_images_lock_archive_sha
 test_p1_real_offline_cache_rejects_mutable_minio_client_image_ref
+test_p1_real_offline_cache_rejects_app_owned_rwx_smoke_image_ref
 test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
@@ -2408,9 +2771,15 @@ test_download_online_requires_minio_client_artifact_lock
 test_download_online_rejects_mutable_minio_client_image_ref
 test_download_online_requires_csi_sidecar_artifact_lock
 test_download_online_rejects_mutable_csi_sidecar_image_ref
+test_download_online_requires_rwx_smoke_artifact_lock
+test_download_online_rejects_mutable_rwx_smoke_image_ref
 test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
-test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified
+test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing
+test_substrate_only_doctor_live_runs_rwx_smoke_when_pvc_is_bound
+test_substrate_only_doctor_live_fails_and_cleans_up_when_rwx_reader_wait_fails
+test_substrate_only_doctor_live_rejects_mutable_rwx_smoke_image
+test_substrate_only_doctor_live_rejects_app_owned_rwx_smoke_image
 test_substrate_only_doctor_live_fails_when_pvc_phase_is_pending
 test_substrate_only_doctor_live_fails_when_pvc_phase_read_fails
 test_substrate_only_doctor_live_fails_when_pvc_is_missing
