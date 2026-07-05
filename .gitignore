@@ -1,3 +1,2 @@
 out/
-dist/offline-cache/*
-!dist/offline-cache/manifest.example.yaml
+dist/offline-cache/

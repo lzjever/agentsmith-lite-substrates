@@ -1601,6 +1601,20 @@ test_offline_install_validates_cache_without_network() {
   pass "S2 substrate offline path validates cache and writes env contract without network"
 }
 
+test_default_offline_cache_output_has_no_tracked_examples() {
+  local tracked rel
+  tracked="$(
+    while IFS= read -r rel; do
+      [[ ! -e "${ROOT_DIR}/${rel}" ]] || printf '%s\n' "${rel}"
+    done < <(git -C "${ROOT_DIR}" ls-files 'dist/offline-cache/*')
+  )"
+  [[ -z "${tracked}" ]] || fail "default offline cache output contains tracked files: ${tracked}"
+  test -f "${ROOT_DIR}/config/offline-cache-manifest.example.yaml" \
+    || fail "offline cache manifest example is missing from config/"
+  assert_contains "${ROOT_DIR}/config/offline-cache-manifest.example.yaml" "cacheMode: example"
+  pass "S2 default offline cache output is generated-only and manifest example lives in config"
+}
+
 test_offline_cache_rejects_public_download_contract() {
   local cache="${TMP_DIR}/offline-cache-public-url"
   local config="${TMP_DIR}/substrates-public.yaml"
@@ -4604,6 +4618,7 @@ test_install_dry_runs_reject_invalid_generated_env_names
 test_config_contract_accepts_valid_modes
 test_config_contract_uses_custom_kubeconfig_output_path
 test_offline_install_validates_cache_without_network
+test_default_offline_cache_output_has_no_tracked_examples
 test_offline_cache_rejects_public_download_contract
 test_offline_cache_rejects_public_download_references_in_checksums
 test_offline_cache_rejects_manifest_artifact_path_escape_without_reading_outside

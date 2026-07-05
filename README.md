@@ -95,6 +95,10 @@ scripts/download-online.sh \
   --force
 ```
 
+The generated cache manifest shape is illustrated by
+`config/offline-cache-manifest.example.yaml`. The `dist/offline-cache/` path is
+download-owned generated output.
+
 Use that p1-real cache with the online entrypoint when the operator host has
 network access but installation should still reuse the substrate dependency
 cache:
