@@ -183,6 +183,7 @@ matching volume, waits for the configured JuiceFS PVC to reach `Bound`, and
 finally runs `scripts/doctor.sh --offline-cache ...`. Live doctor reads the
 digest-pinned `name: minio-client` image from that cache for an S3 object
 read/write/delete probe, then reads `name: rwx-smoke` and runs writer/reader
-Jobs against the same PVC. Doctor `partial` is still allowed for live checks
-that cannot be verified, such as missing `kubectl` or `psql`; doctor `failed`
-still fails the install.
+Jobs against the same PVC. Live self-hosted install now requires doctor
+`overallStatus: passed`; `partial` results, including checks that cannot be
+verified such as a missing `kubectl` or `psql`, fail closed just like doctor
+`failed`.

@@ -1878,6 +1878,56 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
 }
 
+test_p1_real_offline_install_non_dry_run_fails_without_psql() {
+  local cache="${TMP_DIR}/offline-cache-p1-live-no-psql"
+  local config="${TMP_DIR}/substrates-p1-live-no-psql.yaml"
+  local output="${TMP_DIR}/offline-p1-live-no-psql-out"
+  local out="${TMP_DIR}/install-offline-p1-live-no-psql.out"
+  local report="${output}/doctor-report.json"
+  local call_log="${TMP_DIR}/p1-live-no-psql-call.log"
+  local airgap_dir="${TMP_DIR}/p1-live-no-psql-airgap"
+  local exec_stdin_dir="${TMP_DIR}/p1-live-no-psql-exec-stdin"
+  local no_psql_path="${TMP_DIR}/p1-live-no-psql-path"
+  local rendered="${output}/rendered/offline-install"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_config "${config}"
+  write_path_without_psql "${no_psql_path}"
+  ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
+
+  if CALL_LOG="${call_log}" \
+    EXEC_STDIN_DIR="${exec_stdin_dir}" \
+    K3S_AIRGAP_DIR="${airgap_dir}" \
+    POSTGRES_PASSWORD="postgres-secret-value" \
+    JUICEFS_META_PASSWORD="juicefs-secret-value" \
+    APP_SESSION_SECRET="app-session-secret-value-0123456789abcdef" \
+    BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
+    S3_ACCESS_KEY="minio-access-key" \
+    S3_SECRET_KEY="minio-secret-value" \
+    PATH="${no_psql_path}" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline self-hosted succeeded even though live doctor could not verify Postgres without psql"
+  fi
+
+  assert_contains "${out}" "self-hosted live install requires passed doctor"
+  assert_contains "${out}" "psql not found; app database connectivity was not verified"
+  assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
+  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_not_contains "${report}" '"overallStatus": "passed"'
+  assert_not_contains "${out}" "doctor passed"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/juicefs-storageclass-pvc.yaml"
+  assert_contains "${call_log}" "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite get namespace agentsmith"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "minio-access-key"
+  assert_not_contains "${call_log}" "minio-secret-value"
+  pass "P1 offline self-hosted live install fails closed when psql is unavailable"
+}
+
 test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
   local cache="${TMP_DIR}/online-cache-p1-live"
   local config="${TMP_DIR}/substrates-online-p1-live.yaml"
@@ -3794,6 +3844,7 @@ test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
 test_online_install_dry_run_validates_p1_real_cache_without_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
+test_p1_real_offline_install_non_dry_run_fails_without_psql
 test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain
 test_online_install_existing_cloud_non_dry_run_delegates_validation_only
 test_online_install_existing_cloud_non_dry_run_fails_without_psql

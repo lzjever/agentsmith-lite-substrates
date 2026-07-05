@@ -280,6 +280,7 @@ offline_install_run_doctor() {
   local secrets_file="$3"
   local output_dir="$4"
   local require_passed="${5:-allow-partial}"
+  local require_passed_context="${6:-existing-cloud live validation}"
   local kubectl_bin report_file status
   kubectl_bin="$(cache_relative_path "${cache_dir}" "bin/kubectl" "kubectl binary")"
   report_file="${output_dir}/doctor-report.json"
@@ -301,14 +302,14 @@ offline_install_run_doctor() {
       ;;
     2)
       if [[ "${require_passed}" == "require-passed" ]]; then
-        die "existing-cloud live validation requires passed doctor; doctor reported partial; see ${report_file}"
+        die "${require_passed_context} requires passed doctor; doctor reported partial; see ${report_file}"
       else
         warn "install-offline: doctor reported partial; see doctor report for live checks that remain unverified"
       fi
       ;;
     *)
       if [[ "${require_passed}" == "require-passed" ]]; then
-        die "existing-cloud live validation requires passed doctor; doctor failed; see ${report_file}"
+        die "${require_passed_context} requires passed doctor; doctor failed; see ${report_file}"
       else
         die "doctor failed after offline install; see ${report_file}"
       fi
@@ -466,5 +467,5 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
   offline_install_wait_juicefs_pvc_bound "${cache_dir}" "${env_file}"
 
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}"
+  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed" "self-hosted live install"
 }
