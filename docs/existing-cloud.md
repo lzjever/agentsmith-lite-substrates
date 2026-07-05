@@ -34,4 +34,6 @@ argument and requires a `cacheMode: p1-real` cache. It runs live doctor checks
 only: `doctor.sh` validates both `POSTGRES_APP_URL` and `JUICEFS_META_URL` with
 `psql` when it is available, and can create a temporary S3 probe Secret/Job
 against the configured existing bucket when `minio-client` is available from the
-cache or `--s3-probe-image`.
+cache or `--s3-probe-image`. Live install succeeds only when doctor reports
+`overallStatus: passed`; partial results, including a missing `psql` client that
+leaves external Postgres or JuiceFS metadata databases unverified, fail closed.

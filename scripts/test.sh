@@ -879,6 +879,20 @@ EOF_PSQL
   chmod +x "${dir}/psql"
 }
 
+write_path_without_psql() {
+  local dir="$1"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in bash sh awk basename base64 cat chmod cp cut date dirname env find grep head mkdir mktemp mv rm sed sha256sum sort stat tail tr wc; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" && "${tool_path}" == /* ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  [[ -x "${dir}/bash" ]] || fail "test PATH without psql is missing bash"
+  [[ ! -e "${dir}/psql" ]] || fail "test PATH without psql unexpectedly contains psql"
+}
+
 write_downloader_fixtures() {
   local dir="$1"
   mkdir -p "${dir}"
@@ -1734,6 +1748,55 @@ EOF_PSQL
   pass "P1 online existing-cloud installer delegates non-dry-run to validation only"
 }
 
+test_online_install_existing_cloud_non_dry_run_fails_without_psql() {
+  local cache="${TMP_DIR}/online-cache-existing-cloud-no-psql"
+  local config="${TMP_DIR}/substrates-online-existing-cloud-no-psql.yaml"
+  local output="${TMP_DIR}/online-existing-cloud-no-psql-out"
+  local out="${TMP_DIR}/install-online-existing-cloud-no-psql.out"
+  local report="${output}/doctor-report.json"
+  local call_log="${TMP_DIR}/online-existing-cloud-no-psql-call.log"
+  local no_psql_path="${TMP_DIR}/online-existing-cloud-no-psql-path"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_existing_cloud_config "${config}"
+  write_path_without_psql "${no_psql_path}"
+  ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
+
+  if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
+    APP_SESSION_SECRET="app-session-secret-value" \
+    BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
+    S3_ACCESS_KEY="existing-access-key" \
+    S3_SECRET_KEY="existing-secret-value" \
+    CALL_LOG="${call_log}" \
+    PATH="${no_psql_path}" \
+    "${ROOT_DIR}/scripts/install-online.sh" --offline-cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-online existing-cloud succeeded even though live doctor could not verify Postgres without psql"
+  fi
+
+  assert_contains "${out}" "existing-cloud live validation requires passed doctor"
+  assert_contains "${out}" "psql not found; app database connectivity was not verified"
+  assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
+  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
+  assert_not_contains "${call_log}" "install-k3s"
+  assert_not_contains "${call_log}" "import-images"
+  assert_not_contains "${call_log}" "postgres.yaml"
+  assert_not_contains "${call_log}" "minio.yaml"
+  [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "online existing-cloud rendered self-hosted Postgres after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "online existing-cloud rendered self-hosted MinIO bucket init Job after failed validation"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "existing-access-key"
+  assert_not_contains "${out}" "existing-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "existing-access-key"
+  assert_not_contains "${call_log}" "existing-secret-value"
+  pass "P1 online existing-cloud live validation fails closed when psql is unavailable"
+}
+
 test_online_install_p0_contract_non_dry_run_fails() {
   local cache="${TMP_DIR}/online-cache-p0-live"
   local config="${TMP_DIR}/substrates-online-p0-live.yaml"
@@ -1959,6 +2022,59 @@ EOF_PSQL
   assert_not_contains "${call_log}" "existing-access-key"
   assert_not_contains "${call_log}" "existing-secret-value"
   pass "existing-cloud p1-real install validates without mutating self-hosted Postgres"
+}
+
+test_existing_cloud_offline_install_fails_without_psql() {
+  local cache="${TMP_DIR}/offline-cache-existing-cloud-no-psql"
+  local config="${TMP_DIR}/substrates-existing-cloud-no-psql.yaml"
+  local output="${TMP_DIR}/offline-existing-cloud-no-psql-out"
+  local out="${TMP_DIR}/install-offline-existing-cloud-no-psql.out"
+  local report="${output}/doctor-report.json"
+  local call_log="${TMP_DIR}/existing-cloud-no-psql-call.log"
+  local no_psql_path="${TMP_DIR}/existing-cloud-no-psql-path"
+  write_p1_offline_cache "${cache}"
+  write_p1_install_chain_fakes "${cache}"
+  write_existing_cloud_config "${config}"
+  write_path_without_psql "${no_psql_path}"
+  ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
+
+  if POSTGRES_APP_URL="postgresql://agentsmith:postgres-secret-value@existing-postgres.example.com:5432/agentsmith_lite" \
+    JUICEFS_META_URL="postgresql://juicefs:juicefs-secret-value@existing-postgres.example.com:5432/juicefs_meta" \
+    APP_SESSION_SECRET="app-session-secret-value" \
+    BUILTIN_ADMIN_INITIAL_PASSWORD="admin-secret-value" \
+    S3_ACCESS_KEY="existing-access-key" \
+    S3_SECRET_KEY="existing-secret-value" \
+    CALL_LOG="${call_log}" \
+    PATH="${no_psql_path}" \
+    "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" >"${out}" 2>&1; then
+    fail "install-offline existing-cloud succeeded even though live doctor could not verify Postgres without psql"
+  fi
+
+  assert_contains "${out}" "existing-cloud live validation requires passed doctor"
+  assert_contains "${out}" "psql not found; app database connectivity was not verified"
+  assert_contains "${out}" "psql not found; JuiceFS metadata database connectivity was not verified"
+  assert_contains "${report}" '"overallStatus": "partial"'
+  assert_contains "${call_log}" "kubectl --kubeconfig out/kubeconfig --context production get namespace agentsmith"
+  assert_not_contains "${call_log}" "install-k3s"
+  assert_not_contains "${call_log}" "import-images"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres-secret.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio-secret.yaml"
+  assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/minio.yaml"
+  [[ ! -e "${output}/rendered/offline-install/postgres-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres Secret after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/postgres.yaml" ]] || fail "existing-cloud rendered a self-hosted Postgres StatefulSet after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet after failed validation"
+  [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job after failed validation"
+  assert_not_contains "${out}" "postgres-secret-value"
+  assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "existing-access-key"
+  assert_not_contains "${out}" "existing-secret-value"
+  assert_not_contains "${call_log}" "postgres-secret-value"
+  assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "existing-access-key"
+  assert_not_contains "${call_log}" "existing-secret-value"
+  pass "existing-cloud p1-real install fails closed when psql is unavailable"
 }
 
 test_p1_real_offline_cache_rejects_missing_image_archive_sha() {
@@ -3144,6 +3260,7 @@ test_online_install_dry_run_validates_p1_real_cache_without_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
 test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain
 test_online_install_existing_cloud_non_dry_run_delegates_validation_only
+test_online_install_existing_cloud_non_dry_run_fails_without_psql
 test_online_install_p0_contract_non_dry_run_fails
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
 test_juicefs_format_job_renders_digest_pinned_image_and_secret_refs
@@ -3152,6 +3269,7 @@ test_minio_bucket_init_job_keeps_credentials_out_of_mc_argv
 test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation
 test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation
 test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres
+test_existing_cloud_offline_install_fails_without_psql
 test_p1_real_offline_cache_rejects_missing_image_archive_sha
 test_p1_real_offline_cache_rejects_public_download_references_in_images_lock
 test_p1_real_offline_cache_rejects_missing_bootstrap_artifact_entries

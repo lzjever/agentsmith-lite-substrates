@@ -279,6 +279,7 @@ offline_install_run_doctor() {
   local env_file="$2"
   local secrets_file="$3"
   local output_dir="$4"
+  local require_passed="${5:-allow-partial}"
   local kubectl_bin report_file status
   kubectl_bin="$(cache_relative_path "${cache_dir}" "bin/kubectl" "kubectl binary")"
   report_file="${output_dir}/doctor-report.json"
@@ -299,10 +300,18 @@ offline_install_run_doctor() {
       info "install-offline: doctor passed"
       ;;
     2)
-      warn "install-offline: doctor reported partial; see doctor report for live checks that remain unverified"
+      if [[ "${require_passed}" == "require-passed" ]]; then
+        die "existing-cloud live validation requires passed doctor; doctor reported partial; see ${report_file}"
+      else
+        warn "install-offline: doctor reported partial; see doctor report for live checks that remain unverified"
+      fi
       ;;
     *)
-      die "doctor failed after offline install; see ${report_file}"
+      if [[ "${require_passed}" == "require-passed" ]]; then
+        die "existing-cloud live validation requires passed doctor; doctor failed; see ${report_file}"
+      else
+        die "doctor failed after offline install; see ${report_file}"
+      fi
       ;;
   esac
 }
@@ -414,7 +423,7 @@ run_p1_real_existing_cloud_validation() {
   local output_dir="$4"
 
   info "install-offline: existing-cloud mode; skipping self-hosted PostgreSQL, MinIO, and k3s mutation"
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}"
+  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed"
 }
 
 run_p1_real_offline_install() {
