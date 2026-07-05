@@ -21,8 +21,6 @@ juicefs:
   mountRoot: /agentsmith-lite
 auth:
   mode: builtin_admin
-  issuerUrl: ""
-  clientId: agentsmith-lite
 ingress:
   publicBaseUrl: http://localhost:3000
   ingressClass: ""

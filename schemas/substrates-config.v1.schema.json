@@ -24,27 +24,6 @@
           }
         }
       }
-    },
-    {
-      "if": {
-        "properties": {
-          "mode": { "const": "existing-cloud" },
-          "auth": {
-            "properties": {
-              "mode": { "const": "oidc" }
-            },
-            "required": ["mode"]
-          }
-        },
-        "required": ["mode", "auth"]
-      },
-      "then": {
-        "properties": {
-          "auth": {
-            "required": ["clientSecretFromEnv"]
-          }
-        }
-      }
     }
   ],
   "properties": {
@@ -100,10 +79,7 @@
       "type": "object",
       "required": ["mode"],
       "properties": {
-        "mode": { "enum": ["builtin_admin", "oidc"] },
-        "issuerUrl": { "type": "string" },
-        "clientId": { "type": "string" },
-        "clientSecretFromEnv": { "type": "string", "minLength": 1 }
+        "mode": { "const": "builtin_admin" }
       }
     },
     "ingress": {
@@ -112,8 +88,7 @@
       "properties": {
         "publicBaseUrl": { "type": "string", "minLength": 1 },
         "ingressClass": { "type": "string" },
-        "tlsSecretName": { "type": "string" },
-        "installDevIngress": { "type": "boolean" }
+        "tlsSecretName": { "type": "string" }
       }
     }
   }

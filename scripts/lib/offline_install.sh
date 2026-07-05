@@ -45,15 +45,14 @@ offline_install_run_k3s_installer() {
   local cache_dir="$1"
   local env_file="$2"
   local output_dir="$3"
-  local install_script k3s_bin airgap_images bin_dir airgap_dir kubeconfig_path install_exec kubeconfig_hint
+  local install_script k3s_bin airgap_images bin_dir airgap_dir kubeconfig_path install_exec
   install_script="$(cache_relative_path "${cache_dir}" "scripts/install-k3s.sh" "k3s install script")"
   k3s_bin="$(cache_relative_path "${cache_dir}" "bin/k3s" "k3s binary")"
   airgap_images="$(cache_relative_path "${cache_dir}" "images/k3s/k3s-airgap-images-amd64.tar.zst" "k3s airgap images")"
   bin_dir="$(dirname "${k3s_bin}")"
   airgap_dir="${K3S_AIRGAP_DIR:-/var/lib/rancher/k3s/agent/images}"
   kubeconfig_path="$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
-  kubeconfig_hint="${output_dir}/kubeconfig"
-  [[ -n "${kubeconfig_path}" ]] || die "KUBECONFIG_PATH must be set for p1-real offline install; configure kubernetes.kubeconfigOutput so ${kubeconfig_hint} is written"
+  [[ -n "${kubeconfig_path}" ]] || die "KUBECONFIG_PATH must be set for p1-real offline install; configure kubernetes.kubeconfigOutput or kubernetes.kubeconfigPath"
   install_exec="${INSTALL_K3S_EXEC:-server --write-kubeconfig ${kubeconfig_path} --write-kubeconfig-mode 600}"
 
   mkdir -p "${airgap_dir}"

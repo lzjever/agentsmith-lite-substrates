@@ -32,12 +32,12 @@ contract_only=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output)
-      [[ $# -ge 2 ]] || die "--output requires a path"
+      require_cli_value "$1" "${2-}"
       output_dir="${2:-}"
       shift 2
       ;;
     --artifacts)
-      [[ $# -ge 2 ]] || die "--artifacts requires a path"
+      require_cli_value "$1" "${2-}"
       artifact_lock="${2:-}"
       shift 2
       ;;
@@ -213,6 +213,15 @@ EOF_USAGE
 containerd_namespace="${CONTAINERD_NAMESPACE:-k8s.io}"
 dry_run=false
 
+require_value() {
+  local flag="$1"
+  local value="${2-}"
+  if [[ $# -lt 2 || -z "${value}" || "${value}" == --* ]]; then
+    printf 'error: %s requires a value\n' "${flag}" >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
@@ -220,10 +229,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --containerd-namespace)
-      [[ $# -ge 2 ]] || {
-        printf 'error: --containerd-namespace requires a value\n' >&2
-        exit 2
-      }
+      require_value "$1" "${2-}"
       containerd_namespace="$2"
       shift 2
       ;;

@@ -25,14 +25,17 @@ dry_run=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
+      require_cli_value "$1" "${2-}"
       config_file="${2:-}"
       shift 2
       ;;
     --output)
+      require_cli_value "$1" "${2-}"
       output_dir="${2:-}"
       shift 2
       ;;
     --cache)
+      require_cli_value "$1" "${2-}"
       cache_dir="${2:-}"
       shift 2
       ;;

@@ -102,8 +102,8 @@ validate_config_contract() {
 
   auth_mode="$(config_required_value "${config_file}" "auth.mode")"
   case "${auth_mode}" in
-    builtin_admin|oidc) ;;
-    *) die "config contract auth.mode must be builtin_admin or oidc" ;;
+    builtin_admin) ;;
+    *) die "OIDC/Keycloak is deferred; AUTH_MODE must be builtin_admin" ;;
   esac
 
   if csi_driver="$(config_raw_value "${config_file}" "juicefs.csiDriver" 2>/dev/null)"; then
@@ -119,9 +119,6 @@ validate_config_contract() {
     do
       config_required_value "${config_file}" "${required_key}" >/dev/null
     done
-    if [[ "${auth_mode}" == "oidc" ]]; then
-      config_required_value "${config_file}" "auth.clientSecretFromEnv" >/dev/null
-    fi
   fi
 }
 
@@ -150,7 +147,7 @@ write_env_contract_from_config() {
   kubeconfig_output="$(config_value "${config_file}" "kubernetes.kubeconfigOutput" "")"
 
   if [[ -z "${kubeconfig_path}" && -n "${kubeconfig_output}" ]]; then
-    kubeconfig_path="${output_dir}/kubeconfig"
+    kubeconfig_path="${kubeconfig_output}"
   fi
   if [[ -z "${kube_context}" && "${mode}" == "self-hosted" ]]; then
     kube_context="agentsmith-lite"
@@ -176,8 +173,8 @@ write_env_contract_from_config() {
 
   local auth_mode oidc_issuer oidc_client_id public_base_url ingress_class tls_secret registry image_pull_secret
   auth_mode="$(config_value "${config_file}" "auth.mode" "builtin_admin")"
-  oidc_issuer="$(config_value "${config_file}" "auth.issuerUrl" "")"
-  oidc_client_id="$(config_value "${config_file}" "auth.clientId" "agentsmith-lite")"
+  oidc_issuer=""
+  oidc_client_id=""
   public_base_url="$(config_value "${config_file}" "ingress.publicBaseUrl" "http://localhost:3000")"
   ingress_class="$(config_value "${config_file}" "ingress.ingressClass" "")"
   tls_secret="$(config_value "${config_file}" "ingress.tlsSecretName" "")"
@@ -194,18 +191,17 @@ write_env_contract_from_config() {
   juicefs_mount="$(config_value "${config_file}" "juicefs.mountRoot" "/agentsmith-lite")"
 
   local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret
+  oidc_secret=""
   if [[ "${mode}" == "existing-cloud" ]]; then
-    local app_url_env meta_url_env access_env secret_env oidc_secret_env
+    local app_url_env meta_url_env access_env secret_env
     app_url_env="$(config_value "${config_file}" "postgres.appUrlFromEnv" "POSTGRES_APP_URL")"
     meta_url_env="$(config_value "${config_file}" "postgres.juicefsMetaUrlFromEnv" "JUICEFS_META_URL")"
     access_env="$(config_value "${config_file}" "objectStorage.accessKeyFromEnv" "S3_ACCESS_KEY")"
     secret_env="$(config_value "${config_file}" "objectStorage.secretKeyFromEnv" "S3_SECRET_KEY")"
-    oidc_secret_env="$(config_value "${config_file}" "auth.clientSecretFromEnv" "OIDC_CLIENT_SECRET")"
     postgres_app_url="${!app_url_env:-}"
     juicefs_meta_url="${!meta_url_env:-}"
     s3_access="${!access_env:-}"
     s3_secret="${!secret_env:-}"
-    oidc_secret="${!oidc_secret_env:-}"
     [[ -n "${postgres_app_url}" ]] || die "existing-cloud requires ${app_url_env}"
     [[ -n "${juicefs_meta_url}" ]] || die "existing-cloud requires ${meta_url_env}"
     [[ -n "${s3_access}" ]] || die "existing-cloud requires ${access_env}"
@@ -218,14 +214,9 @@ write_env_contract_from_config() {
     s3_secret="${S3_SECRET_KEY:-$(random_secret)}"
     postgres_app_url="${POSTGRES_APP_URL:-postgresql://agentsmith:${postgres_password}@postgres.${namespace}.svc.cluster.local:5432/agentsmith_lite}"
     juicefs_meta_url="${JUICEFS_META_URL:-postgresql://juicefs:${juicefs_password}@postgres.${namespace}.svc.cluster.local:5432/juicefs_meta}"
-    oidc_secret="${OIDC_CLIENT_SECRET:-}"
   fi
   admin_password="${BUILTIN_ADMIN_INITIAL_PASSWORD:-$(random_secret)}"
   app_session_secret="${APP_SESSION_SECRET:-$(random_secret)}"
-
-  if [[ "${auth_mode}" == "oidc" && -z "${oidc_secret}" ]]; then
-    die "AUTH_MODE=oidc requires OIDC_CLIENT_SECRET or auth.clientSecretFromEnv"
-  fi
 
   if [[ "${force}" != "true" && ( -e "${output_dir}/substrate.env" || -e "${output_dir}/substrate.secrets.env" ) ]]; then
     die "output env files already exist; rerun with --force to overwrite"

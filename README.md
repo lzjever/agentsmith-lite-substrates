@@ -113,6 +113,24 @@ env contract and cache only. Non-dry-run requires `cacheMode: p1-real`; a
 mode, non-dry-run writes the same env files and runs doctor/live validation
 without rendering or installing self-hosted PostgreSQL, MinIO, or k3s.
 
+## Config Boundaries
+
+`kubernetes.kubeconfigPath` means an existing kubeconfig path owned by the
+operator, most commonly in `existing-cloud` mode. `kubernetes.kubeconfigOutput`
+means the path where a self-hosted k3s install should write its generated
+kubeconfig. If both are set, `kubeconfigPath` wins; if neither is set,
+`KUBECONFIG_PATH` is empty in `substrate.env`.
+
+Substrates do not install an app ingress or reference app Services. The ingress
+block only writes the app-facing env contract: `APP_PUBLIC_BASE_URL`,
+`APP_INGRESS_CLASS`, and `APP_TLS_SECRET_NAME`. The app repo consumes those
+values when it renders app-owned ingress resources.
+
+OIDC/Keycloak auth is deferred. The only valid auth mode in the substrate
+contract is `AUTH_MODE=builtin_admin`; non-builtin auth and non-empty
+`OIDC_CLIENT_SECRET` are invalid. The v1 env shape may still include empty OIDC
+placeholder keys so older consumers can filter them safely.
+
 ## Preflight Boundary
 
 `scripts/preflight.sh` is a command in this substrate repo, not a third repo or
@@ -131,8 +149,8 @@ disconnected-VM validation, or existing-cloud validation.
 `substrate.secrets.env` is owner-only (`0600`) and contains both product secrets
 and substrate/CSI setup secrets.
 
-The product-secret subset is `POSTGRES_APP_URL`, `APP_SESSION_SECRET`,
-`BUILTIN_ADMIN_INITIAL_PASSWORD`, and OIDC/admin secrets when enabled.
+The product-secret subset is `POSTGRES_APP_URL`, `APP_SESSION_SECRET`, and
+`BUILTIN_ADMIN_INITIAL_PASSWORD`.
 `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and `JUICEFS_META_URL` are substrate/CSI scoped
 only. They are used by substrate setup and doctor checks to create or validate
 the JuiceFS CSI Secret, metadata database, and one-shot format Job; they must

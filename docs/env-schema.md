@@ -23,6 +23,18 @@ future or installer-specific metadata without breaking validation.
 kubeconfig/context, S3 endpoint metadata, auth mode, JuiceFS StorageClass/PVC
 names, ingress settings, and optional registry coordinates.
 
+`kubernetes.kubeconfigPath` in config is copied to `KUBECONFIG_PATH` as an
+existing kubeconfig. If it is empty, `kubernetes.kubeconfigOutput` is copied as
+the self-hosted k3s output path. If both are empty, `KUBECONFIG_PATH` stays
+empty. Ingress config is only an app-facing env contract:
+`APP_PUBLIC_BASE_URL`, `APP_INGRESS_CLASS`, and `APP_TLS_SECRET_NAME`;
+substrates do not install app ingress manifests.
+
+OIDC/Keycloak auth is deferred. `AUTH_MODE` must be `builtin_admin`.
+`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` may remain in the
+v1 files only as empty compatibility placeholders; non-builtin auth or a
+non-empty OIDC secret is invalid.
+
 The static env contract rejects invalid resource names before any live cluster
 checks: `KUBE_NAMESPACE`, `JUICEFS_SECRET_NAME`, and `JUICEFS_PVC_NAME` must be
 Kubernetes RFC1123 DNS labels; `JUICEFS_STORAGE_CLASS` must be a Kubernetes DNS
@@ -33,9 +45,10 @@ subdomain name; `S3_BUCKET` must follow S3 bucket-name shape rules.
 `substrate.secrets.env` contains:
 
 - product-secret subset: `POSTGRES_APP_URL`, `APP_SESSION_SECRET`,
-  `BUILTIN_ADMIN_INITIAL_PASSWORD`, `OIDC_CLIENT_SECRET`
+  `BUILTIN_ADMIN_INITIAL_PASSWORD`
 - substrate/CSI scoped values: `S3_ACCESS_KEY`, `S3_SECRET_KEY`,
   `JUICEFS_META_URL`
+- deferred empty placeholder: `OIDC_CLIENT_SECRET`
 
 The validator rejects secret keys in `substrate.env`, rejects unknown keys in
 the secret file, rejects duplicate keys in both files, checks owner-only

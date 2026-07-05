@@ -12,7 +12,6 @@ export JUICEFS_META_URL='postgresql://...'
 export S3_ACCESS_KEY='...'
 export S3_SECRET_KEY='...'
 export APP_SESSION_SECRET='...'
-export OIDC_CLIENT_SECRET='...'
 
 scripts/download-online.sh --contract-only --output dist/offline-cache --force
 scripts/install-online.sh \
@@ -21,6 +20,14 @@ scripts/install-online.sh \
   --output out \
   --dry-run
 ```
+
+Set `kubernetes.kubeconfigPath` to the existing kubeconfig the operator wants
+doctor/live validation to use. `kubernetes.kubeconfigOutput` is for self-hosted
+k3s output paths and is not needed for existing-cloud configs.
+
+OIDC/Keycloak auth is deferred. Keep `auth.mode: builtin_admin`; configs with
+non-builtin auth fail validation, and generated env contracts reject non-empty
+`OIDC_CLIENT_SECRET`.
 
 The generated contract is the same as self-hosted mode. S3 and JuiceFS raw
 credentials remain substrate/CSI scoped. App deployment should render only the

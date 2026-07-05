@@ -40,22 +40,27 @@ dry_run=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env)
+      require_cli_value "$1" "${2-}"
       env_file="${2:-}"
       shift 2
       ;;
     --secrets)
+      require_cli_value "$1" "${2-}"
       secrets_file="${2:-}"
       shift 2
       ;;
     --offline-cache)
+      require_cli_value "$1" "${2-}"
       offline_cache="${2:-}"
       shift 2
       ;;
     --s3-probe-image)
+      require_cli_value "$1" "${2-}"
       s3_probe_image="${2:-}"
       shift 2
       ;;
     --rwx-smoke-image)
+      require_cli_value "$1" "${2-}"
       rwx_smoke_image="${2:-}"
       shift 2
       ;;
@@ -64,6 +69,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --report)
+      require_cli_value "$1" "${2-}"
       report_file="${2:-}"
       shift 2
       ;;

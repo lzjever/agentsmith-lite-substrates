@@ -86,6 +86,14 @@ truthy() {
   esac
 }
 
+require_cli_value() {
+  local flag="$1"
+  local value="${2-}"
+  if [[ $# -lt 2 || -z "${value}" || "${value}" == --* ]]; then
+    die "${flag} requires a value"
+  fi
+}
+
 is_app_owned_image_ref() {
   local image_ref="$1"
   local repo_ref

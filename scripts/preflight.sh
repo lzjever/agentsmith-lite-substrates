@@ -23,12 +23,12 @@ doctor_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env|--secrets|--report)
-      [[ $# -ge 2 && -n "${2:-}" ]] || die "$1 requires a value"
+      require_cli_value "$1" "${2-}"
       doctor_args+=("$1" "$2")
       shift 2
       ;;
     --offline-cache|--cache)
-      [[ $# -ge 2 && -n "${2:-}" ]] || die "$1 requires a value"
+      require_cli_value "$1" "${2-}"
       doctor_args+=(--offline-cache "$2")
       shift 2
       ;;

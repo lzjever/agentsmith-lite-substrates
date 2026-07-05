@@ -313,7 +313,7 @@ validate_env_contract() {
   require_key_nonempty "${secrets_file}" "S3_SECRET_KEY" "substrate.secrets.env"
   require_key_nonempty "${secrets_file}" "JUICEFS_META_URL" "substrate.secrets.env"
 
-  local env_version secrets_version auth_mode app_session_secret
+  local env_version secrets_version auth_mode app_session_secret oidc_secret
   env_version="$(env_value_or_empty "${env_file}" "SUBSTRATE_SCHEMA_VERSION")"
   secrets_version="$(env_value_or_empty "${secrets_file}" "SUBSTRATE_SCHEMA_VERSION")"
   [[ "${env_version}" == "${SUBSTRATE_ENV_SCHEMA_VERSION}" ]] || die "unsupported substrate.env schema version ${env_version}"
@@ -327,15 +327,16 @@ validate_env_contract() {
     builtin_admin)
       require_key_nonempty "${secrets_file}" "BUILTIN_ADMIN_INITIAL_PASSWORD" "substrate.secrets.env"
       ;;
-    oidc)
-      require_key_nonempty "${env_file}" "OIDC_ISSUER_URL" "substrate.env"
-      require_key_nonempty "${env_file}" "OIDC_CLIENT_ID" "substrate.env"
-      require_key_nonempty "${secrets_file}" "OIDC_CLIENT_SECRET" "substrate.secrets.env"
-      ;;
     *)
-      die "AUTH_MODE must be builtin_admin or oidc"
+      die "OIDC/Keycloak is deferred; AUTH_MODE must be builtin_admin"
       ;;
   esac
+  [[ -z "$(env_value_or_empty "${env_file}" "OIDC_ISSUER_URL")" ]] \
+    || die "OIDC/Keycloak is deferred; OIDC_ISSUER_URL must be empty"
+  [[ -z "$(env_value_or_empty "${env_file}" "OIDC_CLIENT_ID")" ]] \
+    || die "OIDC/Keycloak is deferred; OIDC_CLIENT_ID must be empty"
+  oidc_secret="$(env_value_or_empty "${secrets_file}" "OIDC_CLIENT_SECRET")"
+  [[ -z "${oidc_secret}" ]] || die "OIDC/Keycloak is deferred; OIDC_CLIENT_SECRET must be empty"
 
   require_value_regex "$(env_value_or_empty "${secrets_file}" "POSTGRES_APP_URL")" '^postgres(ql)?://' "POSTGRES_APP_URL must start with postgres:// or postgresql://"
   require_value_regex "$(env_value_or_empty "${secrets_file}" "JUICEFS_META_URL")" '^postgres(ql)?://' "JUICEFS_META_URL must start with postgres:// or postgresql://"

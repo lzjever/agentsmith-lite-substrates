@@ -25,14 +25,17 @@ manifest_dir="${ROOT_DIR}/manifests/juicefs-csi"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env)
+      require_cli_value "$1" "${2-}"
       env_file="${2:-}"
       shift 2
       ;;
     --secrets)
+      require_cli_value "$1" "${2-}"
       secrets_file="${2:-}"
       shift 2
       ;;
     --manifests)
+      require_cli_value "$1" "${2-}"
       manifest_dir="${2:-}"
       shift 2
       ;;

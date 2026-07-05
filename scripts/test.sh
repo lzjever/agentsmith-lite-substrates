@@ -52,6 +52,17 @@ assert_line_order() {
   done
 }
 
+assert_cli_requires_value() {
+  local label="$1"
+  local flag="$2"
+  local out="$3"
+  shift 3
+  if "$@" >"${out}" 2>&1; then
+    fail "${label} accepted ${flag} without a value"
+  fi
+  assert_contains "${out}" "${flag} requires a value"
+}
+
 write_valid_env_pair() {
   local dir="$1"
   mkdir -p "${dir}"
@@ -66,7 +77,7 @@ S3_BUCKET=agentsmith-lite-files
 S3_FORCE_PATH_STYLE=true
 AUTH_MODE=builtin_admin
 OIDC_ISSUER_URL=
-OIDC_CLIENT_ID=agentsmith-lite
+OIDC_CLIENT_ID=
 JUICEFS_VOLUME_NAME=agentsmith-lite-files
 JUICEFS_BUCKET=s3://agentsmith-lite-files/agentsmith-lite/
 JUICEFS_SECRET_NAME=agentsmith-lite-juicefs
@@ -111,12 +122,13 @@ replace_env_value() {
 write_config() {
   local file="$1"
   local namespace="${2:-agentsmith}"
+  local kubeconfig_output="${3:-out/kubeconfig}"
   cat >"${file}" <<EOF_CONFIG
 mode: self-hosted
 kubernetes:
   distribution: k3s
   namespace: ${namespace}
-  kubeconfigOutput: out/kubeconfig
+  kubeconfigOutput: ${kubeconfig_output}
 postgres:
   storageClass: local-path
   appDatabase: agentsmith_lite
@@ -134,7 +146,6 @@ auth:
   mode: builtin_admin
 ingress:
   publicBaseUrl: https://agentsmith.example.com
-  installDevIngress: true
 offline:
   registry: registry.local:5000
 EOF_CONFIG
@@ -1170,11 +1181,15 @@ EOF_INVALID_STATIC_NAMES
 
 test_env_schema_matches_static_name_contract() {
   local schema="${ROOT_DIR}/schemas/substrate.env.v1.schema.json"
+  local secrets_schema="${ROOT_DIR}/schemas/substrate.secrets.env.v1.schema.json"
+  assert_contains "${schema}" '"AUTH_MODE": { "const": "builtin_admin" }'
+  assert_not_contains "${schema}" '"oidc"'
   assert_contains "${schema}" '"KUBE_NAMESPACE": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }'
   assert_contains "${schema}" '"S3_BUCKET": { "type": "string", "minLength": 3, "maxLength": 63, "pattern": "^(?![0-9]+(\\.[0-9]+){3}$)(?!.*\\.\\.)(?!.*\\.-)(?!.*-\\.)[a-z0-9][a-z0-9.-]*[a-z0-9]$" }'
   assert_contains "${schema}" '"JUICEFS_SECRET_NAME": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }'
   assert_contains "${schema}" '"JUICEFS_STORAGE_CLASS": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" }'
   assert_contains "${schema}" '"JUICEFS_PVC_NAME": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }'
+  assert_contains "${secrets_schema}" '"OIDC_CLIENT_SECRET": { "const": "" }'
   pass "P0 env schema carries static Kubernetes and S3 name guardrails"
 }
 
@@ -1189,6 +1204,37 @@ test_validate_env_rejects_loose_secret_mode() {
   assert_contains "${out}" "secret env permissions must not allow group/world access"
   assert_not_contains "${out}" "minio-secret-value"
   pass "S1 env/secrets contract rejects loose secret file permissions"
+}
+
+test_validate_env_rejects_oidc_auth_and_non_empty_oidc_secret() {
+  local dir="${TMP_DIR}/env-oidc-mode"
+  local out="${TMP_DIR}/validate-oidc-mode.out"
+  local oidc_secret="oidc-secret-value-that-must-not-print"
+  write_valid_env_pair "${dir}"
+  replace_env_value "${dir}/substrate.env" "AUTH_MODE" "oidc"
+  replace_env_value "${dir}/substrate.env" "OIDC_ISSUER_URL" "https://idp.example.com/"
+  replace_env_value "${dir}/substrate.env" "OIDC_CLIENT_ID" "agentsmith-lite"
+  replace_env_value "${dir}/substrate.secrets.env" "OIDC_CLIENT_SECRET" "${oidc_secret}"
+  chmod 0600 "${dir}/substrate.secrets.env"
+  if "${ROOT_DIR}/scripts/validate-env.sh" --env "${dir}/substrate.env" --secrets "${dir}/substrate.secrets.env" >"${out}" 2>&1; then
+    fail "validate-env accepted AUTH_MODE=oidc"
+  fi
+  assert_contains "${out}" "OIDC/Keycloak is deferred"
+  assert_contains "${out}" "AUTH_MODE must be builtin_admin"
+  assert_not_contains "${out}" "${oidc_secret}"
+
+  dir="${TMP_DIR}/env-nonempty-oidc-secret"
+  out="${TMP_DIR}/validate-nonempty-oidc-secret.out"
+  write_valid_env_pair "${dir}"
+  replace_env_value "${dir}/substrate.secrets.env" "OIDC_CLIENT_SECRET" "${oidc_secret}"
+  chmod 0600 "${dir}/substrate.secrets.env"
+  if "${ROOT_DIR}/scripts/validate-env.sh" --env "${dir}/substrate.env" --secrets "${dir}/substrate.secrets.env" >"${out}" 2>&1; then
+    fail "validate-env accepted non-empty OIDC_CLIENT_SECRET"
+  fi
+  assert_contains "${out}" "OIDC/Keycloak is deferred"
+  assert_contains "${out}" "OIDC_CLIENT_SECRET must be empty"
+  assert_not_contains "${out}" "${oidc_secret}"
+  pass "S1 env contract rejects OIDC auth mode and non-empty OIDC secret without leaking values"
 }
 
 test_config_contract_rejects_self_hosted_non_k3s_distribution() {
@@ -1259,20 +1305,118 @@ test_config_contract_rejects_existing_cloud_app_url_typo() {
   pass "S1 config contract rejects existing-cloud appUrlFromEnv typos"
 }
 
+test_config_contract_rejects_oidc_auth_mode() {
+  local cache="${TMP_DIR}/config-contract-oidc-cache"
+  local config="${TMP_DIR}/config-contract-oidc.yaml"
+  local output="${TMP_DIR}/config-contract-oidc-out"
+  local out="${TMP_DIR}/config-contract-oidc.out"
+  local tmp="${config}.tmp"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  awk '{ if ($0 == "  mode: builtin_admin") print "  mode: oidc"; else print }' "${config}" >"${tmp}"
+  mv "${tmp}" "${config}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted config auth.mode=oidc"
+  fi
+  assert_contains "${out}" "OIDC/Keycloak is deferred"
+  assert_contains "${out}" "AUTH_MODE must be builtin_admin"
+  pass "S1 config contract rejects OIDC/Keycloak auth while deferred"
+}
+
 test_config_schema_matches_shell_contract() {
   local schema="${ROOT_DIR}/schemas/substrates-config.v1.schema.json"
   assert_contains "${schema}" '"mode": { "enum": ["self-hosted", "existing-cloud"] }'
   assert_contains "${schema}" '"distribution": { "const": "k3s" }'
   assert_contains "${schema}" '"required": ["provider", "bucket"]'
   assert_contains "${schema}" '"provider": { "enum": ["minio", "s3"] }'
-  assert_contains "${schema}" '"mode": { "enum": ["builtin_admin", "oidc"] }'
+  assert_contains "${schema}" '"mode": { "const": "builtin_admin" }'
+  assert_not_contains "${schema}" '"oidc"'
+  assert_not_contains "${schema}" "clientSecretFromEnv"
   assert_contains "${schema}" '"csiDriver": { "const": "csi.juicefs.com" }'
   assert_contains "${schema}" '"mode": { "const": "existing-cloud" }'
   assert_contains "${schema}" '"required": ["postgres", "objectStorage"]'
   assert_contains "${schema}" '"required": ["appUrlFromEnv", "juicefsMetaUrlFromEnv"]'
   assert_contains "${schema}" '"required": ["accessKeyFromEnv", "secretKeyFromEnv"]'
-  assert_contains "${schema}" '"required": ["clientSecretFromEnv"]'
   pass "S1 config schema carries shell config contract guardrails"
+}
+
+test_existing_cloud_example_uses_builtin_auth_only() {
+  local example="${ROOT_DIR}/config/substrates.existing-cloud.example.yaml"
+  assert_contains "${example}" "  mode: builtin_admin"
+  assert_not_contains "${example}" "mode: oidc"
+  assert_not_contains "${example}" "OIDC_CLIENT_SECRET"
+  assert_not_contains "${example}" "clientSecretFromEnv"
+  assert_not_contains "${example}" "issuerUrl"
+  assert_not_contains "${example}" "clientId"
+  pass "S1 existing-cloud example no longer advertises OIDC/Keycloak auth"
+}
+
+test_config_schema_no_longer_advertises_install_dev_ingress() {
+  local schema="${ROOT_DIR}/schemas/substrates-config.v1.schema.json"
+  local self_example="${ROOT_DIR}/config/substrates.self-hosted.example.yaml"
+  local existing_example="${ROOT_DIR}/config/substrates.existing-cloud.example.yaml"
+  assert_not_contains "${schema}" "installDevIngress"
+  assert_not_contains "${self_example}" "installDevIngress"
+  assert_not_contains "${existing_example}" "installDevIngress"
+  pass "S1 config schema and examples do not advertise substrate-owned dev ingress installation"
+}
+
+test_cli_value_flags_reject_missing_and_next_flag_values() {
+  local script flag next_flag extra label out safe_name
+  while IFS='|' read -r script flag next_flag extra; do
+    [[ -n "${script}" ]] || continue
+    safe_name="${script//\//-}-${flag#--}"
+    label="${script} ${flag}"
+    out="${TMP_DIR}/cli-${safe_name}-missing.out"
+    assert_cli_requires_value "${label}" "${flag}" "${out}" "${ROOT_DIR}/${script}" "${flag}"
+    out="${TMP_DIR}/cli-${safe_name}-next-flag.out"
+    if [[ -n "${extra}" ]]; then
+      assert_cli_requires_value "${label}" "${flag}" "${out}" "${ROOT_DIR}/${script}" "${flag}" "${next_flag}" "${extra}"
+    else
+      assert_cli_requires_value "${label}" "${flag}" "${out}" "${ROOT_DIR}/${script}" "${flag}" "${next_flag}"
+    fi
+  done <<'EOF_CLI_VALUE_FLAGS'
+scripts/doctor.sh|--env|--dry-run|
+scripts/doctor.sh|--secrets|--dry-run|
+scripts/doctor.sh|--offline-cache|--dry-run|
+scripts/doctor.sh|--s3-probe-image|--dry-run|
+scripts/doctor.sh|--rwx-smoke-image|--dry-run|
+scripts/doctor.sh|--report|--dry-run|
+scripts/install-online.sh|--cache|--dry-run|
+scripts/install-online.sh|--offline-cache|--dry-run|
+scripts/install-online.sh|--config|--dry-run|
+scripts/install-online.sh|--output|--dry-run|
+scripts/install-offline.sh|--cache|--dry-run|
+scripts/install-offline.sh|--config|--dry-run|
+scripts/install-offline.sh|--output|--dry-run|
+scripts/validate-env.sh|--env|--secrets|
+scripts/validate-env.sh|--secrets|--env|
+scripts/validate-juicefs-contract.sh|--env|--secrets|
+scripts/validate-juicefs-contract.sh|--secrets|--env|
+scripts/validate-juicefs-contract.sh|--manifests|--env|
+scripts/reset-dev.sh|--config|--destroy-data|
+scripts/reset-dev.sh|--output|--destroy-data|
+scripts/reset-dev.sh|--cache|--destroy-data|
+scripts/download-online.sh|--output|--artifacts|/nonexistent-artifact-lock
+scripts/download-online.sh|--artifacts|--force|
+scripts/preflight.sh|--env|--dry-run|
+scripts/preflight.sh|--secrets|--dry-run|
+scripts/preflight.sh|--report|--dry-run|
+scripts/preflight.sh|--offline-cache|--dry-run|
+scripts/preflight.sh|--cache|--dry-run|
+EOF_CLI_VALUE_FLAGS
+
+  local fixtures="${TMP_DIR}/download-fixtures-cli"
+  local lock_file="${TMP_DIR}/offline-artifacts-cli.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-cli"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}"
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >/dev/null 2>&1
+  assert_cli_requires_value "generated import-images.sh --containerd-namespace" "--containerd-namespace" "${TMP_DIR}/import-cli-missing.out" "${cache}/scripts/import-images.sh" --containerd-namespace
+  assert_cli_requires_value "generated import-images.sh --containerd-namespace" "--containerd-namespace" "${TMP_DIR}/import-cli-next-flag.out" "${cache}/scripts/import-images.sh" --containerd-namespace --dry-run __unexpected__
+
+  pass "P0 CLI value flags reject missing values and next flag tokens consistently"
 }
 
 test_install_dry_runs_reject_invalid_generated_env_names() {
@@ -1320,6 +1464,30 @@ test_config_contract_accepts_valid_modes() {
   test -f "${existing_output}/substrate.env" || fail "valid existing-cloud config did not write substrate.env"
   assert_contains "${existing_output}/substrate.env" "S3_BUCKET=agentsmith-lite-files"
   pass "S1 config contract accepts valid self-hosted and existing-cloud configs"
+}
+
+test_config_contract_uses_custom_kubeconfig_output_path() {
+  local cache="${TMP_DIR}/config-contract-kubeconfig-output-cache"
+  local config="${TMP_DIR}/config-contract-kubeconfig-output.yaml"
+  local output="${TMP_DIR}/config-contract-kubeconfig-output-out"
+  local out="${TMP_DIR}/config-contract-kubeconfig-output.out"
+  local custom_kubeconfig="${TMP_DIR}/custom-kubeconfig-dir/cluster.kubeconfig"
+  local tmp="${config}.tmp"
+  write_offline_cache "${cache}"
+  write_config "${config}"
+  awk -v replacement="  kubeconfigOutput: ${custom_kubeconfig}" '
+    $0 == "  kubeconfigOutput: out/kubeconfig" {
+      print replacement
+      next
+    }
+    { print }
+  ' "${config}" >"${tmp}"
+  mv "${tmp}" "${config}"
+
+  "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1
+  assert_contains "${output}/substrate.env" "KUBECONFIG_PATH=${custom_kubeconfig}"
+  assert_not_contains "${output}/substrate.env" "KUBECONFIG_PATH=${output}/kubeconfig"
+  pass "P0 kubeconfigOutput writes its configured path into KUBECONFIG_PATH"
 }
 
 test_offline_install_validates_cache_without_network() {
@@ -1747,7 +1915,7 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
   write_forbidden_path_bin "${forbidden_bin}"
-  write_config "${config}" "custom-ns"
+  write_config "${config}" "custom-ns" "${output}/kubeconfig"
 
   CALL_LOG="${call_log}" \
     EXEC_STDIN_DIR="${exec_stdin_dir}" \
@@ -1947,7 +2115,7 @@ test_p1_real_offline_install_non_dry_run_fails_without_psql() {
   local rendered="${output}/rendered/offline-install"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
-  write_config "${config}"
+  write_config "${config}" "agentsmith" "${output}/kubeconfig"
   write_path_without_psql "${no_psql_path}"
   ln -sf "${cache}/bin/kubectl" "${no_psql_path}/kubectl"
 
@@ -1998,7 +2166,7 @@ test_online_install_self_hosted_non_dry_run_delegates_cached_p1_chain() {
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
   write_forbidden_path_bin "${forbidden_bin}"
-  write_config "${config}"
+  write_config "${config}" "agentsmith" "${output}/kubeconfig"
 
   CALL_LOG="${call_log}" \
     EXEC_STDIN_DIR="${exec_stdin_dir}" \
@@ -2206,7 +2374,7 @@ test_p1_real_offline_install_fails_on_juicefs_format_mismatch_before_pvc() {
   local exec_stdin_dir="${TMP_DIR}/p1-format-mismatch-exec-stdin"
   write_p1_offline_cache "${cache}"
   write_p1_install_chain_fakes "${cache}"
-  write_config "${config}"
+  write_config "${config}" "agentsmith" "${output}/kubeconfig"
 
   if CALL_LOG="${call_log}" \
     EXEC_STDIN_DIR="${exec_stdin_dir}" \
@@ -3991,6 +4159,39 @@ test_forbidden_copy_guard() {
   pass "S4 forbidden-copy guard rejects old governance/reference surfaces"
 }
 
+test_forbidden_copy_guard_rejects_app_owned_manifest_refs() {
+  local fixture="${ROOT_DIR}/manifests/.tmp-forbidden-app-owned-ref.yaml"
+  local out="${TMP_DIR}/forbidden-copy-app-owned.out"
+  local status
+  cat >"${fixture}" <<'EOF_FORBIDDEN_APP_REF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: forbidden-app-ref
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/agentsmith-lite/agentsmith-lite-api@sha256:4444444444444444444444444444444444444444444444444444444444444444
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentsmith-lite-web
+EOF_FORBIDDEN_APP_REF
+
+  set +e
+  "${ROOT_DIR}/scripts/check-forbidden-copy.sh" >"${out}" 2>&1
+  status=$?
+  set -e
+  rm -f "${fixture}"
+
+  [[ "${status}" -ne 0 ]] || fail "forbidden-copy guard accepted app-owned manifest refs"
+  assert_contains "${out}" "app-owned service/image references"
+  assert_contains "${out}" "agentsmith-lite-api"
+  assert_contains "${out}" "agentsmith-lite-web"
+  pass "S4 forbidden-copy guard rejects app-owned service and image refs in substrate manifests"
+}
+
 test_validate_env_split_and_redaction
 test_validate_env_rejects_secret_leak
 test_validate_env_rejects_duplicate_non_secret_key
@@ -3999,13 +4200,19 @@ test_validate_env_rejects_short_app_session_secret
 test_validate_env_rejects_invalid_static_resource_names
 test_env_schema_matches_static_name_contract
 test_validate_env_rejects_loose_secret_mode
+test_validate_env_rejects_oidc_auth_and_non_empty_oidc_secret
 test_config_contract_rejects_self_hosted_non_k3s_distribution
 test_config_contract_rejects_invalid_mode
 test_config_contract_rejects_missing_bucket
 test_config_contract_rejects_existing_cloud_app_url_typo
+test_config_contract_rejects_oidc_auth_mode
 test_config_schema_matches_shell_contract
+test_existing_cloud_example_uses_builtin_auth_only
+test_config_schema_no_longer_advertises_install_dev_ingress
+test_cli_value_flags_reject_missing_and_next_flag_values
 test_install_dry_runs_reject_invalid_generated_env_names
 test_config_contract_accepts_valid_modes
+test_config_contract_uses_custom_kubeconfig_output_path
 test_offline_install_validates_cache_without_network
 test_offline_cache_rejects_public_download_contract
 test_offline_cache_rejects_public_download_references_in_checksums
@@ -4083,5 +4290,6 @@ test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails
 test_juicefs_csi_contract
 test_juicefs_csi_contract_renders_custom_env_names
 test_forbidden_copy_guard
+test_forbidden_copy_guard_rejects_app_owned_manifest_refs
 
 printf '1..%d\n' "${pass_count}"
