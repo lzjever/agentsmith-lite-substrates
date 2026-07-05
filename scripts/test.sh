@@ -1146,6 +1146,38 @@ test_validate_env_rejects_short_app_session_secret() {
   pass "P0 env contract rejects short APP_SESSION_SECRET without printing the value"
 }
 
+test_validate_env_rejects_invalid_static_resource_names() {
+  local key bad_value expected_rule dir out
+  while IFS='|' read -r key bad_value expected_rule; do
+    dir="${TMP_DIR}/env-invalid-${key}"
+    out="${TMP_DIR}/validate-invalid-${key}.out"
+    write_valid_env_pair "${dir}"
+    replace_env_value "${dir}/substrate.env" "${key}" "${bad_value}"
+    if "${ROOT_DIR}/scripts/validate-env.sh" --env "${dir}/substrate.env" --secrets "${dir}/substrate.secrets.env" >"${out}" 2>&1; then
+      fail "validate-env accepted invalid ${key}"
+    fi
+    assert_contains "${out}" "${key} must be ${expected_rule}"
+    assert_not_contains "${out}" "${bad_value}"
+  done <<'EOF_INVALID_STATIC_NAMES'
+KUBE_NAMESPACE|Bad_NS|a Kubernetes RFC1123 DNS label
+JUICEFS_PVC_NAME|bad_pvc|a Kubernetes RFC1123 DNS label
+JUICEFS_SECRET_NAME|Bad_Secret|a Kubernetes RFC1123 DNS label
+JUICEFS_STORAGE_CLASS|bad_storage_class|a Kubernetes DNS subdomain name
+S3_BUCKET|Bad_NS|an S3 bucket name
+EOF_INVALID_STATIC_NAMES
+  pass "P0 env contract rejects invalid Kubernetes resource names and S3 bucket names without printing values"
+}
+
+test_env_schema_matches_static_name_contract() {
+  local schema="${ROOT_DIR}/schemas/substrate.env.v1.schema.json"
+  assert_contains "${schema}" '"KUBE_NAMESPACE": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }'
+  assert_contains "${schema}" '"S3_BUCKET": { "type": "string", "minLength": 3, "maxLength": 63, "pattern": "^(?![0-9]+(\\.[0-9]+){3}$)(?!.*\\.\\.)(?!.*\\.-)(?!.*-\\.)[a-z0-9][a-z0-9.-]*[a-z0-9]$" }'
+  assert_contains "${schema}" '"JUICEFS_SECRET_NAME": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }'
+  assert_contains "${schema}" '"JUICEFS_STORAGE_CLASS": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" }'
+  assert_contains "${schema}" '"JUICEFS_PVC_NAME": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }'
+  pass "P0 env schema carries static Kubernetes and S3 name guardrails"
+}
+
 test_validate_env_rejects_loose_secret_mode() {
   local dir="${TMP_DIR}/env-mode"
   local out="${TMP_DIR}/validate-mode.out"
@@ -1241,6 +1273,30 @@ test_config_schema_matches_shell_contract() {
   assert_contains "${schema}" '"required": ["accessKeyFromEnv", "secretKeyFromEnv"]'
   assert_contains "${schema}" '"required": ["clientSecretFromEnv"]'
   pass "S1 config schema carries shell config contract guardrails"
+}
+
+test_install_dry_runs_reject_invalid_generated_env_names() {
+  local cache="${TMP_DIR}/install-invalid-generated-env-cache"
+  local config="${TMP_DIR}/install-invalid-generated-env.yaml"
+  local offline_output="${TMP_DIR}/install-invalid-generated-env-offline-out"
+  local online_output="${TMP_DIR}/install-invalid-generated-env-online-out"
+  local offline_out="${TMP_DIR}/install-offline-invalid-generated-env.out"
+  local online_out="${TMP_DIR}/install-online-invalid-generated-env.out"
+  write_offline_cache "${cache}"
+  write_config "${config}" "Bad_NS"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${offline_output}" --dry-run >"${offline_out}" 2>&1; then
+    fail "install-offline dry-run accepted invalid generated KUBE_NAMESPACE"
+  fi
+  assert_contains "${offline_out}" "KUBE_NAMESPACE must be a Kubernetes RFC1123 DNS label"
+  assert_not_contains "${offline_out}" "Bad_NS"
+
+  if "${ROOT_DIR}/scripts/install-online.sh" --cache "${cache}" --config "${config}" --output "${online_output}" --dry-run >"${online_out}" 2>&1; then
+    fail "install-online dry-run accepted invalid generated KUBE_NAMESPACE"
+  fi
+  assert_contains "${online_out}" "KUBE_NAMESPACE must be a Kubernetes RFC1123 DNS label"
+  assert_not_contains "${online_out}" "Bad_NS"
+  pass "P0 install dry-runs reject generated env contracts with invalid Kubernetes names"
 }
 
 test_config_contract_accepts_valid_modes() {
@@ -2917,6 +2973,52 @@ test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias() {
   pass "S7 preflight delegates to doctor dry-run, forwards --cache, and redacts secrets"
 }
 
+test_doctor_and_preflight_dry_run_reject_invalid_env_without_kubectl() {
+  local env_dir="${TMP_DIR}/dry-run-invalid-env"
+  local stub_bin="${TMP_DIR}/dry-run-invalid-env-bin"
+  local doctor_report="${TMP_DIR}/dry-run-invalid-env-doctor-report.json"
+  local preflight_report="${TMP_DIR}/dry-run-invalid-env-preflight-report.json"
+  local doctor_out="${TMP_DIR}/dry-run-invalid-env-doctor.out"
+  local preflight_out="${TMP_DIR}/dry-run-invalid-env-preflight.out"
+  local kubectl_log="${TMP_DIR}/dry-run-invalid-env-kubectl.log"
+  local status
+  write_valid_env_pair "${env_dir}"
+  replace_env_value "${env_dir}/substrate.env" S3_BUCKET "Bad_NS"
+  mkdir -p "${stub_bin}"
+  : >"${kubectl_log}"
+  cat >"${stub_bin}/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${KUBECTL_LOG:?KUBECTL_LOG is required}"
+printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
+exit 42
+EOF_KUBECTL
+  chmod +x "${stub_bin}/kubectl"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/doctor.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --dry-run --report "${doctor_report}" >"${doctor_out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -ne 0 ]] || fail "doctor dry-run accepted invalid S3_BUCKET"
+  assert_contains "${doctor_out}" "S3_BUCKET must be an S3 bucket name"
+  assert_contains "${doctor_report}" '"overallStatus": "failed"'
+  [[ ! -s "${kubectl_log}" ]] || fail "doctor dry-run should reject invalid env before calling kubectl"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" PATH="${stub_bin}:${PATH}" \
+    "${ROOT_DIR}/scripts/preflight.sh" --env "${env_dir}/substrate.env" --secrets "${env_dir}/substrate.secrets.env" --report "${preflight_report}" >"${preflight_out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -ne 0 ]] || fail "preflight accepted invalid S3_BUCKET"
+  assert_contains "${preflight_out}" "S3_BUCKET must be an S3 bucket name"
+  assert_contains "${preflight_report}" '"overallStatus": "failed"'
+  [[ ! -s "${kubectl_log}" ]] || fail "preflight dry-run should reject invalid env before calling kubectl"
+  assert_not_contains "${doctor_out}" "Bad_NS"
+  assert_not_contains "${preflight_out}" "Bad_NS"
+  pass "P0 doctor and preflight dry-runs reject invalid env contracts without kubectl"
+}
+
 test_substrate_preflight_unreadable_kubeconfig_stays_static() {
   local env_dir="${TMP_DIR}/preflight-unreadable-kubeconfig-env"
   local stub_bin="${TMP_DIR}/preflight-unreadable-kubeconfig-bin"
@@ -3894,12 +3996,15 @@ test_validate_env_rejects_secret_leak
 test_validate_env_rejects_duplicate_non_secret_key
 test_validate_env_rejects_duplicate_secret_key
 test_validate_env_rejects_short_app_session_secret
+test_validate_env_rejects_invalid_static_resource_names
+test_env_schema_matches_static_name_contract
 test_validate_env_rejects_loose_secret_mode
 test_config_contract_rejects_self_hosted_non_k3s_distribution
 test_config_contract_rejects_invalid_mode
 test_config_contract_rejects_missing_bucket
 test_config_contract_rejects_existing_cloud_app_url_typo
 test_config_schema_matches_shell_contract
+test_install_dry_runs_reject_invalid_generated_env_names
 test_config_contract_accepts_valid_modes
 test_offline_install_validates_cache_without_network
 test_offline_cache_rejects_public_download_contract
@@ -3958,6 +4063,7 @@ test_download_online_rejects_mutable_rwx_smoke_image_ref
 test_download_online_rejects_untagged_helm_consumed_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_preflight_delegates_doctor_dry_run_and_cache_alias
+test_doctor_and_preflight_dry_run_reject_invalid_env_without_kubectl
 test_substrate_preflight_unreadable_kubeconfig_stays_static
 test_substrate_preflight_rejects_unknown_argument
 test_substrate_only_doctor_live_fails_when_rwx_smoke_image_is_missing

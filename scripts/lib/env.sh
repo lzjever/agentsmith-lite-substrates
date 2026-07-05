@@ -195,6 +195,52 @@ require_value_regex() {
   fi
 }
 
+is_kubernetes_rfc1123_label() {
+  local value="$1"
+  local pattern='^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+  [[ "${#value}" -le 63 ]] || return 1
+  [[ "${value}" =~ ${pattern} ]]
+}
+
+is_kubernetes_dns_subdomain_name() {
+  local value="$1"
+  local pattern='^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+  [[ "${#value}" -le 253 ]] || return 1
+  [[ "${value}" =~ ${pattern} ]] || return 1
+
+  local label
+  local -a labels
+  local IFS=.
+  read -r -a labels <<<"${value}"
+  for label in "${labels[@]}"; do
+    [[ "${#label}" -le 63 ]] || return 1
+  done
+}
+
+is_s3_bucket_name() {
+  local value="$1"
+  local bucket_pattern='^[a-z0-9][a-z0-9.-]*[a-z0-9]$'
+  local ipv4_pattern='^[0-9]+(\.[0-9]+){3}$'
+  [[ "${#value}" -ge 3 && "${#value}" -le 63 ]] || return 1
+  [[ "${value}" =~ ${bucket_pattern} ]] || return 1
+  [[ "${value}" != *..* ]] || return 1
+  [[ "${value}" != *.-* ]] || return 1
+  [[ "${value}" != *-.* ]] || return 1
+  [[ ! "${value}" =~ ${ipv4_pattern} ]]
+}
+
+require_env_value_rule() {
+  local file="$1"
+  local key="$2"
+  local rule="$3"
+  local validator="$4"
+  local value
+  value="$(env_value_or_empty "${file}" "${key}")"
+  if ! "${validator}" "${value}"; then
+    die "${key} must be ${rule}"
+  fi
+}
+
 check_secret_file_mode() {
   local file="$1"
   local mode
@@ -299,6 +345,11 @@ validate_env_contract() {
   require_value_regex "$(env_value_or_empty "${env_file}" "JUICEFS_MOUNT_ROOT")" '^/' "JUICEFS_MOUNT_ROOT must be an absolute path"
   require_value_regex "$(env_value_or_empty "${env_file}" "APP_PUBLIC_BASE_URL")" '^https?://' "APP_PUBLIC_BASE_URL must start with http:// or https://"
   [[ "$(env_value_or_empty "${env_file}" "JUICEFS_CSI_DRIVER")" == "csi.juicefs.com" ]] || die "JUICEFS_CSI_DRIVER must be csi.juicefs.com"
+  require_env_value_rule "${env_file}" "KUBE_NAMESPACE" "a Kubernetes RFC1123 DNS label" is_kubernetes_rfc1123_label
+  require_env_value_rule "${env_file}" "JUICEFS_SECRET_NAME" "a Kubernetes RFC1123 DNS label" is_kubernetes_rfc1123_label
+  require_env_value_rule "${env_file}" "JUICEFS_PVC_NAME" "a Kubernetes RFC1123 DNS label" is_kubernetes_rfc1123_label
+  require_env_value_rule "${env_file}" "JUICEFS_STORAGE_CLASS" "a Kubernetes DNS subdomain name" is_kubernetes_dns_subdomain_name
+  require_env_value_rule "${env_file}" "S3_BUCKET" "an S3 bucket name" is_s3_bucket_name
 
   check_no_placeholder_values "${env_file}"
   check_no_placeholder_values "${secrets_file}"

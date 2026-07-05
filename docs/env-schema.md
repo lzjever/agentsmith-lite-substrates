@@ -23,6 +23,11 @@ future or installer-specific metadata without breaking validation.
 kubeconfig/context, S3 endpoint metadata, auth mode, JuiceFS StorageClass/PVC
 names, ingress settings, and optional registry coordinates.
 
+The static env contract rejects invalid resource names before any live cluster
+checks: `KUBE_NAMESPACE`, `JUICEFS_SECRET_NAME`, and `JUICEFS_PVC_NAME` must be
+Kubernetes RFC1123 DNS labels; `JUICEFS_STORAGE_CLASS` must be a Kubernetes DNS
+subdomain name; `S3_BUCKET` must follow S3 bucket-name shape rules.
+
 ## Secret File
 
 `substrate.secrets.env` contains:
