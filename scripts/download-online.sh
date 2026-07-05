@@ -133,6 +133,7 @@ write_p1_real_cache() {
 
   local k3s_url k3s_sha install_url install_sha airgap_url airgap_sha kubectl_url kubectl_sha
   local csi_chart_url csi_chart_sha postgres_image postgres_url postgres_sha minio_image minio_url minio_sha
+  local minio_client_image minio_client_url minio_client_sha
   local juicefs_image juicefs_url juicefs_sha
   k3s_url="$(artifact_lock_required_url "${lock_file}" "K3S_BINARY_URL")"
   k3s_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_BINARY_SHA256")"
@@ -150,6 +151,9 @@ write_p1_real_cache() {
   minio_image="$(artifact_lock_required_digest_image "${lock_file}" "MINIO_IMAGE")"
   minio_url="$(artifact_lock_required_url "${lock_file}" "MINIO_ARCHIVE_URL")"
   minio_sha="$(artifact_lock_required_sha256 "${lock_file}" "MINIO_ARCHIVE_SHA256")"
+  minio_client_image="$(artifact_lock_required_digest_image "${lock_file}" "MINIO_CLIENT_IMAGE")"
+  minio_client_url="$(artifact_lock_required_url "${lock_file}" "MINIO_CLIENT_ARCHIVE_URL")"
+  minio_client_sha="$(artifact_lock_required_sha256 "${lock_file}" "MINIO_CLIENT_ARCHIVE_SHA256")"
   juicefs_image="$(artifact_lock_required_digest_image "${lock_file}" "JUICEFS_CSI_IMAGE")"
   juicefs_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_ARCHIVE_URL")"
   juicefs_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_ARCHIVE_SHA256")"
@@ -163,6 +167,7 @@ write_p1_real_cache() {
   download_verified_artifact "JUICEFS_CSI_ARTIFACT_URL" "${csi_chart_url}" "${csi_chart_sha}" "${dir}/charts/juicefs-csi.tgz"
   download_verified_artifact "POSTGRES_ARCHIVE_URL" "${postgres_url}" "${postgres_sha}" "${dir}/images/oci/postgres.tar"
   download_verified_artifact "MINIO_ARCHIVE_URL" "${minio_url}" "${minio_sha}" "${dir}/images/oci/minio.tar"
+  download_verified_artifact "MINIO_CLIENT_ARCHIVE_URL" "${minio_client_url}" "${minio_client_sha}" "${dir}/images/oci/minio-client.tar"
   download_verified_artifact "JUICEFS_CSI_ARCHIVE_URL" "${juicefs_url}" "${juicefs_sha}" "${dir}/images/oci/juicefs-csi.tar"
   chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl"
 
@@ -327,7 +332,7 @@ EOF_IMPORT
 
   cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
 
-  local k3s_sum install_sum airgap_sum kubectl_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum juicefs_sum lock_sum manifest_sum
+  local k3s_sum install_sum airgap_sum kubectl_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
   airgap_sum="$(sha256_file "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")"
@@ -337,6 +342,7 @@ EOF_IMPORT
   csi_chart_sum="$(sha256_file "${dir}/charts/juicefs-csi.tgz")"
   postgres_sum="$(sha256_file "${dir}/images/oci/postgres.tar")"
   minio_sum="$(sha256_file "${dir}/images/oci/minio.tar")"
+  minio_client_sum="$(sha256_file "${dir}/images/oci/minio-client.tar")"
   juicefs_sum="$(sha256_file "${dir}/images/oci/juicefs-csi.tar")"
 
   cat >"${dir}/images/images.lock" <<EOF_LOCK
@@ -350,6 +356,10 @@ images:
     image: ${minio_image}
     archive: images/oci/minio.tar
     sha256: ${minio_sum}
+  - name: minio-client
+    image: ${minio_client_image}
+    archive: images/oci/minio-client.tar
+    sha256: ${minio_client_sum}
   - name: juicefs-csi
     image: ${juicefs_image}
     archive: images/oci/juicefs-csi.tar
@@ -391,6 +401,9 @@ artifacts:
   - path: images/oci/minio.tar
     sha256: ${minio_sum}
     kind: oci-archive
+  - path: images/oci/minio-client.tar
+    sha256: ${minio_client_sum}
+    kind: oci-archive
   - path: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
     kind: oci-archive
@@ -409,12 +422,13 @@ ${lock_sum}  images/images.lock
 ${csi_chart_sum}  charts/juicefs-csi.tgz
 ${postgres_sum}  images/oci/postgres.tar
 ${minio_sum}  images/oci/minio.tar
+${minio_client_sum}  images/oci/minio-client.tar
 ${juicefs_sum}  images/oci/juicefs-csi.tar
 EOF_SUMS
 
   validate_offline_cache "${dir}"
   info "wrote p1-real offline cache: ${dir}"
-  info "note: install-offline.sh can run the minimum cached p1-real chain; JuiceFS driver install, juicefs format, DB/bucket init, and RWX smoke remain follow-up work"
+  info "note: install-offline.sh can run the minimum cached p1-real chain; JuiceFS driver install, juicefs format, and RWX smoke remain follow-up work"
 }
 
 if [[ -n "${artifact_lock}" ]]; then

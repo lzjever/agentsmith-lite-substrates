@@ -8,6 +8,8 @@ source "${SCRIPT_LIB_DIR}/env.sh"
 source "${SCRIPT_LIB_DIR}/offline.sh"
 # shellcheck source=juicefs.sh
 source "${SCRIPT_LIB_DIR}/juicefs.sh"
+# shellcheck source=minio.sh
+source "${SCRIPT_LIB_DIR}/minio.sh"
 # shellcheck source=postgres.sh
 source "${SCRIPT_LIB_DIR}/postgres.sh"
 
@@ -80,7 +82,7 @@ offline_install_render_manifests() {
   local env_file="$2"
   local secrets_file="$3"
   local render_dir="$4"
-  local lock_file namespace postgres_image minio_image
+  local lock_file namespace postgres_image minio_image minio_client_image
 
   mkdir -p "${render_dir}"
   render_juicefs_contract "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}"
@@ -90,11 +92,15 @@ offline_install_render_manifests() {
     || die "p1-real images.lock is missing dependency image entry: postgres"
   minio_image="$(images_lock_image_ref "${lock_file}" "minio")" \
     || die "p1-real images.lock is missing dependency image entry: minio"
+  minio_client_image="$(images_lock_image_ref "${lock_file}" "minio-client")" \
+    || die "p1-real images.lock is missing dependency image entry: minio-client"
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
 
   render_postgres_secret_manifest "${env_file}" "${secrets_file}" "${render_dir}/postgres-secret.yaml"
+  render_minio_secret_manifest "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-secret.yaml"
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/postgres/postgres.yaml" "${render_dir}/postgres.yaml" "${namespace}" "${postgres_image}"
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/minio/minio.yaml" "${render_dir}/minio.yaml" "${namespace}" "${minio_image}"
+  render_minio_bucket_init_job "${env_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-bucket-init-job.yaml" "${minio_client_image}"
 }
 
 offline_install_import_images() {
@@ -147,6 +153,29 @@ offline_install_wait_postgres_ready() {
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status statefulset/postgres --timeout=180s
 }
 
+offline_install_wait_minio_ready() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local namespace
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  info "install-offline: waiting for MinIO StatefulSet readiness"
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status statefulset/minio --timeout=180s
+}
+
+offline_install_init_minio_bucket() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local render_dir="$3"
+  local namespace bucket
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  bucket="$(env_value_or_empty "${env_file}" S3_BUCKET)"
+  minio_validate_bucket_name "${bucket}"
+  info "install-offline: initializing MinIO bucket"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/minio-bucket-init-job.yaml"
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s
+  offline_install_kubectl "${cache_dir}" "${env_file}" delete -f "${render_dir}/minio-bucket-init-job.yaml" --ignore-not-found=true
+}
+
 offline_install_init_postgres_databases() {
   local cache_dir="$1"
   local env_file="$2"
@@ -197,6 +226,7 @@ run_p1_real_offline_install() {
   namespace_manifest="$(cache_relative_path "${cache_dir}" "manifests/namespace-bootstrap/namespace.yaml" "namespace bootstrap manifest")"
 
   postgres_validate_self_hosted_urls "${env_file}" "${secrets_file}"
+  minio_validate_self_hosted_env "${env_file}" "${secrets_file}"
   offline_install_run_k3s_installer "${cache_dir}" "${env_file}" "${output_dir}"
   offline_install_import_images "${cache_dir}"
 
@@ -208,12 +238,16 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-secret.yaml"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
 
-  info "install-offline: applying rendered Postgres and MinIO manifests"
+  info "install-offline: applying rendered Postgres manifests"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres-secret.yaml"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres.yaml"
   offline_install_wait_postgres_ready "${cache_dir}" "${env_file}"
   offline_install_init_postgres_databases "${cache_dir}" "${env_file}" "${secrets_file}"
+  info "install-offline: applying rendered MinIO manifests"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/minio-secret.yaml"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/minio.yaml"
+  offline_install_wait_minio_ready "${cache_dir}" "${env_file}"
+  offline_install_init_minio_bucket "${cache_dir}" "${env_file}" "${render_dir}"
 
   offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}"
 }

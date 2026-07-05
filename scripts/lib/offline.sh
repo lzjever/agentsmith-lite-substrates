@@ -126,23 +126,76 @@ require_executable_artifact() {
   [[ -x "${file}" ]] || die "p1-real artifact must be executable: ${rel}"
 }
 
-require_image_lock_name() {
+images_lock_entry_archive_sha() {
   local lock_file="$1"
   local name="$2"
-  if ! awk -v wanted="${name}" '
+  awk -v wanted="${name}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    function value_after_colon(line) {
+      return trim(substr(line, index(line, ":") + 1))
+    }
+    function emit() {
+      print archive "\t" sha
+      found=1
+      done=1
+    }
     /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
-      value=$0
-      sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", value)
-      gsub(/^"|"$/, "", value)
-      gsub(/^\047|\047$/, "", value)
-      if (value == wanted) {
-        found=1
+      if (entry_seen && entry_name == wanted) {
+        emit()
+        exit 0
+      }
+      entry_name=value_after_colon($0)
+      archive=""
+      sha=""
+      entry_seen=1
+      next
+    }
+    entry_seen && /^[[:space:]]*archive:[[:space:]]*/ {
+      archive=value_after_colon($0)
+      next
+    }
+    entry_seen && /^[[:space:]]*sha256:[[:space:]]*/ {
+      sha=value_after_colon($0)
+      next
+    }
+    END {
+      if (!done) {
+        if (entry_seen && entry_name == wanted) {
+          emit()
+        } else {
+          exit 1
+        }
       }
     }
-    END { exit found ? 0 : 1 }
-  ' "${lock_file}"; then
-    die "p1-real images.lock is missing dependency image entry: ${name}"
-  fi
+  ' "${lock_file}"
+}
+
+require_image_lock_archive() {
+  local cache_dir="$1"
+  local lock_file="$2"
+  local name="$3"
+  local expected_archive="$4"
+  local record archive expected file actual
+
+  record="$(images_lock_entry_archive_sha "${lock_file}" "${name}")" \
+    || die "p1-real images.lock is missing dependency image entry: ${name}"
+  IFS=$'\t' read -r archive expected <<<"${record}"
+  [[ -n "${archive:-}" ]] || die "images.lock entry ${name} is missing archive"
+  [[ "${archive}" == "${expected_archive}" ]] \
+    || die "images.lock entry ${name} must declare archive: ${expected_archive}"
+  [[ -n "${expected:-}" ]] || die "images.lock entry ${name} is missing sha256: ${expected_archive}"
+  [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] \
+    || die "images.lock entry ${name} has invalid sha256: ${expected_archive}"
+  file="$(cache_relative_path "${cache_dir}" "${archive}" "images.lock archive path")"
+  need_file "${file}"
+  actual="$(sha256_file "${file}")"
+  [[ "${actual}" == "${expected}" ]] \
+    || die "images.lock entry ${name} sha256 mismatch for ${expected_archive}"
 }
 
 images_lock_image_ref() {
@@ -318,6 +371,7 @@ validate_p1_real_cache() {
   require_manifest_artifact "${manifest_file}" "juicefs-csi-artifact" "charts/juicefs-csi.tgz"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/postgres.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/minio.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/minio-client.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi.tar"
 
   require_executable_artifact "${cache_dir}" "bin/k3s"
@@ -325,9 +379,10 @@ validate_p1_real_cache() {
   require_executable_artifact "${cache_dir}" "bin/kubectl"
   require_executable_artifact "${cache_dir}" "scripts/import-images.sh"
 
-  require_image_lock_name "${lock_file}" "postgres"
-  require_image_lock_name "${lock_file}" "minio"
-  require_image_lock_name "${lock_file}" "juicefs-csi"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "postgres" "images/oci/postgres.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "minio" "images/oci/minio.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "minio-client" "images/oci/minio-client.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi" "images/oci/juicefs-csi.tar"
 }
 
 validate_offline_cache() {

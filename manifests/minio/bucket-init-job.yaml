@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agentsmith-lite-minio-bucket-init
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-bucket-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bucket-init
+          image: ${MINIO_CLIENT_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: S3_ENDPOINT
+              value: "${S3_ENDPOINT}"
+            - name: S3_BUCKET
+              value: "${S3_BUCKET}"
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-minio
+                  key: access-key
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-minio
+                  key: secret-key
+          command:
+            - /bin/sh
+            - -ceu
+            - |
+              json_escape_env() {
+                awk -v name="$1" '
+                  BEGIN {
+                    value = ENVIRON[name]
+                    gsub(/\\/, "\\\\", value)
+                    gsub(/"/, "\\\"", value)
+                    gsub(/\r/, "\\r", value)
+                    gsub(/\n/, "\\n", value)
+                    printf "%s", value
+                  }
+                '
+              }
+
+              MC_CONFIG_DIR="$(mktemp -d)"
+              chmod 0700 "$MC_CONFIG_DIR"
+              trap 'rm -rf "$MC_CONFIG_DIR"' EXIT
+              {
+                printf '{\n'
+                printf '  "version": "10",\n'
+                printf '  "aliases": {\n'
+                printf '    "agentsmith-minio": {\n'
+                printf '      "url": "'
+                json_escape_env S3_ENDPOINT
+                printf '",\n'
+                printf '      "accessKey": "'
+                json_escape_env MINIO_ROOT_USER
+                printf '",\n'
+                printf '      "secretKey": "'
+                json_escape_env MINIO_ROOT_PASSWORD
+                printf '",\n'
+                printf '      "api": "s3v4",\n'
+                printf '      "path": "auto"\n'
+                printf '    }\n'
+                printf '  }\n'
+                printf '}\n'
+              } >"$MC_CONFIG_DIR/config.json"
+              chmod 0600 "$MC_CONFIG_DIR/config.json"
+
+              mc --config-dir "$MC_CONFIG_DIR" mb --ignore-existing "agentsmith-minio/$S3_BUCKET" >/dev/null
+              mc --config-dir "$MC_CONFIG_DIR" stat "agentsmith-minio/$S3_BUCKET" >/dev/null
+              printf 'minio bucket ready\n'

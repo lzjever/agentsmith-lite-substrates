@@ -36,7 +36,7 @@ The current test slices are:
 - `reset-dev.sh` requires `--destroy-data` and a self-hosted config.
 - P0 skeletons remain dry-run/contract-only. p1-real offline install performs
   the minimum cached k3s/import/kubectl apply chain, but live JuiceFS CSI driver
-  install, JuiceFS format, DB/bucket initialization, and RWX smoke remain open.
+  install, JuiceFS format, and RWX smoke remain open.
 - The default `download-online.sh` output is still a P0 static contract
   skeleton. It is useful for contract generation and dry-run validation only.
 - A p1-real offline cache must be supplied with all required artifacts and

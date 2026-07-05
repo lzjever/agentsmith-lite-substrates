@@ -23,12 +23,14 @@ This first public-ready skeleton is validate-first:
 - renders the self-hosted PostgreSQL Secret, waits for `statefulset/postgres`,
   and initializes/verifies the app DB plus JuiceFS metadata DB/user before any
   future `juicefs format`
+- renders the self-hosted MinIO Secret, waits for `statefulset/minio`, and
+  creates/verifies `S3_BUCKET` with the cached MinIO client image
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - runs a substrate-only doctor for static dry-run checks and partial live checks
 
 It does not yet install the JuiceFS CSI driver chart, run `juicefs format`,
-initialize MinIO buckets, or run a live RWX smoke. Doctor may report `partial`
-for those still-open live checks.
+or run a live RWX smoke. Doctor may report `partial` for those still-open live
+checks.
 
 ## Quick Start
 

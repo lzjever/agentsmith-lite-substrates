@@ -241,9 +241,10 @@ write_p1_offline_cache() {
   printf 'juicefs csi chart fixture\n' >"${dir}/charts/juicefs-csi.tgz"
   printf 'postgres oci archive fixture\n' >"${dir}/images/oci/postgres.tar"
   printf 'minio oci archive fixture\n' >"${dir}/images/oci/minio.tar"
+  printf 'minio client oci archive fixture\n' >"${dir}/images/oci/minio-client.tar"
   printf 'juicefs csi oci archive fixture\n' >"${dir}/images/oci/juicefs-csi.tar"
 
-  local k3s_sum kubectl_sum install_sum import_sum namespace_sum airgap_sum csi_chart_sum postgres_sum minio_sum juicefs_sum lock_sum manifest_sum
+  local k3s_sum kubectl_sum install_sum import_sum namespace_sum airgap_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   kubectl_sum="$(sha256_file "${dir}/bin/kubectl")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
@@ -253,6 +254,7 @@ write_p1_offline_cache() {
   csi_chart_sum="$(sha256_file "${dir}/charts/juicefs-csi.tgz")"
   postgres_sum="$(sha256_file "${dir}/images/oci/postgres.tar")"
   minio_sum="$(sha256_file "${dir}/images/oci/minio.tar")"
+  minio_client_sum="$(sha256_file "${dir}/images/oci/minio-client.tar")"
   juicefs_sum="$(sha256_file "${dir}/images/oci/juicefs-csi.tar")"
 
   if [[ "${variant}" == "missing-image-sha" ]]; then
@@ -266,13 +268,18 @@ images:
   - name: minio
     image: quay.io/minio/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     archive: images/oci/minio.tar
+  - name: minio-client
+    image: quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    archive: images/oci/minio-client.tar
+    sha256: ${minio_client_sum}
   - name: juicefs-csi
     image: docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     archive: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
 EOF_LOCK
   else
-    cat >"${dir}/images/images.lock" <<EOF_LOCK
+    {
+      cat <<EOF_LOCK
 schemaVersion: agentsmith-lite.substrate.images/v1
 images:
   - name: postgres
@@ -283,15 +290,27 @@ images:
     image: quay.io/minio/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     archive: images/oci/minio.tar
     sha256: ${minio_sum}
+EOF_LOCK
+      if [[ "${variant}" != "missing-minio-client" ]]; then
+        cat <<EOF_LOCK
+  - name: minio-client
+    image: quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    archive: images/oci/minio-client.tar
+    sha256: ${minio_client_sum}
+EOF_LOCK
+      fi
+      cat <<EOF_LOCK
   - name: juicefs-csi
     image: docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     archive: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
 EOF_LOCK
+    } >"${dir}/images/images.lock"
   fi
   lock_sum="$(sha256_file "${dir}/images/images.lock")"
 
-  cat >"${dir}/manifest.yaml" <<EOF_MANIFEST
+  {
+    cat <<EOF_MANIFEST
 schemaVersion: agentsmith-lite.substrate.offline-cache/v1
 cacheMode: p1-real
 artifacts:
@@ -325,12 +344,23 @@ artifacts:
   - path: images/oci/minio.tar
     sha256: ${minio_sum}
     kind: oci-archive
+EOF_MANIFEST
+    if [[ "${variant}" != "missing-minio-client" ]]; then
+      cat <<EOF_MANIFEST
+  - path: images/oci/minio-client.tar
+    sha256: ${minio_client_sum}
+    kind: oci-archive
+EOF_MANIFEST
+    fi
+    cat <<EOF_MANIFEST
   - path: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
     kind: oci-archive
 EOF_MANIFEST
+  } >"${dir}/manifest.yaml"
   manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
-  cat >"${dir}/checksums.txt" <<EOF_SUMS
+  {
+    cat <<EOF_SUMS
 ${manifest_sum}  manifest.yaml
 ${k3s_sum}  bin/k3s
 ${install_sum}  scripts/install-k3s.sh
@@ -342,8 +372,16 @@ ${lock_sum}  images/images.lock
 ${csi_chart_sum}  charts/juicefs-csi.tgz
 ${postgres_sum}  images/oci/postgres.tar
 ${minio_sum}  images/oci/minio.tar
+EOF_SUMS
+    if [[ "${variant}" != "missing-minio-client" ]]; then
+      cat <<EOF_SUMS
+${minio_client_sum}  images/oci/minio-client.tar
+EOF_SUMS
+    fi
+    cat <<EOF_SUMS
 ${juicefs_sum}  images/oci/juicefs-csi.tar
 EOF_SUMS
+  } >"${dir}/checksums.txt"
 }
 
 remove_manifest_artifact_entry() {
@@ -537,6 +575,32 @@ replace_images_lock_archive_and_sha() {
   mv "${tmp}" "${cache}/images/images.lock"
 }
 
+remove_images_lock_archive_and_sha_for_name() {
+  local cache="$1"
+  local name="$2"
+  local tmp="${cache}/images/images.lock.tmp"
+  awk -v wanted="${name}" '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\047|\047$/, "", v)
+      return v
+    }
+    /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", value)
+      in_wanted=(trim(value) == wanted)
+      print
+      next
+    }
+    in_wanted && /^[[:space:]]*(archive|sha256):[[:space:]]*/ {
+      next
+    }
+    { print }
+  ' "${cache}/images/images.lock" >"${tmp}"
+  mv "${tmp}" "${cache}/images/images.lock"
+}
+
 replace_images_lock_image_ref() {
   local cache="$1"
   local name="$2"
@@ -612,7 +676,7 @@ set -euo pipefail
 : "${CALL_LOG:?CALL_LOG is required}"
 printf 'kubectl %s\n' "$*" >>"${CALL_LOG}"
 case "$*" in
-  *postgresql://*|*postgres://*|*postgres-secret-value*|*juicefs-secret-value*) exit 54 ;;
+  *postgresql://*|*postgres://*|*postgres-secret-value*|*juicefs-secret-value*|*minio-secret-value*|*minio-access-key*|*S3_SECRET_KEY*) exit 54 ;;
 esac
 is_exec=false
 has_stdin=false
@@ -679,6 +743,7 @@ write_downloader_fixtures() {
   printf 'juicefs csi chart fixture from downloader\n' >"${dir}/juicefs-csi.tgz"
   printf 'postgres oci archive fixture from downloader\n' >"${dir}/postgres.tar"
   printf 'minio oci archive fixture from downloader\n' >"${dir}/minio.tar"
+  printf 'minio client oci archive fixture from downloader\n' >"${dir}/minio-client.tar"
   printf 'juicefs csi oci archive fixture from downloader\n' >"${dir}/juicefs-csi.tar"
 }
 
@@ -686,7 +751,7 @@ write_artifact_lock() {
   local fixtures="$1"
   local lock_file="$2"
   local variant="${3:-valid}"
-  local k3s_sha install_sha airgap_sha kubectl_sha csi_chart_sha postgres_sha minio_sha juicefs_sha
+  local k3s_sha install_sha airgap_sha kubectl_sha csi_chart_sha postgres_sha minio_sha minio_client_sha juicefs_sha
   k3s_sha="$(sha256_file "${fixtures}/k3s")"
   install_sha="$(sha256_file "${fixtures}/install-k3s.sh")"
   airgap_sha="$(sha256_file "${fixtures}/k3s-airgap-images-amd64.tar.zst")"
@@ -694,11 +759,16 @@ write_artifact_lock() {
   csi_chart_sha="$(sha256_file "${fixtures}/juicefs-csi.tgz")"
   postgres_sha="$(sha256_file "${fixtures}/postgres.tar")"
   minio_sha="$(sha256_file "${fixtures}/minio.tar")"
+  minio_client_sha="$(sha256_file "${fixtures}/minio-client.tar")"
   juicefs_sha="$(sha256_file "${fixtures}/juicefs-csi.tar")"
 
   local postgres_image="docker.io/library/postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  local minio_client_image="quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   if [[ "${variant}" == "mutable-image" ]]; then
     postgres_image="docker.io/library/postgres:16"
+  fi
+  if [[ "${variant}" == "mutable-minio-client-image" ]]; then
+    minio_client_image="quay.io/minio/mc:latest"
   fi
   if [[ "${variant}" == "sha-mismatch" ]]; then
     k3s_sha="0000000000000000000000000000000000000000000000000000000000000000"
@@ -721,6 +791,9 @@ POSTGRES_ARCHIVE_SHA256=${postgres_sha}
 MINIO_IMAGE=quay.io/minio/minio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 MINIO_ARCHIVE_URL=$(file_url "${fixtures}/minio.tar")
 MINIO_ARCHIVE_SHA256=${minio_sha}
+MINIO_CLIENT_IMAGE=${minio_client_image}
+MINIO_CLIENT_ARCHIVE_URL=$(file_url "${fixtures}/minio-client.tar")
+MINIO_CLIENT_ARCHIVE_SHA256=${minio_client_sha}
 JUICEFS_CSI_IMAGE=docker.io/juicedata/juicefs-csi-driver@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 JUICEFS_CSI_ARCHIVE_URL=$(file_url "${fixtures}/juicefs-csi.tar")
 JUICEFS_CSI_ARCHIVE_SHA256=${juicefs_sha}
@@ -730,6 +803,14 @@ EOF_LOCK
     local tmp="${lock_file}.tmp"
     grep -v '^KUBECTL_BINARY_SHA256=' "${lock_file}" >"${tmp}"
     mv "${tmp}" "${lock_file}"
+  fi
+  if [[ "${variant}" == "missing-minio-client-key" ]]; then
+    local tmp="${lock_file}.tmp"
+    grep -v '^MINIO_CLIENT_IMAGE=' "${lock_file}" >"${tmp}"
+    mv "${tmp}" "${lock_file}"
+  fi
+  if [[ "${variant}" == "mutable-minio-client-image" ]]; then
+    replace_env_value "${lock_file}" "MINIO_CLIENT_IMAGE" "quay.io/minio/mc:latest"
   fi
 }
 
@@ -939,6 +1020,56 @@ test_p1_real_offline_cache_requires_artifacts_and_archive_sha() {
   pass "S5 p1-real offline-cache contract requires k3s, kubectl, airgap, CSI, dependency images, and archive sha"
 }
 
+test_p1_real_offline_cache_requires_minio_client_oci_archive() {
+  local cache="${TMP_DIR}/offline-cache-p1-missing-minio-client"
+  local config="${TMP_DIR}/substrates-p1-missing-minio-client.yaml"
+  local output="${TMP_DIR}/offline-p1-missing-minio-client-out"
+  local out="${TMP_DIR}/install-offline-p1-missing-minio-client.out"
+  write_p1_offline_cache "${cache}" "missing-minio-client"
+  write_config "${config}"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a p1-real cache missing the minio-client OCI archive"
+  fi
+  assert_contains "${out}" "missing required p1-real artifact images/oci/minio-client.tar with kind oci-archive"
+  pass "S5 p1-real offline-cache contract requires cached minio-client OCI archive"
+}
+
+test_p1_real_offline_cache_requires_minio_client_images_lock_archive_sha() {
+  local cache="${TMP_DIR}/offline-cache-p1-minio-client-lock-archive-sha"
+  local config="${TMP_DIR}/substrates-p1-minio-client-lock-archive-sha.yaml"
+  local output="${TMP_DIR}/offline-p1-minio-client-lock-archive-sha-out"
+  local out="${TMP_DIR}/install-offline-p1-minio-client-lock-archive-sha.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  remove_images_lock_archive_and_sha_for_name "${cache}" "minio-client"
+  refresh_cache_artifacts "${cache}" "images/images.lock"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a p1-real minio-client images.lock entry without archive/sha256"
+  fi
+  assert_contains "${out}" "images.lock entry minio-client is missing archive"
+  pass "S5 p1-real offline-cache contract requires minio-client images.lock archive and sha"
+}
+
+test_p1_real_offline_cache_rejects_mutable_minio_client_image_ref() {
+  local cache="${TMP_DIR}/offline-cache-p1-mutable-minio-client"
+  local config="${TMP_DIR}/substrates-p1-mutable-minio-client.yaml"
+  local output="${TMP_DIR}/offline-p1-mutable-minio-client-out"
+  local out="${TMP_DIR}/install-offline-p1-mutable-minio-client.out"
+  write_p1_offline_cache "${cache}"
+  write_config "${config}"
+  replace_images_lock_image_ref "${cache}" "minio-client" "quay.io/minio/mc:latest"
+  refresh_cache_artifacts "${cache}" "images/images.lock"
+
+  if "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${out}" 2>&1; then
+    fail "install-offline accepted a mutable minio-client image reference"
+  fi
+  assert_contains "${out}" "images.lock image is not digest-pinned"
+  assert_contains "${out}" "quay.io/minio/mc:latest"
+  pass "S5 p1-real offline-cache contract requires digest-pinned minio-client image"
+}
+
 test_p0_contract_offline_install_non_dry_run_still_fails() {
   local cache="${TMP_DIR}/offline-cache-p0-live"
   local config="${TMP_DIR}/substrates-p0-live.yaml"
@@ -1010,6 +1141,9 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   test "$(stat -c '%a' "${rendered}/juicefs-secret.yaml")" = "600" || fail "install-offline did not keep rendered JuiceFS Secret owner-only"
   test -f "${rendered}/postgres-secret.yaml" || fail "install-offline did not render Postgres Secret"
   test "$(stat -c '%a' "${rendered}/postgres-secret.yaml")" = "600" || fail "install-offline did not keep rendered Postgres Secret owner-only"
+  test -f "${rendered}/minio-secret.yaml" || fail "install-offline did not render MinIO Secret"
+  test "$(stat -c '%a' "${rendered}/minio-secret.yaml")" = "600" || fail "install-offline did not keep rendered MinIO Secret owner-only"
+  test -f "${rendered}/minio-bucket-init-job.yaml" || fail "install-offline did not render MinIO bucket init Job"
   assert_contains "${rendered}/postgres-secret.yaml" "name: agentsmith-lite-postgres"
   assert_contains "${rendered}/postgres-secret.yaml" "username:"
   assert_contains "${rendered}/postgres-secret.yaml" "password:"
@@ -1017,6 +1151,25 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsUsername:"
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsPassword:"
   assert_contains "${rendered}/postgres-secret.yaml" "juicefsDatabase:"
+  assert_contains "${rendered}/minio-secret.yaml" "name: agentsmith-lite-minio"
+  assert_contains "${rendered}/minio-secret.yaml" "access-key:"
+  assert_contains "${rendered}/minio-secret.yaml" "secret-key:"
+  assert_not_contains "${rendered}/minio-secret.yaml" "minio-access-key"
+  assert_not_contains "${rendered}/minio-secret.yaml" "minio-secret-value"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "name: agentsmith-lite-minio-bucket-init"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "image: quay.io/minio/mc@sha256:"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "name: MINIO_ROOT_USER"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "name: MINIO_ROOT_PASSWORD"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "secretKeyRef:"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "key: access-key"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "key: secret-key"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" "config.json"
+  assert_contains "${rendered}/minio-bucket-init-job.yaml" 'mc --config-dir "$MC_CONFIG_DIR" mb --ignore-existing'
+  assert_not_contains "${rendered}/minio-bucket-init-job.yaml" 'mc alias set agentsmith-minio "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"'
+  assert_not_contains "${rendered}/minio-bucket-init-job.yaml" '"$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"'
+  assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "S3_SECRET_KEY"
+  assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "minio-access-key"
+  assert_not_contains "${rendered}/minio-bucket-init-job.yaml" "minio-secret-value"
 
   assert_line_order "${call_log}" \
     "install-k3s" \
@@ -1031,7 +1184,12 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
     "kubectl exec stdin bytes=" \
     "POSTGRES_PASSWORD postgres.agentsmith.svc.cluster.local 5432 agentsmith agentsmith_lite" \
     "JUICEFS_META_PASSWORD postgres.agentsmith.svc.cluster.local 5432 juicefs juicefs_meta" \
-    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml"
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-secret.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith rollout status statefulset/minio --timeout=180s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite apply -f ${rendered}/minio-bucket-init-job.yaml" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite -n agentsmith wait --for=condition=complete job/agentsmith-lite-minio-bucket-init --timeout=120s" \
+    "kubectl --kubeconfig ${output}/kubeconfig --context agentsmith-lite delete -f ${rendered}/minio-bucket-init-job.yaml --ignore-not-found=true"
   assert_contains "${call_log}" "-Atc \"select 1\""
   assert_contains "${call_log}" "INSTALL_K3S_SKIP_DOWNLOAD=true"
   assert_contains "${call_log}" "INSTALL_K3S_EXEC=server --write-kubeconfig ${output}/kubeconfig --write-kubeconfig-mode 600"
@@ -1069,12 +1227,19 @@ test_p1_real_offline_install_non_dry_run_runs_cached_chain() {
   assert_contains "${out}" "doctor reported partial"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "minio-access-key"
+  assert_not_contains "${out}" "minio-secret-value"
   assert_not_contains "${call_log}" "postgres-secret-value"
   assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "minio-access-key"
+  assert_not_contains "${call_log}" "minio-secret-value"
+  assert_not_contains "${call_log}" "S3_SECRET_KEY"
   assert_not_contains "${call_log}" "postgresql://"
   assert_not_contains "${call_log}" "postgres://"
   assert_not_contains "${report}" "postgres-secret-value"
   assert_not_contains "${report}" "juicefs-secret-value"
+  assert_not_contains "${report}" "minio-access-key"
+  assert_not_contains "${report}" "minio-secret-value"
   pass "P1 offline installer non-dry-run executes cached k3s/import/kubectl chain without public network tools"
 }
 
@@ -1096,6 +1261,30 @@ test_p1_real_offline_install_rejects_invalid_cache_before_mutation() {
   [[ ! -s "${call_log}" ]] || fail "install-offline mutated before rejecting invalid p1-real cache"
   assert_contains "${out}" "images.lock image is not digest-pinned"
   pass "P1 offline installer rejects invalid cache before cached mutation chain starts"
+}
+
+test_minio_bucket_init_job_keeps_credentials_out_of_mc_argv() {
+  local env_dir="${TMP_DIR}/minio-bucket-init-env"
+  local output="${TMP_DIR}/minio-bucket-init-job.yaml"
+  local out="${TMP_DIR}/minio-bucket-init-render.out"
+  local image="quay.io/minio/mc@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  write_valid_env_pair "${env_dir}"
+
+  bash -c 'set -euo pipefail; source "$1/scripts/lib/minio.sh"; render_minio_bucket_init_job "$2" "$1/manifests/minio" "$3" "$4"' \
+    _ "${ROOT_DIR}" "${env_dir}/substrate.env" "${output}" "${image}" >"${out}" 2>&1
+
+  assert_contains "${output}" "name: MINIO_ROOT_USER"
+  assert_contains "${output}" "name: MINIO_ROOT_PASSWORD"
+  assert_contains "${output}" "secretKeyRef:"
+  assert_contains "${output}" 'mc --config-dir "$MC_CONFIG_DIR" mb --ignore-existing'
+  assert_contains "${output}" "config.json"
+  assert_not_contains "${output}" 'mc alias set agentsmith-minio "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"'
+  assert_not_contains "${output}" '"$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"'
+  assert_not_contains "${output}" "S3_ACCESS_KEY"
+  assert_not_contains "${output}" "S3_SECRET_KEY"
+  assert_not_contains "${output}" "minio-access-key"
+  assert_not_contains "${output}" "minio-secret-value"
+  pass "MinIO bucket init keeps raw credentials out of mc argv and rendered logs"
 }
 
 test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation() {
@@ -1178,11 +1367,22 @@ EOF_PSQL
   assert_not_contains "${call_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
   assert_not_contains "${call_log}" "rollout status statefulset/postgres"
   assert_not_contains "${call_log}" "exec -i statefulset/postgres"
+  assert_not_contains "${call_log}" "minio-secret.yaml"
+  assert_not_contains "${call_log}" "minio.yaml"
+  assert_not_contains "${call_log}" "statefulset/minio"
+  assert_not_contains "${call_log}" "minio-bucket-init"
+  [[ ! -e "${output}/rendered/offline-install/minio-secret.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO Secret"
+  [[ ! -e "${output}/rendered/offline-install/minio.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO StatefulSet"
+  [[ ! -e "${output}/rendered/offline-install/minio-bucket-init-job.yaml" ]] || fail "existing-cloud rendered a self-hosted MinIO bucket init Job"
   assert_contains "${out}" "doctor reported partial"
   assert_not_contains "${out}" "postgres-secret-value"
   assert_not_contains "${out}" "juicefs-secret-value"
+  assert_not_contains "${out}" "existing-access-key"
+  assert_not_contains "${out}" "existing-secret-value"
   assert_not_contains "${call_log}" "postgres-secret-value"
   assert_not_contains "${call_log}" "juicefs-secret-value"
+  assert_not_contains "${call_log}" "existing-access-key"
+  assert_not_contains "${call_log}" "existing-secret-value"
   pass "existing-cloud p1-real install validates without mutating self-hosted Postgres"
 }
 
@@ -1306,11 +1506,15 @@ test_download_online_generates_p1_real_cache_from_artifact_lock() {
   assert_contains "${cache}/checksums.txt" "manifests/namespace-bootstrap/namespace.yaml"
   assert_contains "${cache}/images/images.lock" "image: docker.io/library/postgres@sha256:"
   assert_contains "${cache}/images/images.lock" "archive: images/oci/postgres.tar"
+  assert_contains "${cache}/images/images.lock" "name: minio-client"
+  assert_contains "${cache}/images/images.lock" "image: quay.io/minio/mc@sha256:"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/minio-client.tar"
   test -x "${cache}/scripts/import-images.sh" || fail "download-online did not write executable scripts/import-images.sh"
   test -f "${cache}/manifests/namespace-bootstrap/namespace.yaml" || fail "download-online did not write namespace bootstrap manifest"
   "${cache}/scripts/import-images.sh" --dry-run >"${import_out}" 2>&1
   assert_contains "${import_out}" "images/images.lock"
   assert_contains "${import_out}" "images/oci/postgres.tar"
+  assert_contains "${import_out}" "images/oci/minio-client.tar"
 
   "${ROOT_DIR}/scripts/install-offline.sh" --cache "${cache}" --config "${config}" --output "${output}" --dry-run >"${install_out}" 2>&1
   assert_contains "${install_out}" "validated p1-real cache contract"
@@ -1385,6 +1589,37 @@ test_download_online_rejects_missing_required_key() {
   fi
   assert_contains "${out}" "artifact lock is missing required key KUBECTL_BINARY_SHA256"
   pass "P1 downloader rejects artifact locks missing required keys"
+}
+
+test_download_online_requires_minio_client_artifact_lock() {
+  local fixtures="${TMP_DIR}/download-fixtures-missing-minio-client"
+  local lock_file="${TMP_DIR}/offline-artifacts-missing-minio-client.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-missing-minio-client"
+  local out="${TMP_DIR}/download-online-missing-minio-client.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "missing-minio-client-key"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted an artifact lock missing minio-client coordinates"
+  fi
+  assert_contains "${out}" "artifact lock is missing required key MINIO_CLIENT_IMAGE"
+  pass "P1 downloader requires minio-client artifact lock coordinates"
+}
+
+test_download_online_rejects_mutable_minio_client_image_ref() {
+  local fixtures="${TMP_DIR}/download-fixtures-mutable-minio-client"
+  local lock_file="${TMP_DIR}/offline-artifacts-mutable-minio-client.env"
+  local cache="${TMP_DIR}/downloaded-offline-cache-mutable-minio-client"
+  local out="${TMP_DIR}/download-online-mutable-minio-client.out"
+  write_downloader_fixtures "${fixtures}"
+  write_artifact_lock "${fixtures}" "${lock_file}" "mutable-minio-client-image"
+
+  if "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock_file}" --output "${cache}" --force >"${out}" 2>&1; then
+    fail "download-online accepted a mutable minio-client image reference"
+  fi
+  assert_contains "${out}" "MINIO_CLIENT_IMAGE must be digest-pinned"
+  assert_not_contains "${out}" "quay.io/minio/mc:latest"
+  pass "P1 downloader requires digest-pinned minio-client image"
 }
 
 test_substrate_only_doctor_dry_run_is_factual_and_redacted() {
@@ -1560,10 +1795,14 @@ test_p1_real_offline_cache_rejects_images_lock_archive_path_escape
 test_offline_cache_scans_urls_before_cache_mode_errors_without_leaking
 test_offline_cache_rejects_url_suffix_fields_with_file_urls
 test_p1_real_offline_cache_requires_artifacts_and_archive_sha
+test_p1_real_offline_cache_requires_minio_client_oci_archive
+test_p1_real_offline_cache_requires_minio_client_images_lock_archive_sha
+test_p1_real_offline_cache_rejects_mutable_minio_client_image_ref
 test_p0_contract_offline_install_non_dry_run_still_fails
 test_p1_real_offline_install_dry_run_skips_cluster_mutation
 test_p1_real_offline_install_non_dry_run_runs_cached_chain
 test_p1_real_offline_install_rejects_invalid_cache_before_mutation
+test_minio_bucket_init_job_keeps_credentials_out_of_mc_argv
 test_p1_real_offline_install_rejects_mismatched_postgres_urls_before_mutation
 test_p1_real_offline_install_rejects_invalid_postgres_url_before_mutation
 test_existing_cloud_offline_install_does_not_mutate_self_hosted_postgres
@@ -1577,6 +1816,8 @@ test_download_online_import_helper_rejects_archive_path_escape_in_dry_run
 test_download_online_rejects_sha_mismatch
 test_download_online_rejects_mutable_image_ref
 test_download_online_rejects_missing_required_key
+test_download_online_requires_minio_client_artifact_lock
+test_download_online_rejects_mutable_minio_client_image_ref
 test_substrate_only_doctor_dry_run_is_factual_and_redacted
 test_substrate_only_doctor_live_is_partial_when_live_probes_are_unverified
 test_substrate_only_doctor_live_fails_when_juicefs_meta_db_query_fails

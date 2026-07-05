@@ -23,6 +23,7 @@ dist/offline-cache/
     oci/
       postgres.tar
       minio.tar
+      minio-client.tar
       juicefs-csi.tar
   manifests/
     namespace-bootstrap/
@@ -69,6 +70,8 @@ Required artifact lock keys:
 - `JUICEFS_CSI_ARTIFACT_URL` / `JUICEFS_CSI_ARTIFACT_SHA256`
 - `POSTGRES_IMAGE` / `POSTGRES_ARCHIVE_URL` / `POSTGRES_ARCHIVE_SHA256`
 - `MINIO_IMAGE` / `MINIO_ARCHIVE_URL` / `MINIO_ARCHIVE_SHA256`
+- `MINIO_CLIENT_IMAGE` / `MINIO_CLIENT_ARCHIVE_URL` /
+  `MINIO_CLIENT_ARCHIVE_SHA256`
 - `JUICEFS_CSI_IMAGE` / `JUICEFS_CSI_ARCHIVE_URL` /
   `JUICEFS_CSI_ARCHIVE_SHA256`
 
@@ -93,7 +96,7 @@ requires:
 - `manifests/namespace-bootstrap/namespace.yaml` with manifest kind `manifest`
 - `images/images.lock` with manifest kind `images-lock`
 - `charts/juicefs-csi.tgz` with manifest kind `juicefs-csi-artifact`
-- dependency image entries for PostgreSQL, MinIO, and JuiceFS CSI
+- dependency image entries for PostgreSQL, MinIO, MinIO client, and JuiceFS CSI
 - digest-pinned image references
 - archive paths and per-archive sha256 values in `images.lock`
 
@@ -117,10 +120,11 @@ bootstrap with `bin/kubectl`, renders and applies the JuiceFS CSI Secret plus
 StorageClass/PVC contract, renders and applies the self-hosted PostgreSQL
 Secret before the PostgreSQL StatefulSet, waits for `statefulset/postgres`,
 initializes/verifies the app DB and JuiceFS metadata DB/user through
-`kubectl exec -i ... psql` stdin SQL, applies MinIO, and finally runs
+`kubectl exec -i ... psql` stdin SQL, renders/applies the MinIO Secret before
+the MinIO StatefulSet, waits for `statefulset/minio`, creates/verifies
+`S3_BUCKET` with a one-shot MinIO client Job, deletes that Job, and finally runs
 `scripts/doctor.sh --offline-cache ...`.
 
 The p1-real installer still does not install the JuiceFS CSI driver chart, run
-`juicefs format`, initialize MinIO buckets, or run a live RWX smoke. Doctor
-`partial` is allowed for those incomplete live checks; doctor `failed` still
-fails the install.
+`juicefs format`, or run a live RWX smoke. Doctor `partial` is allowed for
+those incomplete live checks; doctor `failed` still fails the install.
