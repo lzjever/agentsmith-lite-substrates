@@ -12,6 +12,8 @@ source "${SCRIPT_LIB_DIR}/juicefs.sh"
 source "${SCRIPT_LIB_DIR}/minio.sh"
 # shellcheck source=postgres.sh
 source "${SCRIPT_LIB_DIR}/postgres.sh"
+# shellcheck source=keycloak.sh
+source "${SCRIPT_LIB_DIR}/keycloak.sh"
 
 offline_install_kubectl() {
   local cache_dir="$1"
@@ -230,7 +232,8 @@ offline_install_render_manifests() {
   local env_file="$2"
   local secrets_file="$3"
   local render_dir="$4"
-  local lock_file namespace postgres_image minio_image minio_client_image juicefs_csi_image
+  local lock_file namespace postgres_image minio_image minio_client_image juicefs_csi_image keycloak_image auth_mode
+  local keycloak_user="" keycloak_password="" keycloak_database=""
 
   mkdir -p "${render_dir}"
   render_juicefs_contract "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}"
@@ -245,15 +248,46 @@ offline_install_render_manifests() {
   juicefs_csi_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi")" \
     || die "p1-real images.lock is missing dependency image entry: juicefs-csi"
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  auth_mode="$(env_value_or_empty "${env_file}" AUTH_MODE)"
+  if [[ "${auth_mode}" == "oidc" ]]; then
+    keycloak_image="$(images_lock_image_ref "${lock_file}" "keycloak")" \
+      || die "p1-real images.lock is missing dependency image entry: keycloak"
+    keycloak_prepare_self_hosted_context "${env_file}" "${secrets_file}"
+    keycloak_user="${keycloak_db_user}"
+    keycloak_password="${keycloak_db_password}"
+    keycloak_database="${keycloak_db_database}"
+  fi
 
-  render_postgres_secret_manifest "${env_file}" "${secrets_file}" "${render_dir}/postgres-secret.yaml"
+  render_postgres_secret_manifest "${env_file}" "${secrets_file}" "${render_dir}/postgres-secret.yaml" "${keycloak_user}" "${keycloak_password}" "${keycloak_database}"
   render_minio_secret_manifest "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-secret.yaml"
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/postgres/postgres.yaml" "${render_dir}/postgres.yaml" "${namespace}" "${postgres_image}"
-  render_postgres_init_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/postgres" "${render_dir}/postgres-init-job.yaml" "${postgres_image}"
+  render_postgres_init_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/postgres" "${render_dir}/postgres-init-job.yaml" "${postgres_image}" "${keycloak_user}" "${keycloak_password}" "${keycloak_database}"
   offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/minio/minio.yaml" "${render_dir}/minio.yaml" "${namespace}" "${minio_image}"
   render_minio_bucket_init_job "${env_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-bucket-init-job.yaml" "${minio_client_image}"
   render_juicefs_format_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}/juicefs-format-job.yaml" "${juicefs_csi_image}"
   offline_install_render_juicefs_csi_helm_values "${env_file}" "${lock_file}" "${render_dir}/juicefs-csi-values.yaml"
+  if [[ "${auth_mode}" == "oidc" ]]; then
+    render_keycloak_secret_manifest "${render_dir}/keycloak-secret.yaml"
+    render_keycloak_deployment_manifest "${OFFLINE_INSTALL_ROOT}/manifests/keycloak" "${render_dir}/keycloak.yaml" "${keycloak_image}"
+    render_keycloak_bootstrap_job "${OFFLINE_INSTALL_ROOT}/manifests/keycloak" "${render_dir}/keycloak-bootstrap-job.yaml" "${keycloak_image}"
+  fi
+}
+
+offline_install_render_self_hosted_dry_run_manifests() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local secrets_file="$3"
+  local output_dir="$4"
+  local render_dir="${output_dir}/rendered/offline-install"
+
+  if [[ "$(offline_cache_mode "${cache_dir}")" != "p1-real" ]]; then
+    return 0
+  fi
+  if [[ "$(env_value_or_empty "${env_file}" AUTH_MODE)" != "oidc" ]]; then
+    return 0
+  fi
+
+  offline_install_render_manifests "${cache_dir}" "${env_file}" "${secrets_file}" "${render_dir}"
 }
 
 offline_install_import_images() {
@@ -349,6 +383,55 @@ offline_install_wait_juicefs_pvc_bound() {
   pvc_name="$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)"
   info "install-offline: waiting for JuiceFS PVC to bind"
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=jsonpath={.status.phase}=Bound "pvc/${pvc_name}" --timeout=180s
+}
+
+offline_install_wait_keycloak_ready() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local namespace
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  info "install-offline: waiting for Keycloak Deployment readiness"
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status deployment/keycloak --timeout=240s
+}
+
+offline_install_bootstrap_keycloak() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local render_dir="$3"
+  local namespace job_name logs apply_status wait_status logs_status
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  job_name="agentsmith-lite-keycloak-bootstrap"
+
+  info "install-offline: bootstrapping Keycloak realm and client"
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+
+  set +e
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/keycloak-bootstrap-job.yaml"
+  apply_status=$?
+  wait_status=0
+  logs_status=0
+  logs=""
+  if [[ "${apply_status}" -eq 0 ]]; then
+    offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout=180s
+    wait_status=$?
+    logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
+    logs_status=$?
+  fi
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+  set -e
+
+  if [[ "${apply_status}" -ne 0 ]]; then
+    die "Keycloak bootstrap Job apply failed; refusing to continue"
+  fi
+  if [[ "${wait_status}" -ne 0 ]]; then
+    die "Keycloak bootstrap Job failed; refusing to continue"
+  fi
+  if [[ "${logs_status}" -ne 0 ]]; then
+    die "Keycloak bootstrap Job logs could not be read; refusing to continue"
+  fi
+  if ! grep -Fq "keycloak realm client ready" <<<"${logs}"; then
+    die "Keycloak bootstrap Job did not confirm realm and client readiness"
+  fi
 }
 
 offline_install_init_minio_bucket() {
@@ -523,6 +606,14 @@ run_p1_real_offline_install() {
   info "install-offline: applying rendered JuiceFS CSI contract"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
   offline_install_wait_juicefs_pvc_bound "${cache_dir}" "${env_file}"
+
+  if [[ "$(env_value_or_empty "${env_file}" AUTH_MODE)" == "oidc" ]]; then
+    info "install-offline: applying rendered Keycloak manifests"
+    offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/keycloak-secret.yaml"
+    offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/keycloak.yaml"
+    offline_install_wait_keycloak_ready "${cache_dir}" "${env_file}"
+    offline_install_bootstrap_keycloak "${cache_dir}" "${env_file}" "${render_dir}"
+  fi
 
   offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "require-passed" "self-hosted live install"
 }

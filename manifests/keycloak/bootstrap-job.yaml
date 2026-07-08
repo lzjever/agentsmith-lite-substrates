@@ -1,0 +1,117 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agentsmith-lite-keycloak-bootstrap
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak-bootstrap
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: keycloak-bootstrap
+          image: ${KEYCLOAK_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KEYCLOAK_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: adminUsername
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: adminPassword
+            - name: OIDC_REALM
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: oidcRealm
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: oidcClientId
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: oidcClientSecret
+            - name: APP_PUBLIC_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: appPublicBaseUrl
+          command:
+            - /bin/sh
+            - -ceu
+            - |
+              : "${KEYCLOAK_ADMIN_USERNAME:?}"
+              : "${KEYCLOAK_ADMIN_PASSWORD:?}"
+              : "${OIDC_REALM:?}"
+              : "${OIDC_CLIENT_ID:?}"
+              : "${OIDC_CLIENT_SECRET:?}"
+              : "${APP_PUBLIC_BASE_URL:?}"
+
+              server="http://keycloak:8080"
+              for i in $(seq 1 60); do
+                if /opt/keycloak/bin/kcadm.sh config credentials \
+                  --server "$server" \
+                  --realm master \
+                  --user "$KEYCLOAK_ADMIN_USERNAME" \
+                  --password "$KEYCLOAK_ADMIN_PASSWORD" >/tmp/kcadm-login.out 2>&1; then
+                  break
+                fi
+                if [ "$i" = 60 ]; then
+                  cat /tmp/kcadm-login.out >&2
+                  exit 1
+                fi
+                sleep 5
+              done
+
+              if ! /opt/keycloak/bin/kcadm.sh get "realms/$OIDC_REALM" >/dev/null 2>&1; then
+                /opt/keycloak/bin/kcadm.sh create realms \
+                  -s "realm=$OIDC_REALM" \
+                  -s enabled=true
+              fi
+
+              client_uuid="$(
+                /opt/keycloak/bin/kcadm.sh get clients \
+                  -r "$OIDC_REALM" \
+                  -q "clientId=$OIDC_CLIENT_ID" \
+                  --fields id \
+                  --format csv \
+                  --noquotes 2>/dev/null \
+                  | awk 'NR == 1 && $1 != "id" { print $1; exit } NR > 1 && $1 != "" { print $1; exit }'
+              )"
+              redirect_uri="${APP_PUBLIC_BASE_URL%/}/*"
+              web_origin="${APP_PUBLIC_BASE_URL%/}"
+              if [ -z "$client_uuid" ]; then
+                /opt/keycloak/bin/kcadm.sh create clients \
+                  -r "$OIDC_REALM" \
+                  -s "clientId=$OIDC_CLIENT_ID" \
+                  -s enabled=true \
+                  -s publicClient=false \
+                  -s "secret=$OIDC_CLIENT_SECRET" \
+                  -s standardFlowEnabled=true \
+                  -s directAccessGrantsEnabled=false \
+                  -s "redirectUris=[\"$redirect_uri\"]" \
+                  -s "webOrigins=[\"$web_origin\"]"
+              else
+                /opt/keycloak/bin/kcadm.sh update "clients/$client_uuid" \
+                  -r "$OIDC_REALM" \
+                  -s enabled=true \
+                  -s publicClient=false \
+                  -s "secret=$OIDC_CLIENT_SECRET" \
+                  -s standardFlowEnabled=true \
+                  -s directAccessGrantsEnabled=false \
+                  -s "redirectUris=[\"$redirect_uri\"]" \
+                  -s "webOrigins=[\"$web_origin\"]"
+              fi
+
+              printf 'keycloak realm client ready\n'

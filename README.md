@@ -32,6 +32,9 @@ This first public-ready skeleton is validate-first:
 - runs an idempotent `juicefs format` bootstrap Job with the cached
   digest-pinned JuiceFS CSI image before applying the JuiceFS PVC contract and
   waiting for that PVC to reach `Bound`
+- renders self-hosted Keycloak from the same OIDC env contract, uses the
+  existing PostgreSQL service for the Keycloak DB, waits for `deployment/keycloak`,
+  and bootstraps the realm/client with a one-shot cached Keycloak Job
 - installs the cached JuiceFS CSI Helm chart with cached driver and sidecar
   images while leaving StorageClass/Secret/PVC ownership to the substrate
   contract
@@ -144,6 +147,11 @@ Self-hosted config derives the issuer from
 `auth.keycloak.publicBaseUrl` + `auth.realm`; existing-cloud config reads the
 same OIDC values from env by default. `AUTH_MODE=builtin_admin` remains for
 local or transitional use and requires empty OIDC fields.
+In self-hosted OIDC mode, substrates install Keycloak as the auth provider.
+Existing-cloud mode does not install Keycloak; it supplies the same app-facing
+OIDC env/secrets contract from operator-owned identity infrastructure.
+`auth.keycloak.publicBaseUrl` must resolve to the cluster ingress from both the
+browser and app runtime; existing-cloud provides an external OIDC issuer.
 
 ## Secret Boundary
 
@@ -158,6 +166,8 @@ selected auth secret: `OIDC_CLIENT_SECRET` for OIDC or
 only. They are used by substrate setup and doctor checks to create or validate
 the JuiceFS CSI Secret, metadata database, and one-shot format Job; they must
 not be projected into app workload env.
+Self-hosted Keycloak DB and bootstrap admin secrets are rendered only into
+substrate-owned Kubernetes Secrets and are not added to the app env contract.
 
 ## Main Commands
 

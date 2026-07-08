@@ -75,6 +75,9 @@ write_env_contract_from_config "${config_file}" "${output_dir}" "install-offline
 validate_env_contract "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env"
 
 if [[ "${dry_run}" == "true" ]]; then
+  if [[ "${install_mode}" == "self-hosted" ]]; then
+    offline_install_render_self_hosted_dry_run_manifests "${cache_dir}" "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" "${output_dir}"
+  fi
   if [[ "${cache_mode}" == "p0-contract" ]]; then
     info "dry-run: validated P0 static cache skeleton only; this is not a real offline install cache"
   else

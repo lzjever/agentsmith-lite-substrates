@@ -156,6 +156,7 @@ substrate_allowed_image_archive() {
     postgres) printf '%s\n' "images/oci/postgres.tar" ;;
     minio) printf '%s\n' "images/oci/minio.tar" ;;
     minio-client) printf '%s\n' "images/oci/minio-client.tar" ;;
+    keycloak) printf '%s\n' "images/oci/keycloak.tar" ;;
     juicefs-csi) printf '%s\n' "images/oci/juicefs-csi.tar" ;;
     juicefs-csi-liveness-probe) printf '%s\n' "images/oci/juicefs-csi-liveness-probe.tar" ;;
     juicefs-csi-node-driver-registrar) printf '%s\n' "images/oci/juicefs-csi-node-driver-registrar.tar" ;;
@@ -172,6 +173,7 @@ is_substrate_allowed_oci_archive() {
     images/oci/postgres.tar|\
     images/oci/minio.tar|\
     images/oci/minio-client.tar|\
+    images/oci/keycloak.tar|\
     images/oci/juicefs-csi.tar|\
     images/oci/juicefs-csi-liveness-probe.tar|\
     images/oci/juicefs-csi-node-driver-registrar.tar|\
@@ -495,6 +497,7 @@ validate_p1_real_cache() {
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/postgres.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/minio.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/minio-client.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/keycloak.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-liveness-probe.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-node-driver-registrar.tar"
@@ -511,6 +514,7 @@ validate_p1_real_cache() {
   require_image_lock_archive "${cache_dir}" "${lock_file}" "postgres" "images/oci/postgres.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "minio" "images/oci/minio.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "minio-client" "images/oci/minio-client.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "keycloak" "images/oci/keycloak.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi" "images/oci/juicefs-csi.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-liveness-probe" "images/oci/juicefs-csi-liveness-probe.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-node-driver-registrar" "images/oci/juicefs-csi-node-driver-registrar.tar"

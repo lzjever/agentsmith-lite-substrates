@@ -8,6 +8,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 POSTGRES_PROBE_IMAGE="docker.io/library/postgres:16@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 S3_PROBE_IMAGE="quay.io/minio/mc:RELEASE.2024-01-01T00-00-00Z@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 RWX_CHECK_IMAGE="docker.io/library/busybox:1.36.1@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+FAKE_DIGEST="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 pass_count=0
 
@@ -75,6 +76,81 @@ assert_command_fails_contains() {
   set -e
   [[ "${status}" -ne 0 ]] || fail "expected command to fail: $*"
   assert_contains "${out}" "${needle}"
+}
+
+fake_file_sha() {
+  local file="$1"
+  sha256sum "${file}" | awk '{print $1}'
+}
+
+write_fake_artifact() {
+  local file="$1"
+  local content="$2"
+  mkdir -p "$(dirname "${file}")"
+  printf '%s\n' "${content}" >"${file}"
+}
+
+write_fake_p1_artifact_lock() {
+  local dir="$1"
+  local lock="$2"
+  mkdir -p "${dir}/bin" "${dir}/scripts" "${dir}/images/k3s" "${dir}/images/oci" "${dir}/charts"
+  write_fake_artifact "${dir}/bin/k3s" "fake k3s"
+  write_fake_artifact "${dir}/scripts/install-k3s.sh" "#!/usr/bin/env bash"
+  write_fake_artifact "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst" "fake airgap"
+  write_fake_artifact "${dir}/bin/kubectl" "fake kubectl"
+  write_fake_artifact "${dir}/bin/helm" "fake helm"
+  write_fake_artifact "${dir}/charts/juicefs-csi.tgz" "fake juicefs chart"
+  chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl" "${dir}/bin/helm"
+
+  local name
+  for name in postgres minio minio-client keycloak juicefs-csi juicefs-csi-liveness-probe juicefs-csi-node-driver-registrar juicefs-csi-provisioner juicefs-csi-resizer rwx-check; do
+    write_fake_artifact "${dir}/images/oci/${name}.tar" "fake ${name} archive"
+  done
+
+  cat >"${lock}" <<EOF_LOCK
+K3S_BINARY_URL=file://${dir}/bin/k3s
+K3S_BINARY_SHA256=$(fake_file_sha "${dir}/bin/k3s")
+K3S_INSTALL_SCRIPT_URL=file://${dir}/scripts/install-k3s.sh
+K3S_INSTALL_SCRIPT_SHA256=$(fake_file_sha "${dir}/scripts/install-k3s.sh")
+K3S_AIRGAP_IMAGES_URL=file://${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst
+K3S_AIRGAP_IMAGES_SHA256=$(fake_file_sha "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")
+KUBECTL_BINARY_URL=file://${dir}/bin/kubectl
+KUBECTL_BINARY_SHA256=$(fake_file_sha "${dir}/bin/kubectl")
+HELM_BINARY_URL=file://${dir}/bin/helm
+HELM_BINARY_SHA256=$(fake_file_sha "${dir}/bin/helm")
+JUICEFS_CSI_ARTIFACT_URL=file://${dir}/charts/juicefs-csi.tgz
+JUICEFS_CSI_ARTIFACT_SHA256=$(fake_file_sha "${dir}/charts/juicefs-csi.tgz")
+POSTGRES_IMAGE=docker.io/library/postgres:16@sha256:${FAKE_DIGEST}
+POSTGRES_ARCHIVE_URL=file://${dir}/images/oci/postgres.tar
+POSTGRES_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/postgres.tar")
+MINIO_IMAGE=docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:${FAKE_DIGEST}
+MINIO_ARCHIVE_URL=file://${dir}/images/oci/minio.tar
+MINIO_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/minio.tar")
+MINIO_CLIENT_IMAGE=docker.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:${FAKE_DIGEST}
+MINIO_CLIENT_ARCHIVE_URL=file://${dir}/images/oci/minio-client.tar
+MINIO_CLIENT_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/minio-client.tar")
+KEYCLOAK_IMAGE=quay.io/keycloak/keycloak:26.0.7@sha256:${FAKE_DIGEST}
+KEYCLOAK_ARCHIVE_URL=file://${dir}/images/oci/keycloak.tar
+KEYCLOAK_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/keycloak.tar")
+JUICEFS_CSI_IMAGE=docker.io/juicedata/juicefs-csi-driver:v0.31.10@sha256:${FAKE_DIGEST}
+JUICEFS_CSI_ARCHIVE_URL=file://${dir}/images/oci/juicefs-csi.tar
+JUICEFS_CSI_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/juicefs-csi.tar")
+JUICEFS_CSI_LIVENESS_PROBE_IMAGE=registry.k8s.io/sig-storage/livenessprobe:v2.12.0@sha256:${FAKE_DIGEST}
+JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_URL=file://${dir}/images/oci/juicefs-csi-liveness-probe.tar
+JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/juicefs-csi-liveness-probe.tar")
+JUICEFS_CSI_NODE_DRIVER_REGISTRAR_IMAGE=registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0@sha256:${FAKE_DIGEST}
+JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_URL=file://${dir}/images/oci/juicefs-csi-node-driver-registrar.tar
+JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar")
+JUICEFS_CSI_PROVISIONER_IMAGE=registry.k8s.io/sig-storage/csi-provisioner:v2.2.2@sha256:${FAKE_DIGEST}
+JUICEFS_CSI_PROVISIONER_ARCHIVE_URL=file://${dir}/images/oci/juicefs-csi-provisioner.tar
+JUICEFS_CSI_PROVISIONER_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/juicefs-csi-provisioner.tar")
+JUICEFS_CSI_RESIZER_IMAGE=registry.k8s.io/sig-storage/csi-resizer:v1.9.0@sha256:${FAKE_DIGEST}
+JUICEFS_CSI_RESIZER_ARCHIVE_URL=file://${dir}/images/oci/juicefs-csi-resizer.tar
+JUICEFS_CSI_RESIZER_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/juicefs-csi-resizer.tar")
+RWX_CHECK_IMAGE=docker.io/library/busybox:1.36.1@sha256:${FAKE_DIGEST}
+RWX_CHECK_ARCHIVE_URL=file://${dir}/images/oci/rwx-check.tar
+RWX_CHECK_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/rwx-check.tar")
+EOF_LOCK
 }
 
 write_valid_env_pair() {
@@ -352,6 +428,10 @@ test_contract_cache_install_and_static_juicefs() {
 
   "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${download_out}" 2>&1
   assert_contains "${cache}/manifest.yaml" "cacheMode: p0-contract"
+  assert_contains "${cache}/manifest.yaml" "images/oci/keycloak.tar"
+  assert_contains "${cache}/images/images.lock" "name: keycloak"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/keycloak.tar"
+  test -f "${cache}/images/oci/keycloak.tar" || fail "expected contract cache to include images/oci/keycloak.tar"
 
   "${ROOT_DIR}/scripts/install-online.sh" \
     --cache "${cache}" \
@@ -376,6 +456,65 @@ test_contract_cache_install_and_static_juicefs() {
   assert_contains "${output}/substrate.env" "OIDC_CLIENT_ID=agentsmith-lite"
   assert_contains "${juicefs_out}" "JuiceFS CSI contract validated"
   pass "contract-only cache, install-online dry-run, env, and static JuiceFS contracts pass"
+}
+
+test_self_hosted_keycloak_render_from_p1_cache() {
+  local artifacts="${TMP_DIR}/keycloak-render-artifacts"
+  local lock="${TMP_DIR}/keycloak-render-artifacts.env"
+  local cache="${TMP_DIR}/keycloak-render-cache"
+  local output="${TMP_DIR}/keycloak-render-out"
+  local out="${TMP_DIR}/keycloak-render-install.out"
+
+  write_fake_p1_artifact_lock "${artifacts}" "${lock}"
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock}" --output "${cache}" --force >"${TMP_DIR}/keycloak-render-cache.out" 2>&1
+  "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${output}" \
+    --dry-run \
+    --force \
+    >"${out}" 2>&1
+
+  assert_contains "${out}" "dry-run: validated p1-real cache contract; skipped cluster mutation"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "kind: Deployment"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "kind: Ingress"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "name: keycloak"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "host: keycloak.agentsmith.localhost"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "name: keycloak"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "number: 8080"
+  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "name: agentsmith-lite-keycloak-bootstrap"
+  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "keycloak realm client ready"
+  assert_contains "${output}/rendered/offline-install/postgres-secret.yaml" "keycloakDatabase:"
+  assert_contains "${output}/rendered/offline-install/postgres-init-job.yaml" "KEYCLOAK_DB_USER"
+  pass "self-hosted p1 dry-run renders Keycloak and Postgres bootstrap config"
+}
+
+test_existing_cloud_dry_run_does_not_render_keycloak() {
+  local cache="${TMP_DIR}/existing-cloud-no-keycloak-cache"
+  local output="${TMP_DIR}/existing-cloud-no-keycloak-out"
+  local out="${TMP_DIR}/existing-cloud-no-keycloak-install.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/existing-cloud-no-keycloak-cache.out" 2>&1
+  POSTGRES_APP_URL='postgresql://agentsmith:secret@postgres.example.com:5432/agentsmith_lite' \
+    JUICEFS_META_URL='postgresql://juicefs:secret@postgres.example.com:5432/juicefs_meta' \
+    S3_ACCESS_KEY='existing-cloud-access-key' \
+    S3_SECRET_KEY='existing-cloud-secret-key' \
+    APP_SESSION_SECRET='existing-cloud-app-session-secret-value' \
+    OIDC_ISSUER_URL='https://auth.agentsmith.example.com/realms/agentsmith' \
+    OIDC_CLIENT_ID='agentsmith-lite' \
+    OIDC_CLIENT_SECRET='existing-cloud-oidc-secret' \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${ROOT_DIR}/config/substrates.existing-cloud.example.yaml" \
+      --output "${output}" \
+      --dry-run \
+      --force \
+      >"${out}" 2>&1
+
+  test ! -e "${output}/rendered/offline-install/keycloak.yaml" \
+    || fail "existing-cloud dry-run must not render self-hosted Keycloak"
+  assert_contains "${out}" "dry-run: validated P0 static cache skeleton only"
+  pass "existing-cloud dry-run skips self-hosted Keycloak render"
 }
 
 test_doctor_dry_run_status_lines() {
@@ -457,6 +596,8 @@ test_oidc_env_contract
 test_oidc_env_contract_rejects_missing_required_values
 test_existing_cloud_oidc_reads_default_env_names
 test_contract_cache_install_and_static_juicefs
+test_self_hosted_keycloak_render_from_p1_cache
+test_existing_cloud_dry_run_does_not_render_keycloak
 test_doctor_dry_run_status_lines
 test_live_juicefs_contract_mismatch
 test_live_pvc_bound_rwx_success

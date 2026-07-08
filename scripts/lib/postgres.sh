@@ -151,6 +151,9 @@ render_postgres_secret_manifest() {
   local env_file="$1"
   local secrets_file="$2"
   local output="$3"
+  local keycloak_user="${4:-}"
+  local keycloak_password="${5:-}"
+  local keycloak_database="${6:-}"
   local namespace tmp
 
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
@@ -171,6 +174,13 @@ render_postgres_secret_manifest() {
     printf '  juicefsUsername: %s\n' "$(postgres_base64 "${postgres_meta_USER}")"
     printf '  juicefsPassword: %s\n' "$(postgres_base64 "${postgres_meta_PASSWORD}")"
     printf '  juicefsDatabase: %s\n' "$(postgres_base64 "${postgres_meta_DATABASE}")"
+    if [[ -n "${keycloak_user}" ]]; then
+      [[ -n "${keycloak_password}" && -n "${keycloak_database}" ]] \
+        || die "Keycloak Postgres credentials must include user, password, and database"
+      printf '  keycloakUsername: %s\n' "$(postgres_base64 "${keycloak_user}")"
+      printf '  keycloakPassword: %s\n' "$(postgres_base64 "${keycloak_password}")"
+      printf '  keycloakDatabase: %s\n' "$(postgres_base64 "${keycloak_database}")"
+    fi
   } >"${tmp}"
   chmod 0600 "${tmp}"
   mv "${tmp}" "${output}"
@@ -192,7 +202,10 @@ render_postgres_init_job() {
   local manifest_dir="$3"
   local output="$4"
   local postgres_image="$5"
-  local namespace content
+  local keycloak_user="${6:-}"
+  local keycloak_password="${7:-}"
+  local keycloak_database="${8:-}"
+  local namespace content keycloak_env_block keycloak_required_env_block keycloak_sql_block keycloak_verify_block
 
   need_file "${manifest_dir}/postgres-init-job.yaml"
   [[ "${postgres_image}" =~ @sha256:[0-9a-f]{64}$ ]] \
@@ -202,10 +215,58 @@ render_postgres_init_job() {
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
   [[ -n "${namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering Postgres init Job"
 
+  keycloak_env_block=""
+  keycloak_required_env_block=""
+  keycloak_sql_block=""
+  keycloak_verify_block=""
+  if [[ -n "${keycloak_user}" ]]; then
+    [[ -n "${keycloak_password}" && -n "${keycloak_database}" ]] \
+      || die "Keycloak Postgres credentials must include user, password, and database"
+    keycloak_env_block='            - name: KEYCLOAK_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: keycloakUsername
+            - name: KEYCLOAK_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: keycloakPassword
+            - name: KEYCLOAK_DB
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-postgres
+                  key: keycloakDatabase'
+    keycloak_required_env_block='              : "${KEYCLOAK_DB_USER:?}"
+              : "${KEYCLOAK_DB_PASSWORD:?}"
+              : "${KEYCLOAK_DB:?}"'
+    keycloak_sql_block="
+              SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'keycloak_user', :'keycloak_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'keycloak_user')\\gexec
+              SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'keycloak_user', :'keycloak_password')\\gexec
+
+              SELECT format('CREATE DATABASE %I OWNER %I', :'keycloak_db', :'keycloak_user')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'keycloak_db')\\gexec
+              SELECT format('ALTER DATABASE %I OWNER TO %I', :'keycloak_db', :'keycloak_user')\\gexec
+              SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'keycloak_db', :'keycloak_user')\\gexec"
+    keycloak_verify_block='
+              PGPASSWORD="$KEYCLOAK_DB_PASSWORD" \
+                psql -v ON_ERROR_STOP=1 \
+                  -h "$POSTGRES_HOST" \
+                  -p "$POSTGRES_PORT" \
+                  -U "$KEYCLOAK_DB_USER" \
+                  -d "$KEYCLOAK_DB" \
+                  -Atc '\''select 1'\'' >/dev/null'
+  fi
+
   content="$(<"${manifest_dir}/postgres-init-job.yaml")"
   content="${content//\$\{KUBE_NAMESPACE\}/${namespace}}"
   content="${content//\$\{POSTGRES_IMAGE\}/${postgres_image}}"
   content="${content//\$\{POSTGRES_HOST\}/${postgres_app_HOST}}"
   content="${content//\$\{POSTGRES_PORT\}/${postgres_app_PORT}}"
+  content="${content//\$\{KEYCLOAK_INIT_ENV_BLOCK\}/${keycloak_env_block}}"
+  content="${content//\$\{KEYCLOAK_REQUIRED_ENV_BLOCK\}/${keycloak_required_env_block}}"
+  content="${content//\$\{KEYCLOAK_SQL_BLOCK\}/${keycloak_sql_block}}"
+  content="${content//\$\{KEYCLOAK_VERIFY_BLOCK\}/${keycloak_verify_block}}"
   postgres_render_template "${manifest_dir}/postgres-init-job.yaml" "${output}" "${content}"
 }

@@ -76,22 +76,29 @@ prepare_output_dir() {
 write_p0_contract_cache() {
   local dir="$1"
   prepare_output_dir "${dir}"
+  printf 'P0 Keycloak placeholder archive; not a runnable OCI archive.\n' >"${dir}/images/oci/keycloak.tar"
 
   cat >"${dir}/scripts/import-images.sh" <<'EOF_IMPORT'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'P0 contract skeleton has no OCI archives to import and is not a real offline install cache.\n'
+printf 'P0 contract skeleton has no runnable OCI archives to import and is not a real offline install cache.\n'
 EOF_IMPORT
   chmod +x "${dir}/scripts/import-images.sh"
 
   cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
 
-  cat >"${dir}/images/images.lock" <<'EOF_LOCK'
+  local keycloak_sum import_sum namespace_sum lock_sum manifest_sum
+  keycloak_sum="$(sha256_file "${dir}/images/oci/keycloak.tar")"
+
+  cat >"${dir}/images/images.lock" <<EOF_LOCK
 schemaVersion: agentsmith-lite.substrate.images/v1
-images: []
+images:
+  - name: keycloak
+    image: quay.io/keycloak/keycloak:26.0.7@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    archive: images/oci/keycloak.tar
+    sha256: ${keycloak_sum}
 EOF_LOCK
 
-  local import_sum namespace_sum lock_sum manifest_sum
   import_sum="$(sha256_file "${dir}/scripts/import-images.sh")"
   namespace_sum="$(sha256_file "${dir}/manifests/namespace-bootstrap/namespace.yaml")"
   lock_sum="$(sha256_file "${dir}/images/images.lock")"
@@ -110,6 +117,9 @@ artifacts:
   - path: images/images.lock
     sha256: ${lock_sum}
     kind: images-lock
+  - path: images/oci/keycloak.tar
+    sha256: ${keycloak_sum}
+    kind: oci-archive
 EOF_MANIFEST
 
   manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
@@ -118,6 +128,7 @@ ${manifest_sum}  manifest.yaml
 ${import_sum}  scripts/import-images.sh
 ${namespace_sum}  manifests/namespace-bootstrap/namespace.yaml
 ${lock_sum}  images/images.lock
+${keycloak_sum}  images/oci/keycloak.tar
 EOF_SUMS
 
   validate_offline_cache "${dir}"
@@ -133,7 +144,7 @@ write_p1_real_cache() {
 
   local k3s_url k3s_sha install_url install_sha airgap_url airgap_sha kubectl_url kubectl_sha helm_url helm_sha
   local csi_chart_url csi_chart_sha postgres_image postgres_url postgres_sha minio_image minio_url minio_sha
-  local minio_client_image minio_client_url minio_client_sha
+  local minio_client_image minio_client_url minio_client_sha keycloak_image keycloak_url keycloak_sha
   local juicefs_image juicefs_url juicefs_sha
   local liveness_image liveness_url liveness_sha registrar_image registrar_url registrar_sha
   local provisioner_image provisioner_url provisioner_sha resizer_image resizer_url resizer_sha
@@ -159,6 +170,9 @@ write_p1_real_cache() {
   minio_client_image="$(artifact_lock_required_digest_image "${lock_file}" "MINIO_CLIENT_IMAGE")"
   minio_client_url="$(artifact_lock_required_url "${lock_file}" "MINIO_CLIENT_ARCHIVE_URL")"
   minio_client_sha="$(artifact_lock_required_sha256 "${lock_file}" "MINIO_CLIENT_ARCHIVE_SHA256")"
+  keycloak_image="$(artifact_lock_required_digest_image "${lock_file}" "KEYCLOAK_IMAGE")"
+  keycloak_url="$(artifact_lock_required_url "${lock_file}" "KEYCLOAK_ARCHIVE_URL")"
+  keycloak_sha="$(artifact_lock_required_sha256 "${lock_file}" "KEYCLOAK_ARCHIVE_SHA256")"
   juicefs_image="$(artifact_lock_required_helm_image "${lock_file}" "JUICEFS_CSI_IMAGE")"
   juicefs_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_ARCHIVE_URL")"
   juicefs_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_ARCHIVE_SHA256")"
@@ -189,6 +203,7 @@ write_p1_real_cache() {
   download_verified_artifact "POSTGRES_ARCHIVE_URL" "${postgres_url}" "${postgres_sha}" "${dir}/images/oci/postgres.tar"
   download_verified_artifact "MINIO_ARCHIVE_URL" "${minio_url}" "${minio_sha}" "${dir}/images/oci/minio.tar"
   download_verified_artifact "MINIO_CLIENT_ARCHIVE_URL" "${minio_client_url}" "${minio_client_sha}" "${dir}/images/oci/minio-client.tar"
+  download_verified_artifact "KEYCLOAK_ARCHIVE_URL" "${keycloak_url}" "${keycloak_sha}" "${dir}/images/oci/keycloak.tar"
   download_verified_artifact "JUICEFS_CSI_ARCHIVE_URL" "${juicefs_url}" "${juicefs_sha}" "${dir}/images/oci/juicefs-csi.tar"
   download_verified_artifact "JUICEFS_CSI_LIVENESS_PROBE_ARCHIVE_URL" "${liveness_url}" "${liveness_sha}" "${dir}/images/oci/juicefs-csi-liveness-probe.tar"
   download_verified_artifact "JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_URL" "${registrar_url}" "${registrar_sha}" "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar"
@@ -365,7 +380,7 @@ EOF_IMPORT
 
   cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
 
-  local k3s_sum install_sum airgap_sum kubectl_sum helm_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum
+  local k3s_sum install_sum airgap_sum kubectl_sum helm_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum minio_client_sum keycloak_sum juicefs_sum
   local liveness_sum registrar_sum provisioner_sum resizer_sum rwx_check_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
@@ -378,6 +393,7 @@ EOF_IMPORT
   postgres_sum="$(sha256_file "${dir}/images/oci/postgres.tar")"
   minio_sum="$(sha256_file "${dir}/images/oci/minio.tar")"
   minio_client_sum="$(sha256_file "${dir}/images/oci/minio-client.tar")"
+  keycloak_sum="$(sha256_file "${dir}/images/oci/keycloak.tar")"
   juicefs_sum="$(sha256_file "${dir}/images/oci/juicefs-csi.tar")"
   liveness_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-liveness-probe.tar")"
   registrar_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar")"
@@ -400,6 +416,10 @@ images:
     image: ${minio_client_image}
     archive: images/oci/minio-client.tar
     sha256: ${minio_client_sum}
+  - name: keycloak
+    image: ${keycloak_image}
+    archive: images/oci/keycloak.tar
+    sha256: ${keycloak_sum}
   - name: juicefs-csi
     image: ${juicefs_image}
     archive: images/oci/juicefs-csi.tar
@@ -467,6 +487,9 @@ artifacts:
   - path: images/oci/minio-client.tar
     sha256: ${minio_client_sum}
     kind: oci-archive
+  - path: images/oci/keycloak.tar
+    sha256: ${keycloak_sum}
+    kind: oci-archive
   - path: images/oci/juicefs-csi.tar
     sha256: ${juicefs_sum}
     kind: oci-archive
@@ -502,6 +525,7 @@ ${csi_chart_sum}  charts/juicefs-csi.tgz
 ${postgres_sum}  images/oci/postgres.tar
 ${minio_sum}  images/oci/minio.tar
 ${minio_client_sum}  images/oci/minio-client.tar
+${keycloak_sum}  images/oci/keycloak.tar
 ${juicefs_sum}  images/oci/juicefs-csi.tar
 ${liveness_sum}  images/oci/juicefs-csi-liveness-probe.tar
 ${registrar_sum}  images/oci/juicefs-csi-node-driver-registrar.tar

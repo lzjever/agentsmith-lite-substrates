@@ -33,6 +33,8 @@ OIDC is the production auth path. `auth.mode: oidc` reads
 `auth.issuerUrlFromEnv`, `auth.clientIdFromEnv`, or
 `auth.clientSecretFromEnv` only when the operator uses different env names.
 `auth.mode: builtin_admin` is still accepted for local or transitional use.
+Existing-cloud mode does not install Keycloak; the operator provides an OIDC
+issuer/client/secret in the same env/secrets contract that self-hosted emits.
 
 The generated contract is the same as self-hosted mode. S3 and JuiceFS raw
 credentials remain substrate/CSI scoped. App deployment should render only the

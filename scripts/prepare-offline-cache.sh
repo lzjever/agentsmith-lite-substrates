@@ -25,6 +25,7 @@ Common overrides:
   POSTGRES_SOURCE=docker.io/library/postgres:16
   MINIO_SOURCE=docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
   MINIO_CLIENT_SOURCE=docker.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+  KEYCLOAK_SOURCE=quay.io/keycloak/keycloak:26.0.7
   JUICEFS_CSI_SOURCE=docker.io/juicedata/juicefs-csi-driver:v0.31.10
   RWX_CHECK_SOURCE=docker.io/library/busybox:1.36.1
 EOF_USAGE
@@ -132,16 +133,18 @@ write_artifact_lock() {
   local postgres_record="$2"
   local minio_record="$3"
   local minio_client_record="$4"
-  local juicefs_record="$5"
-  local liveness_record="$6"
-  local registrar_record="$7"
-  local provisioner_record="$8"
-  local resizer_record="$9"
-  local rwx_check_record="${10}"
+  local keycloak_record="$5"
+  local juicefs_record="$6"
+  local liveness_record="$7"
+  local registrar_record="$8"
+  local provisioner_record="$9"
+  local resizer_record="${10}"
+  local rwx_check_record="${11}"
 
   local postgres_archive postgres_image postgres_sha
   local minio_archive minio_image minio_sha
   local minio_client_archive minio_client_image minio_client_sha
+  local keycloak_archive keycloak_image keycloak_sha
   local juicefs_archive juicefs_image juicefs_sha
   local liveness_archive liveness_image liveness_sha
   local registrar_archive registrar_image registrar_sha
@@ -152,6 +155,7 @@ write_artifact_lock() {
   IFS=$'\t' read -r postgres_archive postgres_image postgres_sha <<<"${postgres_record}"
   IFS=$'\t' read -r minio_archive minio_image minio_sha <<<"${minio_record}"
   IFS=$'\t' read -r minio_client_archive minio_client_image minio_client_sha <<<"${minio_client_record}"
+  IFS=$'\t' read -r keycloak_archive keycloak_image keycloak_sha <<<"${keycloak_record}"
   IFS=$'\t' read -r juicefs_archive juicefs_image juicefs_sha <<<"${juicefs_record}"
   IFS=$'\t' read -r liveness_archive liveness_image liveness_sha <<<"${liveness_record}"
   IFS=$'\t' read -r registrar_archive registrar_image registrar_sha <<<"${registrar_record}"
@@ -188,6 +192,10 @@ MINIO_ARCHIVE_SHA256=${minio_sha}
 MINIO_CLIENT_IMAGE=${minio_client_image}
 MINIO_CLIENT_ARCHIVE_URL=file://${minio_client_archive}
 MINIO_CLIENT_ARCHIVE_SHA256=${minio_client_sha}
+
+KEYCLOAK_IMAGE=${keycloak_image}
+KEYCLOAK_ARCHIVE_URL=file://${keycloak_archive}
+KEYCLOAK_ARCHIVE_SHA256=${keycloak_sha}
 
 JUICEFS_CSI_IMAGE=${juicefs_image}
 JUICEFS_CSI_ARCHIVE_URL=file://${juicefs_archive}
@@ -269,6 +277,7 @@ JUICEFS_CSI_CHART_SOURCE_URL="${JUICEFS_CSI_CHART_SOURCE_URL:-https://github.com
 POSTGRES_SOURCE="${POSTGRES_SOURCE:-docker.io/library/postgres:16}"
 MINIO_SOURCE="${MINIO_SOURCE:-docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z}"
 MINIO_CLIENT_SOURCE="${MINIO_CLIENT_SOURCE:-docker.io/minio/mc:RELEASE.2025-08-13T08-35-41Z}"
+KEYCLOAK_SOURCE="${KEYCLOAK_SOURCE:-quay.io/keycloak/keycloak:26.0.7}"
 JUICEFS_CSI_SOURCE="${JUICEFS_CSI_SOURCE:-docker.io/juicedata/juicefs-csi-driver:v0.31.10}"
 JUICEFS_CSI_LIVENESS_PROBE_SOURCE="${JUICEFS_CSI_LIVENESS_PROBE_SOURCE:-registry.k8s.io/sig-storage/livenessprobe:v2.12.0}"
 JUICEFS_CSI_NODE_DRIVER_REGISTRAR_SOURCE="${JUICEFS_CSI_NODE_DRIVER_REGISTRAR_SOURCE:-registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0}"
@@ -308,6 +317,7 @@ chmod +x "${ARTIFACTS_DIR_ABS}/bin/k3s" \
 postgres_record="$(prepare_image_artifact "POSTGRES_SOURCE" "${POSTGRES_SOURCE}" "${ARTIFACTS_DIR_ABS}/images/oci/postgres.tar")"
 minio_record="$(prepare_image_artifact "MINIO_SOURCE" "${MINIO_SOURCE}" "${ARTIFACTS_DIR_ABS}/images/oci/minio.tar")"
 minio_client_record="$(prepare_image_artifact "MINIO_CLIENT_SOURCE" "${MINIO_CLIENT_SOURCE}" "${ARTIFACTS_DIR_ABS}/images/oci/minio-client.tar")"
+keycloak_record="$(prepare_image_artifact "KEYCLOAK_SOURCE" "${KEYCLOAK_SOURCE}" "${ARTIFACTS_DIR_ABS}/images/oci/keycloak.tar")"
 juicefs_record="$(prepare_image_artifact "JUICEFS_CSI_SOURCE" "${JUICEFS_CSI_SOURCE}" "${ARTIFACTS_DIR_ABS}/images/oci/juicefs-csi.tar")"
 liveness_record="$(prepare_image_artifact "JUICEFS_CSI_LIVENESS_PROBE_SOURCE" "${JUICEFS_CSI_LIVENESS_PROBE_SOURCE}" "${ARTIFACTS_DIR_ABS}/images/oci/juicefs-csi-liveness-probe.tar")"
 registrar_record="$(prepare_image_artifact "JUICEFS_CSI_NODE_DRIVER_REGISTRAR_SOURCE" "${JUICEFS_CSI_NODE_DRIVER_REGISTRAR_SOURCE}" "${ARTIFACTS_DIR_ABS}/images/oci/juicefs-csi-node-driver-registrar.tar")"
@@ -319,6 +329,7 @@ write_artifact_lock "${lock_file}" \
   "${postgres_record}" \
   "${minio_record}" \
   "${minio_client_record}" \
+  "${keycloak_record}" \
   "${juicefs_record}" \
   "${liveness_record}" \
   "${registrar_record}" \

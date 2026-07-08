@@ -22,6 +22,10 @@ For `auth.mode: oidc`, self-hosted config derives the app-facing issuer from
 `OIDC_CLIENT_ID`. Existing-cloud config reads OIDC values from
 `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` unless custom
 `auth.*FromEnv` names are set.
+Self-hosted Keycloak DB/bootstrap admin secrets are rendered into
+substrate-owned Kubernetes Secrets only; they are not app runtime env fields.
+`auth.keycloak.publicBaseUrl` must resolve to the cluster ingress from both the
+browser and app runtime; existing-cloud provides an external OIDC issuer.
 
 ## Non-Secret File
 

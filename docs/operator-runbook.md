@@ -12,6 +12,7 @@ cluster mutation is enabled:
 | JuiceFS CSI | `csi.juicefs.com`, default chart/image version `0.31.10` |
 | PostgreSQL | 16-compatible product database |
 | Object storage | S3-compatible endpoint; MinIO for self-hosted dev |
+| Auth | Keycloak for self-hosted OIDC; external OIDC for existing-cloud |
 
 ## Bring-Up
 

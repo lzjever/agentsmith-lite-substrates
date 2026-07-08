@@ -10,3 +10,6 @@ artifacts:
   - path: images/images.lock
     sha256: "<sha256>"
     kind: images-lock
+  - path: images/oci/keycloak.tar
+    sha256: "<sha256>"
+    kind: oci-archive

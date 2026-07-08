@@ -18,20 +18,21 @@ The repo exists to make the product run locally on K8s. Do not turn it into an o
 
 Remove governance overhead aggressively:
 
-- evidence/report/rehearsal/release/gate/matrix systems;
-- default `doctor-report.json` or other generated diagnostic documents;
-- report-only flags and report-shape tests;
-- generic smoke concepts;
+- process bureaucracy unrelated to install/runtime behavior;
+- generated diagnostic documents;
+- output-only flags and output-shape tests;
+- generic health-check concepts detached from core install paths;
 - tests of the test harness;
-- long fake test matrices that do not protect core install/runtime behavior.
+- broad fake test sets that do not protect core install/runtime behavior.
 
-Install and validation commands should fail fast, print concise stdout/stderr, and exit non-zero. If something is wrong, fix the install/config path in place instead of adding another reporting layer.
+Install and validation commands should fail fast, print concise stdout/stderr,
+and exit non-zero. If something is wrong, fix the install/config path in place.
 
 ## Testing
 
 - Keep `scripts/test.sh` focused on install inputs, env/secrets, Keycloak config, JuiceFS contract, and core shell behavior.
 - Add tests only when they protect a real install/runtime contract.
-- Do not add tests for reports, diagnostic document formats, or release workflows.
+- Do not add tests for diagnostic document formats or release workflows.
 - Do not run long or unrelated checks as default validation.
 
 ## Boundaries

@@ -32,6 +32,7 @@ dist/offline-cache/
       postgres.tar
       minio.tar
       minio-client.tar
+      keycloak.tar
       juicefs-csi.tar
       juicefs-csi-liveness-probe.tar
       juicefs-csi-node-driver-registrar.tar
@@ -61,9 +62,11 @@ scripts/download-online.sh --contract-only --output dist/offline-cache --force
 ```
 
 The P0 skeleton does not contain a k3s binary, k3s install script, k3s airgap
-image archive, kubectl binary, dependency OCI image archives, or a JuiceFS CSI
-artifact. It does include a namespace bootstrap manifest and a placeholder
-`scripts/import-images.sh`, but it is not a real offline install cache.
+image archive, kubectl binary, runnable dependency OCI image archives, or a
+JuiceFS CSI artifact. It does include a namespace bootstrap manifest, a
+placeholder Keycloak archive/lock entry for OIDC render checks, and a
+placeholder `scripts/import-images.sh`, but it is not a real offline install
+cache.
 
 ## p1-real Producer
 
@@ -80,8 +83,9 @@ The helper requires `curl`, `tar`, `skopeo`, and `sha256sum`. Its default
 versions/sources are fixed, not `latest`: `K3S_VERSION=v1.36.2+k3s1`,
 `KUBECTL_VERSION=v1.36.2`, `HELM_VERSION=v3.21.2`,
 `JUICEFS_CSI_CHART_VERSION=0.31.10`, PostgreSQL 16, the pinned MinIO server and
-client release tags, JuiceFS CSI `v0.31.10`, the CSI sidecars from the artifact
-lock example, and `RWX_CHECK_SOURCE=docker.io/library/busybox:1.36.1`.
+client release tags, Keycloak `26.0.7`, JuiceFS CSI `v0.31.10`, the CSI
+sidecars from the artifact lock example, and
+`RWX_CHECK_SOURCE=docker.io/library/busybox:1.36.1`.
 Image digest resolution and archive export are fixed to linux/amd64.
 Override these with the env vars shown by `scripts/prepare-offline-cache.sh
 --help`. `--artifacts-dir`, `--output`, and `--force` are also configurable.
@@ -111,6 +115,7 @@ Required artifact lock keys:
 - `MINIO_IMAGE` / `MINIO_ARCHIVE_URL` / `MINIO_ARCHIVE_SHA256`
 - `MINIO_CLIENT_IMAGE` / `MINIO_CLIENT_ARCHIVE_URL` /
   `MINIO_CLIENT_ARCHIVE_SHA256`
+- `KEYCLOAK_IMAGE` / `KEYCLOAK_ARCHIVE_URL` / `KEYCLOAK_ARCHIVE_SHA256`
 - `JUICEFS_CSI_IMAGE` / `JUICEFS_CSI_ARCHIVE_URL` /
   `JUICEFS_CSI_ARCHIVE_SHA256`
 - `JUICEFS_CSI_LIVENESS_PROBE_IMAGE` /
@@ -178,9 +183,9 @@ requires:
 - `manifests/namespace-bootstrap/namespace.yaml` with manifest kind `manifest`
 - `images/images.lock` with manifest kind `images-lock`
 - `charts/juicefs-csi.tgz` with manifest kind `juicefs-csi-artifact`
-- dependency image entries for PostgreSQL, MinIO, MinIO client, JuiceFS CSI,
-  the JuiceFS CSI liveness probe, node-driver-registrar, provisioner, and
-  resizer sidecars, and the `rwx-check` Job image
+- dependency image entries for PostgreSQL, MinIO, MinIO client, Keycloak,
+  JuiceFS CSI, the JuiceFS CSI liveness probe, node-driver-registrar,
+  provisioner, and resizer sidecars, and the `rwx-check` Job image
 - no `images.lock` entries or `images/oci/*.tar` files outside that substrate
   image allowlist
 - digest-pinned image references
@@ -216,7 +221,8 @@ creates/verifies `S3_BUCKET` with a one-shot MinIO client Job, deletes that Job,
 runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
 image, applies the StorageClass/PVC contract only after the format Job confirms a
 matching volume, waits for the configured JuiceFS PVC to reach `Bound`, and
-finally runs `scripts/doctor.sh --offline-cache ...`. Live doctor reads the
+applies Keycloak, waits for `deployment/keycloak`, bootstraps the OIDC
+realm/client, and finally runs `scripts/doctor.sh --offline-cache ...`. Live doctor reads the
 digest-pinned `name: postgres` image from that cache for read-only `select 1`
 probes against both Postgres URLs, reads `name: minio-client` for an S3 object
 read/write/delete probe, then reads `name: rwx-check` and runs writer/reader
