@@ -53,6 +53,11 @@ SECRET_ALLOWED_KEYS=(
   "${SECRET_REQUIRED_KEYS[@]}"
   OIDC_BOOTSTRAP_USERNAME
   OIDC_BOOTSTRAP_PASSWORD
+  KEYCLOAK_DB_USER
+  KEYCLOAK_DB_PASSWORD
+  KEYCLOAK_DB_DATABASE
+  KEYCLOAK_ADMIN_USERNAME
+  KEYCLOAK_ADMIN_PASSWORD
 )
 
 contains_key() {
@@ -235,6 +240,18 @@ is_s3_bucket_name() {
   [[ ! "${value}" =~ ${ipv4_pattern} ]]
 }
 
+is_juicefs_bucket_url() {
+  local value="$1"
+  local pattern='^https?://[^/[:space:]?#]+/[^/[:space:]?#]+/?$'
+  [[ "${value}" =~ ${pattern} ]]
+}
+
+is_juicefs_meta_url() {
+  local value="$1"
+  local pattern='^postgres://[^:/@[:space:]?#]+:[^/@[:space:]?#]+@[^/[:space:]?#]+:[0-9]+/[^/[:space:]?#]+$'
+  [[ "${value}" =~ ${pattern} ]]
+}
+
 is_oidc_issuer_url() {
   local value="$1"
   local pattern='^https?://[^[:space:]?#]+(/[^[:space:]?#]*)?$'
@@ -373,13 +390,13 @@ validate_env_contract() {
   esac
 
   require_value_regex "$(env_value_or_empty "${secrets_file}" "POSTGRES_APP_URL")" '^postgres(ql)?://' "POSTGRES_APP_URL must start with postgres:// or postgresql://"
-  require_value_regex "$(env_value_or_empty "${secrets_file}" "JUICEFS_META_URL")" '^postgres(ql)?://' "JUICEFS_META_URL must start with postgres:// or postgresql://"
+  require_env_value_rule "${secrets_file}" "JUICEFS_META_URL" "postgres://user:password@host:port/db" is_juicefs_meta_url
   require_value_regex "$(env_value_or_empty "${env_file}" "S3_ENDPOINT")" '^https?://' "S3_ENDPOINT must start with http:// or https://"
   require_value_regex "$(env_value_or_empty "${env_file}" "S3_FORCE_PATH_STYLE")" '^(true|false)$' "S3_FORCE_PATH_STYLE must be true or false"
   if env_has_key "${env_file}" "KUBERNETES_SKIP_K3S"; then
     require_value_regex "$(env_value_or_empty "${env_file}" "KUBERNETES_SKIP_K3S")" '^(true|false)$' "KUBERNETES_SKIP_K3S must be true or false"
   fi
-  require_value_regex "$(env_value_or_empty "${env_file}" "JUICEFS_BUCKET")" '^s3://' "JUICEFS_BUCKET must start with s3://"
+  require_env_value_rule "${env_file}" "JUICEFS_BUCKET" "a full http(s) bucket URL" is_juicefs_bucket_url
   require_value_regex "$(env_value_or_empty "${env_file}" "JUICEFS_MOUNT_ROOT")" '^/' "JUICEFS_MOUNT_ROOT must be an absolute path"
   require_value_regex "$(env_value_or_empty "${env_file}" "APP_PUBLIC_BASE_URL")" '^https?://' "APP_PUBLIC_BASE_URL must start with http:// or https://"
   [[ "$(env_value_or_empty "${env_file}" "JUICEFS_CSI_DRIVER")" == "csi.juicefs.com" ]] || die "JUICEFS_CSI_DRIVER must be csi.juicefs.com"
@@ -392,8 +409,8 @@ validate_env_contract() {
   check_no_placeholder_values "${env_file}"
   check_no_placeholder_values "${secrets_file}"
 
-  info "secret boundary: app deploy may render only product-secret subset; S3_ACCESS_KEY, S3_SECRET_KEY, and JUICEFS_META_URL are substrate/CSI scoped"
-  for key in POSTGRES_APP_URL APP_SESSION_SECRET S3_ACCESS_KEY S3_SECRET_KEY JUICEFS_META_URL BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_CLIENT_SECRET OIDC_BOOTSTRAP_USERNAME OIDC_BOOTSTRAP_PASSWORD; do
+  info "secret boundary: app deploy may render only product-secret subset; S3_ACCESS_KEY, S3_SECRET_KEY, JUICEFS_META_URL, and KEYCLOAK_* are substrate scoped"
+  for key in POSTGRES_APP_URL APP_SESSION_SECRET S3_ACCESS_KEY S3_SECRET_KEY JUICEFS_META_URL BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_CLIENT_SECRET OIDC_BOOTSTRAP_USERNAME OIDC_BOOTSTRAP_PASSWORD KEYCLOAK_DB_USER KEYCLOAK_DB_PASSWORD KEYCLOAK_DB_DATABASE KEYCLOAK_ADMIN_USERNAME KEYCLOAK_ADMIN_PASSWORD; do
     if env_has_key "${secrets_file}" "${key}"; then
       local value
       value="$(env_value_or_empty "${secrets_file}" "${key}")"

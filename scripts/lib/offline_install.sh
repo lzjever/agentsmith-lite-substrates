@@ -50,6 +50,40 @@ offline_install_describe_job_failure_best_effort() {
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" describe job "${job_name}" >&2 || true
 }
 
+offline_install_run_once_job() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local namespace="$3"
+  local job_name="$4"
+  local manifest="$5"
+  local timeout="$6"
+  local apply_failure="$7"
+  local wait_failure="$8"
+  local apply_status wait_status
+
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+
+  set +e
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${manifest}"
+  apply_status=$?
+  set -e
+  if [[ "${apply_status}" -ne 0 ]]; then
+    offline_install_describe_job_failure_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+    die "${apply_failure}"
+  fi
+
+  set +e
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout="${timeout}"
+  wait_status=$?
+  set -e
+  if [[ "${wait_status}" -ne 0 ]]; then
+    offline_install_describe_job_failure_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+    die "${wait_failure}"
+  fi
+
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
+}
+
 offline_install_helm() {
   local cache_dir="$1"
   local env_file="$2"
@@ -410,40 +444,20 @@ offline_install_bootstrap_keycloak() {
   local cache_dir="$1"
   local env_file="$2"
   local render_dir="$3"
-  local namespace job_name logs apply_status wait_status logs_status
+  local namespace job_name
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
   job_name="agentsmith-lite-keycloak-bootstrap"
 
   info "install-offline: bootstrapping Keycloak realm and client"
-  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
-
-  set +e
-  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/keycloak-bootstrap-job.yaml"
-  apply_status=$?
-  wait_status=0
-  logs_status=0
-  logs=""
-  if [[ "${apply_status}" -eq 0 ]]; then
-    offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout=180s
-    wait_status=$?
-    logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
-    logs_status=$?
-  fi
-  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
-  set -e
-
-  if [[ "${apply_status}" -ne 0 ]]; then
-    die "Keycloak bootstrap Job apply failed; refusing to continue"
-  fi
-  if [[ "${wait_status}" -ne 0 ]]; then
-    die "Keycloak bootstrap Job failed; refusing to continue"
-  fi
-  if [[ "${logs_status}" -ne 0 ]]; then
-    die "Keycloak bootstrap Job logs could not be read; refusing to continue"
-  fi
-  if ! grep -Fq "keycloak realm client ready" <<<"${logs}"; then
-    die "Keycloak bootstrap Job did not confirm realm and client readiness"
-  fi
+  offline_install_run_once_job \
+    "${cache_dir}" \
+    "${env_file}" \
+    "${namespace}" \
+    "${job_name}" \
+    "${render_dir}/keycloak-bootstrap-job.yaml" \
+    "180s" \
+    "Keycloak bootstrap Job apply failed; refusing to continue" \
+    "Keycloak bootstrap Job failed; refusing to continue"
 }
 
 offline_install_init_minio_bucket() {
@@ -494,83 +508,40 @@ offline_install_format_juicefs() {
   local cache_dir="$1"
   local env_file="$2"
   local render_dir="$3"
-  local namespace job_name logs apply_status wait_status logs_status
+  local namespace job_name
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
   job_name="agentsmith-lite-juicefs-format"
 
   info "install-offline: formatting JuiceFS volume"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-secret.yaml"
-  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
-
-  set +e
-  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-format-job.yaml"
-  apply_status=$?
-  wait_status=0
-  logs_status=0
-  logs=""
-  if [[ "${apply_status}" -eq 0 ]]; then
-    offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout=120s
-    wait_status=$?
-    logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
-    logs_status=$?
-  fi
-  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
-  set -e
-
-  if [[ "${apply_status}" -ne 0 ]]; then
-    die "JuiceFS format Job apply failed; refusing to apply JuiceFS PVC contract"
-  fi
-  if grep -Fq "agentsmith-lite-juicefs-format: existing JuiceFS volume mismatch" <<<"${logs}"; then
-    die "existing JuiceFS volume mismatch; refusing to apply JuiceFS PVC contract"
-  fi
-  if [[ "${wait_status}" -ne 0 ]]; then
-    die "JuiceFS format Job failed; refusing to apply JuiceFS PVC contract"
-  fi
-  if [[ "${logs_status}" -ne 0 ]]; then
-    die "JuiceFS format Job logs could not be read; refusing to apply JuiceFS PVC contract"
-  fi
-  if ! grep -Fq "agentsmith-lite-juicefs-format: ok" <<<"${logs}"; then
-    die "JuiceFS format Job did not confirm a successful idempotent format"
-  fi
+  offline_install_run_once_job \
+    "${cache_dir}" \
+    "${env_file}" \
+    "${namespace}" \
+    "${job_name}" \
+    "${render_dir}/juicefs-format-job.yaml" \
+    "120s" \
+    "JuiceFS format Job apply failed; refusing to apply JuiceFS PVC contract" \
+    "JuiceFS format Job failed; refusing to apply JuiceFS PVC contract"
 }
 
 offline_install_init_postgres_databases() {
   local cache_dir="$1"
   local env_file="$2"
   local render_dir="$3"
-  local namespace job_name logs apply_status wait_status logs_status
+  local namespace job_name
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
   info "install-offline: initializing PostgreSQL app and JuiceFS metadata databases"
   job_name="agentsmith-lite-postgres-init"
-  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
-
-  set +e
-  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/postgres-init-job.yaml"
-  apply_status=$?
-  wait_status=0
-  logs_status=0
-  logs=""
-  if [[ "${apply_status}" -eq 0 ]]; then
-    offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=condition=complete "job/${job_name}" --timeout=120s
-    wait_status=$?
-    logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
-    logs_status=$?
-  fi
-  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
-  set -e
-
-  if [[ "${apply_status}" -ne 0 ]]; then
-    die "Postgres init Job apply failed; refusing to continue"
-  fi
-  if [[ "${wait_status}" -ne 0 ]]; then
-    die "Postgres init Job failed; refusing to continue"
-  fi
-  if [[ "${logs_status}" -ne 0 ]]; then
-    die "Postgres init Job logs could not be read; refusing to continue"
-  fi
-  if ! grep -Fq "postgres init ready" <<<"${logs}"; then
-    die "Postgres init Job did not confirm database readiness"
-  fi
+  offline_install_run_once_job \
+    "${cache_dir}" \
+    "${env_file}" \
+    "${namespace}" \
+    "${job_name}" \
+    "${render_dir}/postgres-init-job.yaml" \
+    "120s" \
+    "Postgres init Job apply failed; refusing to continue" \
+    "Postgres init Job failed; refusing to continue"
 }
 
 run_p1_real_existing_cloud_validation() {

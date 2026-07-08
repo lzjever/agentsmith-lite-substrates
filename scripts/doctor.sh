@@ -122,7 +122,11 @@ doctor_check_postgres_url() {
   local failed_message="$5"
   local prefix="doctor_${name//-/_}"
 
-  if [[ ! "${url}" =~ ^postgres(ql)?:// ]]; then
+  if [[ "${key}" == "JUICEFS_META_URL" && ! "${url}" =~ ^postgres:// ]]; then
+    add_check "${name}" "failed" "${key} shape is invalid"
+    return 0
+  fi
+  if [[ "${key}" != "JUICEFS_META_URL" && ! "${url}" =~ ^postgres(ql)?:// ]]; then
     add_check "${name}" "failed" "${key} shape is invalid"
     return 0
   fi
@@ -533,7 +537,7 @@ else
   add_check "s3" "failed" "S3 endpoint, region, bucket, path-style, S3_ACCESS_KEY, and S3_SECRET_KEY must be present" "substrate-csi-secret"
 fi
 
-if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
+if [[ "${juicefs_meta}" =~ ^postgres:// ]]; then
   if juicefs_output="$("${ROOT_DIR}/scripts/validate-juicefs-contract.sh" --env "${env_file}" --secrets "${secrets_file}" 2>&1)"; then
     printf '%s\n' "${juicefs_output}"
     if [[ "${dry_run}" == "true" ]]; then

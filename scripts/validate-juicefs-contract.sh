@@ -77,10 +77,9 @@ secret_name="$(env_value_or_empty "${env_file}" JUICEFS_SECRET_NAME)"
 driver="$(env_value_or_empty "${env_file}" JUICEFS_CSI_DRIVER)"
 storage_class="$(env_value_or_empty "${env_file}" JUICEFS_STORAGE_CLASS)"
 pvc_name="$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)"
-s3_bucket="$(env_value_or_empty "${env_file}" S3_BUCKET)"
-
-[[ "${bucket_url}" =~ ^s3:// ]] || die "JUICEFS_BUCKET must be a bucket URL such as s3://bucket/path/"
-[[ "${bucket_url}" != "${s3_bucket}" ]] || die "JUICEFS_BUCKET must be a bucket URL, not the plain S3_BUCKET name"
+if ! is_juicefs_bucket_url "${bucket_url}"; then
+  die "JUICEFS_BUCKET must be a full http(s) bucket URL"
+fi
 
 require_line "${secret_rendered}" "  name: ${secret_name}" "rendered JuiceFS Secret metadata.name must match JUICEFS_SECRET_NAME"
 require_line "${secret_rendered}" "  namespace: ${namespace}" "rendered JuiceFS Secret namespace must match KUBE_NAMESPACE"

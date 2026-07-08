@@ -35,6 +35,8 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            - containerPort: 9000
+              name: management
           env:
             - name: KC_DB
               value: postgres
@@ -79,7 +81,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: 8080
+              port: management
             initialDelaySeconds: 20
             periodSeconds: 10
             failureThreshold: 12

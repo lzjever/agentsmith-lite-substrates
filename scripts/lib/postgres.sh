@@ -125,6 +125,7 @@ postgres_validate_self_hosted_urls() {
     || die "invalid self-hosted POSTGRES_APP_URL"
   postgres_parse_url "${meta_url}" "JUICEFS_META_URL" "postgres_meta" \
     || die "invalid self-hosted JUICEFS_META_URL"
+  [[ "${postgres_meta_SCHEME}" == "postgres" ]] || die "JUICEFS_META_URL must start with postgres://"
 
   if [[ "${postgres_app_HOSTPORT}" != "${postgres_meta_HOSTPORT}" ]]; then
     die "self-hosted Postgres URLs must use the same host"

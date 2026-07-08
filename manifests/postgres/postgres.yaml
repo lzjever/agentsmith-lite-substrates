@@ -49,6 +49,16 @@ spec:
                 secretKeyRef:
                   name: agentsmith-lite-postgres
                   key: password
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p 5432
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data

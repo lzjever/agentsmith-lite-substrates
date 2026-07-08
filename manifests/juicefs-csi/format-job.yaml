@@ -52,41 +52,6 @@ spec:
               : "${S3_ACCESS_KEY:?}"
               : "${S3_SECRET_KEY:?}"
 
-              safe_meta_url() {
-                case "$JUICEFS_META_URL" in
-                  postgres://*)
-                    scheme="postgres"
-                    rest="${JUICEFS_META_URL#postgres://}"
-                    ;;
-                  postgresql://*)
-                    scheme="postgres"
-                    rest="${JUICEFS_META_URL#postgresql://}"
-                    ;;
-                  *)
-                    printf 'agentsmith-lite-juicefs-format: unsupported metadata URL scheme\n' >&2
-                    exit 2
-                    ;;
-                esac
-                case "$rest" in
-                  *@*) ;;
-                  *)
-                    printf 'agentsmith-lite-juicefs-format: metadata URL must include userinfo\n' >&2
-                    exit 2
-                    ;;
-                esac
-                userinfo="${rest%@*}"
-                hostpath="${rest##*@}"
-                user="${userinfo%%:*}"
-                password="${userinfo#*:}"
-                if [ -z "$user" ] || [ "$password" = "$userinfo" ] || [ -z "$password" ]; then
-                  printf 'agentsmith-lite-juicefs-format: metadata URL must include username and password\n' >&2
-                  exit 2
-                fi
-                META_PASSWORD="$password"
-                export META_PASSWORD
-                printf '%s://%s@%s\n' "$scheme" "$user" "$hostpath"
-              }
-
               json_string_value() {
                 key="$1"
                 awk -v key="$key" '
@@ -102,14 +67,13 @@ spec:
                 '
               }
 
-              meta_url="$(safe_meta_url)"
+              meta_url="$JUICEFS_META_URL"
               format_log="$(mktemp)"
               config_log="$(mktemp)"
               trap 'rm -f "$format_log" "$config_log"' EXIT
 
               if ! ACCESS_KEY="$S3_ACCESS_KEY" \
                 SECRET_KEY="$S3_SECRET_KEY" \
-                JFS_NO_CHECK_OBJECT_STORAGE=1 \
                 juicefs format \
                   --no-update \
                   --storage s3 \
@@ -117,11 +81,13 @@ spec:
                   "$meta_url" \
                   "$JUICEFS_VOLUME_NAME" >"$format_log" 2>&1; then
                 printf 'agentsmith-lite-juicefs-format: juicefs format failed\n' >&2
+                cat "$format_log" >&2
                 exit 1
               fi
 
               if ! current_config="$(juicefs config "$meta_url" 2>"$config_log")"; then
                 printf 'agentsmith-lite-juicefs-format: unable to read JuiceFS volume config\n' >&2
+                cat "$config_log" >&2
                 exit 1
               fi
               current_name="$(printf '%s\n' "$current_config" | json_string_value Name)"

@@ -125,11 +125,11 @@ keycloak_prepare_self_hosted_context() {
   keycloak_app_public_base_url="$(env_value_or_empty "${env_file}" APP_PUBLIC_BASE_URL)"
   keycloak_ingress_class="$(env_value_or_empty "${env_file}" APP_INGRESS_CLASS)"
   keycloak_tls_secret_name="$(env_value_or_empty "${env_file}" APP_TLS_SECRET_NAME)"
-  keycloak_db_user="${KEYCLOAK_DB_USER:-keycloak}"
-  keycloak_db_database="${KEYCLOAK_DB_DATABASE:-keycloak}"
-  keycloak_db_password="${KEYCLOAK_DB_PASSWORD:-$(random_secret)}"
-  keycloak_admin_username="${KEYCLOAK_ADMIN_USERNAME:-admin}"
-  keycloak_admin_password="${KEYCLOAK_ADMIN_PASSWORD:-$(random_secret)}"
+  keycloak_db_user="$(env_value_or_empty "${secrets_file}" KEYCLOAK_DB_USER)"
+  keycloak_db_password="$(env_value_or_empty "${secrets_file}" KEYCLOAK_DB_PASSWORD)"
+  keycloak_db_database="$(env_value_or_empty "${secrets_file}" KEYCLOAK_DB_DATABASE)"
+  keycloak_admin_username="$(env_value_or_empty "${secrets_file}" KEYCLOAK_ADMIN_USERNAME)"
+  keycloak_admin_password="$(env_value_or_empty "${secrets_file}" KEYCLOAK_ADMIN_PASSWORD)"
 
   [[ -n "${keycloak_namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering Keycloak"
   [[ -n "${keycloak_public_base_url}" ]] || die "OIDC_ISSUER_URL must include a public base URL"
@@ -140,6 +140,11 @@ keycloak_prepare_self_hosted_context() {
   [[ -n "${keycloak_bootstrap_username}" ]] || die "OIDC_BOOTSTRAP_USERNAME must be set before rendering Keycloak"
   [[ -n "${keycloak_bootstrap_password}" ]] || die "OIDC_BOOTSTRAP_PASSWORD must be set before rendering Keycloak"
   [[ -n "${keycloak_app_public_base_url}" ]] || die "APP_PUBLIC_BASE_URL must be set before rendering Keycloak"
+  [[ -n "${keycloak_db_user}" ]] || die "KEYCLOAK_DB_USER must be set before rendering Keycloak"
+  [[ -n "${keycloak_db_password}" ]] || die "KEYCLOAK_DB_PASSWORD must be set before rendering Keycloak"
+  [[ -n "${keycloak_db_database}" ]] || die "KEYCLOAK_DB_DATABASE must be set before rendering Keycloak"
+  [[ -n "${keycloak_admin_username}" ]] || die "KEYCLOAK_ADMIN_USERNAME must be set before rendering Keycloak"
+  [[ -n "${keycloak_admin_password}" ]] || die "KEYCLOAK_ADMIN_PASSWORD must be set before rendering Keycloak"
   keycloak_parse_public_base_url "${keycloak_public_base_url}"
 }
 

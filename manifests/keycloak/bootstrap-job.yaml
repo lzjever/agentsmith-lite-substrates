@@ -4,6 +4,7 @@ metadata:
   name: agentsmith-lite-keycloak-bootstrap
   namespace: ${KUBE_NAMESPACE}
 spec:
+  activeDeadlineSeconds: 900
   backoffLimit: 1
   ttlSecondsAfterFinished: 300
   template:
@@ -71,8 +72,22 @@ spec:
               : "${APP_PUBLIC_BASE_URL:?}"
 
               server="http://keycloak:8080"
+              kcadm_timeout=""
+              if [ -x /usr/bin/timeout ]; then
+                kcadm_timeout="/usr/bin/timeout 30"
+              elif command -v timeout >/dev/null 2>&1; then
+                kcadm_timeout="timeout 30"
+              fi
+              kcadm() {
+                if [ -n "$kcadm_timeout" ]; then
+                  $kcadm_timeout /opt/keycloak/bin/kcadm.sh "$@"
+                else
+                  /opt/keycloak/bin/kcadm.sh "$@"
+                fi
+              }
+
               for i in $(seq 1 60); do
-                if /opt/keycloak/bin/kcadm.sh config credentials \
+                if kcadm config credentials \
                   --server "$server" \
                   --realm master \
                   --user "$KEYCLOAK_ADMIN_USERNAME" \
@@ -86,25 +101,24 @@ spec:
                 sleep 5
               done
 
-              if ! /opt/keycloak/bin/kcadm.sh get "realms/$OIDC_REALM" >/dev/null 2>&1; then
-                /opt/keycloak/bin/kcadm.sh create realms \
+              if ! kcadm get "realms/$OIDC_REALM" >/dev/null 2>&1; then
+                kcadm create realms \
                   -s "realm=$OIDC_REALM" \
                   -s enabled=true
               fi
 
               client_uuid="$(
-                /opt/keycloak/bin/kcadm.sh get clients \
+                kcadm get clients \
                   -r "$OIDC_REALM" \
                   -q "clientId=$OIDC_CLIENT_ID" \
                   --fields id \
                   --format csv \
-                  --noquotes 2>/dev/null \
-                  | awk 'NR == 1 && $1 != "id" { print $1; exit } NR > 1 && $1 != "" { print $1; exit }'
+                  --noquotes 2>/dev/null
               )"
               redirect_uri="${APP_PUBLIC_BASE_URL%/}/*"
               web_origin="${APP_PUBLIC_BASE_URL%/}"
               if [ -z "$client_uuid" ]; then
-                /opt/keycloak/bin/kcadm.sh create clients \
+                kcadm create clients \
                   -r "$OIDC_REALM" \
                   -s "clientId=$OIDC_CLIENT_ID" \
                   -s enabled=true \
@@ -115,7 +129,7 @@ spec:
                   -s "redirectUris=[\"$redirect_uri\"]" \
                   -s "webOrigins=[\"$web_origin\"]"
               else
-                /opt/keycloak/bin/kcadm.sh update "clients/$client_uuid" \
+                kcadm update "clients/$client_uuid" \
                   -r "$OIDC_REALM" \
                   -s enabled=true \
                   -s publicClient=false \
@@ -127,31 +141,31 @@ spec:
               fi
 
               user_id="$(
-                /opt/keycloak/bin/kcadm.sh get users \
+                kcadm get users \
                   -r "$OIDC_REALM" \
+                  -q exact=true \
                   -q "username=$OIDC_BOOTSTRAP_USERNAME" \
                   --fields id \
                   --format csv \
-                  --noquotes 2>/dev/null \
-                  | awk 'NR == 1 && $1 != "id" { print $1; exit } NR > 1 && $1 != "" { print $1; exit }'
+                  --noquotes 2>/dev/null
               )"
               if [ -z "$user_id" ]; then
-                /opt/keycloak/bin/kcadm.sh create users \
+                kcadm create users \
                   -r "$OIDC_REALM" \
                   -s "username=$OIDC_BOOTSTRAP_USERNAME" \
                   -s enabled=true \
                   -s emailVerified=true
                 user_id="$(
-                  /opt/keycloak/bin/kcadm.sh get users \
+                  kcadm get users \
                     -r "$OIDC_REALM" \
+                    -q exact=true \
                     -q "username=$OIDC_BOOTSTRAP_USERNAME" \
                     --fields id \
                     --format csv \
-                    --noquotes \
-                    | awk 'NR == 1 && $1 != "id" { print $1; exit } NR > 1 && $1 != "" { print $1; exit }'
+                    --noquotes
                 )"
               else
-                /opt/keycloak/bin/kcadm.sh update "users/$user_id" \
+                kcadm update "users/$user_id" \
                   -r "$OIDC_REALM" \
                   -s enabled=true \
                   -s emailVerified=true
@@ -160,7 +174,7 @@ spec:
                 printf 'keycloak bootstrap user lookup failed\n' >&2
                 exit 1
               }
-              /opt/keycloak/bin/kcadm.sh set-password \
+              kcadm set-password \
                 -r "$OIDC_REALM" \
                 --userid "$user_id" \
                 --new-password "$OIDC_BOOTSTRAP_PASSWORD" \

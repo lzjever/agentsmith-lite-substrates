@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
+# shellcheck source=lib/s3_probe.sh
+source "${ROOT_DIR}/scripts/lib/s3_probe.sh"
+
 POSTGRES_PROBE_IMAGE="docker.io/library/postgres:16@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 S3_PROBE_IMAGE="quay.io/minio/mc:RELEASE.2024-01-01T00-00-00Z@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 RWX_CHECK_IMAGE="docker.io/library/busybox:1.36.1@sha256:3333333333333333333333333333333333333333333333333333333333333333"
@@ -84,6 +87,12 @@ env_file_value() {
     END { if (!found) exit 1 }
   ' "${file}")" || fail "expected ${file} to contain ${key}"
   printf '%s' "${value}"
+}
+
+env_file_value_b64() {
+  local file="$1"
+  local key="$2"
+  env_file_value "${file}" "${key}" | base64 | tr -d '\n'
 }
 
 assert_command_fails_contains() {
@@ -201,7 +210,7 @@ OIDC_ISSUER_URL=
 OIDC_CLIENT_ID=
 OIDC_BACKCHANNEL_BASE_URL=
 JUICEFS_VOLUME_NAME=agentsmith-lite-files
-JUICEFS_BUCKET=s3://agentsmith-lite-files/agentsmith-lite/
+JUICEFS_BUCKET=http://minio.agentsmith.svc.cluster.local:9000/agentsmith-lite-files
 JUICEFS_SECRET_NAME=agentsmith-lite-juicefs
 JUICEFS_CSI_DRIVER=csi.juicefs.com
 JUICEFS_STORAGE_CLASS=agentsmith-lite-juicefs-rwx
@@ -220,11 +229,16 @@ POSTGRES_APP_URL=postgresql://agentsmith:postgres-secret-value@postgres.agentsmi
 APP_SESSION_SECRET=app-session-secret-value-0123456789abcdef
 S3_ACCESS_KEY=minio-access-key
 S3_SECRET_KEY=minio-secret-value
-JUICEFS_META_URL=postgresql://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta
+JUICEFS_META_URL=postgres://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta
 BUILTIN_ADMIN_INITIAL_PASSWORD=admin-secret-value
 OIDC_CLIENT_SECRET=
 OIDC_BOOTSTRAP_USERNAME=
 OIDC_BOOTSTRAP_PASSWORD=
+KEYCLOAK_DB_USER=
+KEYCLOAK_DB_PASSWORD=
+KEYCLOAK_DB_DATABASE=
+KEYCLOAK_ADMIN_USERNAME=
+KEYCLOAK_ADMIN_PASSWORD=
 EOF_SECRETS
   chmod 0600 "${dir}/substrate.secrets.env"
 }
@@ -240,6 +254,11 @@ write_valid_oidc_env_pair() {
   set_env_value "${dir}/substrate.secrets.env" "OIDC_CLIENT_SECRET" "oidc-client-secret-value"
   set_env_value "${dir}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME" "agentsmith-local"
   set_env_value "${dir}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD" "oidc-bootstrap-password-value"
+  set_env_value "${dir}/substrate.secrets.env" "KEYCLOAK_DB_USER" "keycloak"
+  set_env_value "${dir}/substrate.secrets.env" "KEYCLOAK_DB_PASSWORD" "keycloak-db-password-value"
+  set_env_value "${dir}/substrate.secrets.env" "KEYCLOAK_DB_DATABASE" "keycloak"
+  set_env_value "${dir}/substrate.secrets.env" "KEYCLOAK_ADMIN_USERNAME" "admin"
+  set_env_value "${dir}/substrate.secrets.env" "KEYCLOAK_ADMIN_PASSWORD" "keycloak-admin-password-value"
   chmod 0600 "${dir}/substrate.secrets.env"
 }
 
@@ -254,6 +273,10 @@ printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
 
 if [[ "${KUBECTL_FAIL_MINIO_BUCKET_WAIT:-}" == "true" && "$*" == *"-n agentsmith wait --for=condition=complete job/agentsmith-lite-minio-bucket-init"* ]]; then
   printf 'bucket init wait timed out\n' >&2
+  exit 1
+fi
+if [[ "${KUBECTL_FAIL_POSTGRES_INIT_WAIT:-}" == "true" && "$*" == *"-n agentsmith wait --for=condition=complete job/agentsmith-lite-postgres-init"* ]]; then
+  printf 'postgres init wait timed out\n' >&2
   exit 1
 fi
 
@@ -281,13 +304,13 @@ case "$*" in
     juicefs_b64 "${JUICEFS_FAKE_SECRET_NAME_VALUE:-agentsmith-lite-files}"
     ;;
   *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"metaurl"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_METAURL:-postgresql://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta}"
+    juicefs_b64 "${JUICEFS_FAKE_SECRET_METAURL:-postgres://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta}"
     ;;
   *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"storage"*)
     juicefs_b64 "${JUICEFS_FAKE_SECRET_STORAGE:-s3}"
     ;;
   *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"bucket"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_BUCKET:-s3://agentsmith-lite-files/agentsmith-lite/}"
+    juicefs_b64 "${JUICEFS_FAKE_SECRET_BUCKET:-http://minio.agentsmith.svc.cluster.local:9000/agentsmith-lite-files}"
     ;;
   *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"access-key"*)
     juicefs_b64 "${JUICEFS_FAKE_SECRET_ACCESS_KEY:-minio-access-key}"
@@ -308,10 +331,16 @@ case "$*" in
     printf 'agentsmith-lite-postgres-probe passed\n'
     ;;
   *" logs job/agentsmith-lite-postgres-init"*)
-    printf 'postgres init ready\n'
+    printf '%s\n' "${KUBECTL_POSTGRES_INIT_LOGS:-postgres init ready}"
     ;;
   *" logs job/agentsmith-lite-minio-bucket-init"*)
     printf 'minio bucket ready\n'
+    ;;
+  *"-n agentsmith logs -l job-name=agentsmith-lite-postgres-init --all-containers --tail=-1"*)
+    printf '%s\n' "${KUBECTL_POSTGRES_INIT_SELECTOR_LOGS:-postgres init failed log}"
+    ;;
+  *"-n agentsmith describe job agentsmith-lite-postgres-init"*)
+    printf 'postgres init describe\n'
     ;;
   *"-n agentsmith logs -l job-name=agentsmith-lite-minio-bucket-init --all-containers --tail=-1"*)
     printf 'bucket init failed log\n'
@@ -491,7 +520,7 @@ ingress:
 EOF_CONFIG
 
   POSTGRES_APP_URL='postgresql://agentsmith:secret@postgres.example.com:5432/agentsmith_lite' \
-    JUICEFS_META_URL='postgresql://juicefs:secret@postgres.example.com:5432/juicefs_meta' \
+    JUICEFS_META_URL='postgres://juicefs:secret@postgres.example.com:5432/juicefs_meta' \
     S3_ACCESS_KEY='existing-cloud-access-key' \
     S3_SECRET_KEY='existing-cloud-secret-key' \
     APP_SESSION_SECRET='existing-cloud-app-session-secret-value' \
@@ -511,11 +540,47 @@ EOF_CONFIG
   assert_contains "${output}/substrate.env" "OIDC_ISSUER_URL=https://auth.agentsmith.example.com/realms/agentsmith"
   assert_contains "${output}/substrate.env" "OIDC_CLIENT_ID=agentsmith-lite"
   assert_contains "${output}/substrate.env" "OIDC_BACKCHANNEL_BASE_URL=http://keycloak.agentsmith.svc.cluster.local:8080/realms/agentsmith"
+  assert_contains "${output}/substrate.env" "JUICEFS_BUCKET=https://s3.us-east-1.amazonaws.com/agentsmith-lite-files"
+  assert_not_contains "${output}/substrate.env" "JUICEFS_BUCKET=s3://agentsmith-lite-files/agentsmith-lite/"
+  assert_contains "${output}/substrate.secrets.env" "JUICEFS_META_URL=postgres://juicefs:secret@postgres.example.com:5432/juicefs_meta"
   assert_contains "${output}/substrate.secrets.env" "OIDC_CLIENT_SECRET=existing-cloud-oidc-secret"
   assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME="
   assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD="
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_USER="
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_PASSWORD="
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_DATABASE="
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_ADMIN_USERNAME="
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_ADMIN_PASSWORD="
   assert_not_contains "${out}" "existing-cloud-oidc-secret"
   pass "existing-cloud OIDC config reads default env names"
+}
+
+test_existing_cloud_rejects_postgresql_juicefs_meta_url() {
+  local cache="${TMP_DIR}/existing-cloud-postgresql-meta-cache"
+  local output="${TMP_DIR}/existing-cloud-postgresql-meta-out"
+  local out="${TMP_DIR}/existing-cloud-postgresql-meta.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/existing-cloud-postgresql-meta-cache.out" 2>&1
+  POSTGRES_APP_URL='postgresql://agentsmith:secret@postgres.example.com:5432/agentsmith_lite' \
+    JUICEFS_META_URL='postgresql://juicefs:secret@postgres.example.com:5432/juicefs_meta' \
+    S3_ACCESS_KEY='existing-cloud-access-key' \
+    S3_SECRET_KEY='existing-cloud-secret-key' \
+    APP_SESSION_SECRET='existing-cloud-app-session-secret-value' \
+    OIDC_ISSUER_URL='https://auth.agentsmith.example.com/realms/agentsmith' \
+    OIDC_CLIENT_ID='agentsmith-lite' \
+    OIDC_BACKCHANNEL_BASE_URL='http://keycloak.agentsmith.svc.cluster.local:8080/realms/agentsmith' \
+    OIDC_CLIENT_SECRET='existing-cloud-oidc-secret' \
+    assert_command_fails_contains \
+      "${out}" \
+      "JUICEFS_META_URL must start with postgres://" \
+      "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${ROOT_DIR}/config/substrates.existing-cloud.example.yaml" \
+      --output "${output}" \
+      --dry-run \
+      --force
+
+  pass "existing-cloud rejects postgresql:// JuiceFS metadata URLs"
 }
 
 test_self_hosted_default_kube_context_is_empty() {
@@ -535,6 +600,124 @@ test_self_hosted_default_kube_context_is_empty() {
   assert_contains "${output}/substrate.env" "KUBE_CONTEXT="
   assert_not_contains "${output}/substrate.env" "KUBE_CONTEXT=agentsmith-lite"
   pass "self-hosted default env leaves KUBE_CONTEXT empty"
+}
+
+test_self_hosted_default_juicefs_bucket_is_http_bucket_url() {
+  local cache="${TMP_DIR}/self-hosted-juicefs-bucket-cache"
+  local output="${TMP_DIR}/self-hosted-juicefs-bucket-out"
+  local out="${TMP_DIR}/self-hosted-juicefs-bucket-install.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/self-hosted-juicefs-bucket-cache.out" 2>&1
+  "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${output}" \
+    --dry-run \
+    --force \
+    >"${out}" 2>&1
+
+  assert_contains "${output}/substrate.env" "JUICEFS_BUCKET=http://minio.agentsmith.svc.cluster.local:9000/agentsmith-lite-files"
+  assert_not_contains "${output}/substrate.env" "JUICEFS_BUCKET=s3://agentsmith-lite-files/agentsmith-lite/"
+  pass "self-hosted default JuiceFS bucket is the HTTP MinIO bucket URL"
+}
+
+test_self_hosted_default_juicefs_meta_url_uses_postgres_scheme() {
+  local cache="${TMP_DIR}/self-hosted-juicefs-meta-cache"
+  local output="${TMP_DIR}/self-hosted-juicefs-meta-out"
+  local out="${TMP_DIR}/self-hosted-juicefs-meta-install.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/self-hosted-juicefs-meta-cache.out" 2>&1
+  JUICEFS_META_PASSWORD="juicefs-secret-value" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+      --output "${output}" \
+      --dry-run \
+      --force \
+      >"${out}" 2>&1
+
+  assert_contains "${output}/substrate.secrets.env" "JUICEFS_META_URL=postgres://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta"
+  assert_not_contains "${output}/substrate.secrets.env" "JUICEFS_META_URL=postgresql://"
+  pass "self-hosted default JuiceFS metadata URL uses postgres:// with password"
+}
+
+test_juicefs_bucket_contract_rejects_s3_prefix_url() {
+  local env_dir="${TMP_DIR}/juicefs-bucket-s3-prefix"
+  local out="${TMP_DIR}/juicefs-bucket-s3-prefix.out"
+
+  write_valid_env_pair "${env_dir}"
+  set_env_value "${env_dir}/substrate.env" "JUICEFS_BUCKET" "s3://agentsmith-lite-files/agentsmith-lite/"
+  assert_command_fails_contains \
+    "${out}" \
+    "JUICEFS_BUCKET must be a full http(s) bucket URL" \
+    "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+
+  pass "JuiceFS bucket contract rejects s3 prefix URLs"
+}
+
+test_juicefs_meta_url_contract_requires_postgres_scheme() {
+  local env_dir="${TMP_DIR}/juicefs-meta-postgresql"
+  local env_out="${TMP_DIR}/juicefs-meta-postgresql-env.out"
+  local juicefs_out="${TMP_DIR}/juicefs-meta-postgresql-juicefs.out"
+  local missing_password_out="${TMP_DIR}/juicefs-meta-missing-password.out"
+  local accept_out="${TMP_DIR}/juicefs-meta-postgres-accept.out"
+
+  write_valid_env_pair "${env_dir}"
+  set_env_value "${env_dir}/substrate.secrets.env" "JUICEFS_META_URL" "postgresql://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta"
+  assert_command_fails_contains \
+    "${env_out}" \
+    "JUICEFS_META_URL must be postgres://user:password@host:port/db" \
+    "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+  assert_command_fails_contains \
+    "${juicefs_out}" \
+    "JUICEFS_META_URL must be postgres://user:password@host:port/db" \
+    "${ROOT_DIR}/scripts/validate-juicefs-contract.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+
+  set_env_value "${env_dir}/substrate.secrets.env" "JUICEFS_META_URL" "postgres://juicefs@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta"
+  assert_command_fails_contains \
+    "${missing_password_out}" \
+    "JUICEFS_META_URL must be postgres://user:password@host:port/db" \
+    "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+
+  set_env_value "${env_dir}/substrate.secrets.env" "JUICEFS_META_URL" "postgres://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta"
+  "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env" \
+    >"${accept_out}" 2>&1
+  "${ROOT_DIR}/scripts/validate-juicefs-contract.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env" \
+    >>"${accept_out}" 2>&1
+  assert_contains "${accept_out}" "validated substrate env contract"
+  assert_contains "${accept_out}" "JuiceFS CSI contract validated"
+  pass "JuiceFS metadata contract rejects postgresql:// and missing passwords, accepts postgres://"
+}
+
+test_json_schemas_match_juicefs_contract() {
+  local env_schema="${ROOT_DIR}/schemas/substrate.env.v1.schema.json"
+  local secrets_schema="${ROOT_DIR}/schemas/substrate.secrets.env.v1.schema.json"
+  local config_schema="${ROOT_DIR}/schemas/substrates-config.v1.schema.json"
+
+  assert_contains "${env_schema}" '"JUICEFS_BUCKET": { "type": "string", "pattern": "^https?://'
+  assert_not_contains "${env_schema}" '"JUICEFS_BUCKET": { "type": "string", "pattern": "^s3://" }'
+  assert_contains "${secrets_schema}" '"pattern": "^postgres://",'
+  assert_not_contains "${secrets_schema}" '"JUICEFS_META_URL": { "type": "string", "pattern": "^postgres(ql)?://"'
+  assert_contains "${secrets_schema}" '"KEYCLOAK_DB_USER": {'
+  assert_contains "${secrets_schema}" '"KEYCLOAK_DB_PASSWORD": {'
+  assert_contains "${secrets_schema}" '"KEYCLOAK_DB_DATABASE": {'
+  assert_contains "${secrets_schema}" '"KEYCLOAK_ADMIN_USERNAME": {'
+  assert_contains "${secrets_schema}" '"KEYCLOAK_ADMIN_PASSWORD": {'
+  assert_contains "${secrets_schema}" "Substrate-only local Keycloak database password; do not inject into app workload env."
+  assert_contains "${config_schema}" '"bucket": { "type": "string", "pattern": "^https?://'
+  pass "JSON schemas match JuiceFS bucket and metadata URL contract"
 }
 
 test_self_hosted_force_reuses_existing_persistent_secrets() {
@@ -557,7 +740,7 @@ test_self_hosted_force_reuses_existing_persistent_secrets() {
   set_env_value "${output}/substrate.secrets.env" "BUILTIN_ADMIN_INITIAL_PASSWORD" "admin-force-stable-password-0123456789"
 
   : >"${snapshot}"
-  for key in POSTGRES_APP_URL JUICEFS_META_URL S3_ACCESS_KEY S3_SECRET_KEY APP_SESSION_SECRET OIDC_CLIENT_SECRET OIDC_BOOTSTRAP_PASSWORD BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_BOOTSTRAP_USERNAME; do
+  for key in POSTGRES_APP_URL JUICEFS_META_URL S3_ACCESS_KEY S3_SECRET_KEY APP_SESSION_SECRET OIDC_CLIENT_SECRET OIDC_BOOTSTRAP_PASSWORD BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_BOOTSTRAP_USERNAME KEYCLOAK_DB_USER KEYCLOAK_DB_PASSWORD KEYCLOAK_DB_DATABASE KEYCLOAK_ADMIN_USERNAME KEYCLOAK_ADMIN_PASSWORD; do
     printf '%s=%s\n' "${key}" "$(env_file_value "${output}/substrate.secrets.env" "${key}")" >>"${snapshot}"
   done
 
@@ -574,6 +757,8 @@ test_self_hosted_force_reuses_existing_persistent_secrets() {
 
   S3_SECRET_KEY="explicit-s3-secret-value" \
     OIDC_BOOTSTRAP_USERNAME="agentsmith-explicit" \
+    KEYCLOAK_DB_PASSWORD="explicit-keycloak-db-password" \
+    KEYCLOAK_ADMIN_USERNAME="admin-explicit" \
     "${ROOT_DIR}/scripts/install-online.sh" \
       --cache "${cache}" \
       --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
@@ -583,6 +768,8 @@ test_self_hosted_force_reuses_existing_persistent_secrets() {
       >"${override_out}" 2>&1
   assert_contains "${output}/substrate.secrets.env" "S3_SECRET_KEY=explicit-s3-secret-value"
   assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME=agentsmith-explicit"
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_PASSWORD=explicit-keycloak-db-password"
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_ADMIN_USERNAME=admin-explicit"
   pass "self-hosted --force reuses persistent secrets unless env overrides"
 }
 
@@ -786,6 +973,32 @@ test_minio_bucket_job_uses_mc_alias_and_retry() {
   pass "MinIO bucket init Job uses mc alias and bounded retry without awk config rendering"
 }
 
+test_s3_probe_job_uses_mc_alias_and_object_lifecycle() {
+  local manifest="${TMP_DIR}/s3-probe-job.yaml"
+
+  s3_probe_render_job \
+    "${manifest}" \
+    "agentsmith-lite-s3-probe-test" \
+    "agentsmith-lite-s3-probe-secret" \
+    "agentsmith" \
+    "${S3_PROBE_IMAGE}" \
+    "s3probe"
+
+  assert_not_contains "${manifest}" "awk"
+  assert_not_contains "${manifest}" "json_escape_env"
+  assert_not_contains "${manifest}" "config.json"
+  assert_contains "${manifest}" 'case "${S3_FORCE_PATH_STYLE}" in'
+  assert_contains "${manifest}" 'true) path_style="on" ;;'
+  assert_contains "${manifest}" 'false) path_style="off" ;;'
+  assert_contains "${manifest}" '*) fail_probe "invalid S3_FORCE_PATH_STYLE" ;;'
+  assert_contains "${manifest}" 'mc --config-dir "${MC_CONFIG_DIR}" alias set "${alias_name}" "${S3_ENDPOINT}" "${S3_ACCESS_KEY}" "${S3_SECRET_KEY}" --api S3v4 --path "${path_style}"'
+  assert_contains "${manifest}" 'mc --config-dir "${MC_CONFIG_DIR}" pipe "${object_uri}"'
+  assert_contains "${manifest}" 'mc --config-dir "${MC_CONFIG_DIR}" cat "${object_uri}"'
+  assert_contains "${manifest}" 'mc --config-dir "${MC_CONFIG_DIR}" rm --quiet --force "${object_uri}"'
+  assert_contains "${manifest}" 'mc --config-dir "${MC_CONFIG_DIR}" stat "${object_uri}"'
+  pass "S3 probe Job uses mc alias and object lifecycle operations"
+}
+
 test_minio_statefulset_has_health_probes() {
   local manifest="${ROOT_DIR}/manifests/minio/minio.yaml"
 
@@ -794,6 +1007,104 @@ test_minio_statefulset_has_health_probes() {
   assert_contains "${manifest}" "path: /minio/health/ready"
   assert_contains "${manifest}" "port: api"
   pass "MinIO StatefulSet probes readiness endpoint"
+}
+
+test_juicefs_format_job_surfaces_failure_logs_and_checks_storage() {
+  local manifest="${ROOT_DIR}/manifests/juicefs-csi/format-job.yaml"
+  local meta_arg_count
+
+  assert_not_contains "${manifest}" "JFS_NO_CHECK_OBJECT_STORAGE=1"
+  assert_contains "${manifest}" 'cat "$format_log" >&2'
+  assert_contains "${manifest}" 'cat "$config_log" >&2'
+  assert_not_contains "${manifest}" "safe_meta_url"
+  assert_not_contains "${manifest}" "META_PASSWORD"
+  assert_contains "${manifest}" 'meta_url="$JUICEFS_META_URL"'
+  meta_arg_count="$(grep -Fc '"$meta_url"' "${manifest}" || true)"
+  [[ "${meta_arg_count}" -eq 2 ]] || fail "JuiceFS format Job should pass the same meta_url to juicefs format and juicefs config"
+  pass "JuiceFS format Job checks object storage and prints failure logs"
+}
+
+test_postgres_statefulset_has_pg_isready_readiness_probe() {
+  local manifest="${ROOT_DIR}/manifests/postgres/postgres.yaml"
+
+  assert_contains "${manifest}" "readinessProbe:"
+  assert_contains "${manifest}" "pg_isready"
+  pass "Postgres StatefulSet probes readiness with pg_isready"
+}
+
+test_postgres_init_complete_does_not_require_log_sentinel() {
+  local cache="${TMP_DIR}/postgres-init-complete-cache"
+  local env_dir="${TMP_DIR}/postgres-init-complete-env"
+  local render_dir="${TMP_DIR}/postgres-init-complete-render"
+  local kubectl_log="${TMP_DIR}/postgres-init-complete-kubectl.log"
+  local out="${TMP_DIR}/postgres-init-complete.out"
+  local delete_count
+  local status=0
+
+  mkdir -p "${cache}/bin" "${render_dir}"
+  write_valid_env_pair "${env_dir}"
+  write_live_kubectl_stub "${cache}/bin/kubectl"
+  write_fake_artifact "${render_dir}/postgres-init-job.yaml" "kind: Job"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" \
+    KUBECTL_POSTGRES_INIT_LOGS="postgres init completed without sentinel" \
+    bash -c 'set -euo pipefail; source "$1"; offline_install_init_postgres_databases "$2" "$3" "$4"' \
+      _ \
+      "${ROOT_DIR}/scripts/lib/offline_install.sh" \
+      "${cache}" \
+      "${env_dir}/substrate.env" \
+      "${render_dir}" \
+      >"${out}" 2>&1
+  status=$?
+  set -e
+  if [[ "${status}" -ne 0 ]]; then
+    printf 'postgres init complete output:\n' >&2
+    sed -n '1,220p' "${out}" >&2
+    fail "postgres init complete should exit 0, got ${status}"
+  fi
+
+  assert_contains "${kubectl_log}" "wait --for=condition=complete job/agentsmith-lite-postgres-init --timeout=120s"
+  assert_not_contains "${kubectl_log}" "logs job/agentsmith-lite-postgres-init"
+  delete_count="$(grep -Fc "delete job agentsmith-lite-postgres-init" "${kubectl_log}" || true)"
+  [[ "${delete_count}" -eq 2 ]] || fail "postgres init success should delete old Job before apply and completed Job after success"
+  pass "Postgres init succeeds from Job Complete without reading log sentinel"
+}
+
+test_postgres_init_wait_failure_keeps_job_and_collects_debug() {
+  local cache="${TMP_DIR}/postgres-init-failure-cache"
+  local env_dir="${TMP_DIR}/postgres-init-failure-env"
+  local render_dir="${TMP_DIR}/postgres-init-failure-render"
+  local kubectl_log="${TMP_DIR}/postgres-init-failure-kubectl.log"
+  local out="${TMP_DIR}/postgres-init-failure.out"
+  local delete_count
+  local status=0
+
+  mkdir -p "${cache}/bin" "${render_dir}"
+  write_valid_env_pair "${env_dir}"
+  write_live_kubectl_stub "${cache}/bin/kubectl"
+  write_fake_artifact "${render_dir}/postgres-init-job.yaml" "kind: Job"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" \
+    KUBECTL_FAIL_POSTGRES_INIT_WAIT=true \
+    bash -c 'set -euo pipefail; source "$1"; offline_install_init_postgres_databases "$2" "$3" "$4"' \
+      _ \
+      "${ROOT_DIR}/scripts/lib/offline_install.sh" \
+      "${cache}" \
+      "${env_dir}/substrate.env" \
+      "${render_dir}" \
+      >"${out}" 2>&1
+  status=$?
+  set -e
+
+  [[ "${status}" -ne 0 ]] || fail "postgres init wait failure test should fail"
+  assert_contains "${out}" "Postgres init Job failed; refusing to continue"
+  assert_contains "${kubectl_log}" "logs -l job-name=agentsmith-lite-postgres-init --all-containers --tail=-1"
+  assert_contains "${kubectl_log}" "describe job agentsmith-lite-postgres-init"
+  delete_count="$(grep -Fc "delete job agentsmith-lite-postgres-init" "${kubectl_log}" || true)"
+  [[ "${delete_count}" -eq 1 ]] || fail "postgres init failure should not delete Job after failure"
+  pass "Postgres init wait failure keeps Job and collects logs plus describe"
 }
 
 test_minio_bucket_init_failure_keeps_job_and_collects_debug() {
@@ -872,6 +1183,13 @@ test_contract_cache_install_and_static_juicefs() {
   assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME=agentsmith-local"
   assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD="
   assert_not_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD=$"
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_USER=keycloak"
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_PASSWORD="
+  assert_not_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_PASSWORD=$"
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_DB_DATABASE=keycloak"
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_ADMIN_USERNAME=admin"
+  assert_contains "${output}/substrate.secrets.env" "KEYCLOAK_ADMIN_PASSWORD="
+  assert_not_contains "${output}/substrate.secrets.env" "KEYCLOAK_ADMIN_PASSWORD=$"
   assert_contains "${juicefs_out}" "JuiceFS CSI contract validated"
   pass "contract-only cache, install-online dry-run, env, and static JuiceFS contracts pass"
 }
@@ -882,6 +1200,9 @@ test_self_hosted_keycloak_render_from_p1_cache() {
   local cache="${TMP_DIR}/keycloak-render-cache"
   local output="${TMP_DIR}/keycloak-render-out"
   local out="${TMP_DIR}/keycloak-render-install.out"
+  local bootstrap_job="${output}/rendered/offline-install/keycloak-bootstrap-job.yaml"
+  local keycloak_secret="${output}/rendered/offline-install/keycloak-secret.yaml"
+  local postgres_secret="${output}/rendered/offline-install/postgres-secret.yaml"
 
   write_fake_p1_artifact_lock "${artifacts}" "${lock}"
   "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock}" --output "${cache}" --force >"${TMP_DIR}/keycloak-render-cache.out" 2>&1
@@ -900,14 +1221,38 @@ test_self_hosted_keycloak_render_from_p1_cache() {
   assert_contains "${output}/rendered/offline-install/keycloak.yaml" "host: keycloak.agentsmith.localhost"
   assert_contains "${output}/rendered/offline-install/keycloak.yaml" "name: keycloak"
   assert_contains "${output}/rendered/offline-install/keycloak.yaml" "number: 8080"
-  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "name: agentsmith-lite-keycloak-bootstrap"
-  assert_contains "${output}/rendered/offline-install/keycloak-secret.yaml" "oidcBootstrapUsername:"
-  assert_contains "${output}/rendered/offline-install/keycloak-secret.yaml" "oidcBootstrapPassword:"
-  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "OIDC_BOOTSTRAP_USERNAME"
-  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "emailVerified=true"
-  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "set-password"
-  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "keycloak realm client ready"
-  assert_contains "${output}/rendered/offline-install/postgres-secret.yaml" "keycloakDatabase:"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "containerPort: 9000"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "name: management"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "path: /health/ready"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "port: management"
+  assert_contains "${output}/rendered/offline-install/keycloak.yaml" "KC_HEALTH_ENABLED"
+  assert_contains "${bootstrap_job}" "name: agentsmith-lite-keycloak-bootstrap"
+  assert_contains "${keycloak_secret}" "oidcBootstrapUsername:"
+  assert_contains "${keycloak_secret}" "oidcBootstrapPassword:"
+  assert_contains "${keycloak_secret}" "dbUsername: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_DB_USER)"
+  assert_contains "${keycloak_secret}" "dbPassword: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_DB_PASSWORD)"
+  assert_contains "${keycloak_secret}" "dbDatabase: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_DB_DATABASE)"
+  assert_contains "${keycloak_secret}" "adminUsername: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_ADMIN_USERNAME)"
+  assert_contains "${keycloak_secret}" "adminPassword: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_ADMIN_PASSWORD)"
+  assert_contains "${postgres_secret}" "keycloakUsername: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_DB_USER)"
+  assert_contains "${postgres_secret}" "keycloakPassword: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_DB_PASSWORD)"
+  assert_contains "${postgres_secret}" "keycloakDatabase: $(env_file_value_b64 "${output}/substrate.secrets.env" KEYCLOAK_DB_DATABASE)"
+  assert_contains "${bootstrap_job}" "activeDeadlineSeconds: 900"
+  assert_contains "${bootstrap_job}" "kcadm()"
+  assert_contains "${bootstrap_job}" "/usr/bin/timeout 30"
+  assert_contains "${bootstrap_job}" "command -v timeout"
+  assert_contains "${bootstrap_job}" "OIDC_BOOTSTRAP_USERNAME"
+  assert_contains "${bootstrap_job}" "emailVerified=true"
+  assert_contains "${bootstrap_job}" "set-password"
+  assert_contains "${bootstrap_job}" "--fields id"
+  assert_contains "${bootstrap_job}" "--format csv"
+  assert_contains "${bootstrap_job}" "--noquotes"
+  assert_contains "${bootstrap_job}" "-q exact=true"
+  assert_not_contains "${bootstrap_job}" "awk"
+  assert_not_contains "${bootstrap_job}" "jq"
+  assert_not_contains "${bootstrap_job}" "python"
+  assert_contains "${bootstrap_job}" "keycloak realm client ready"
+  assert_contains "${postgres_secret}" "keycloakDatabase:"
   assert_contains "${output}/rendered/offline-install/postgres-init-job.yaml" "KEYCLOAK_DB_USER"
   pass "self-hosted p1 dry-run renders Keycloak and Postgres bootstrap config"
 }
@@ -919,7 +1264,7 @@ test_existing_cloud_dry_run_does_not_render_keycloak() {
 
   "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/existing-cloud-no-keycloak-cache.out" 2>&1
   POSTGRES_APP_URL='postgresql://agentsmith:secret@postgres.example.com:5432/agentsmith_lite' \
-    JUICEFS_META_URL='postgresql://juicefs:secret@postgres.example.com:5432/juicefs_meta' \
+    JUICEFS_META_URL='postgres://juicefs:secret@postgres.example.com:5432/juicefs_meta' \
     S3_ACCESS_KEY='existing-cloud-access-key' \
     S3_SECRET_KEY='existing-cloud-secret-key' \
     APP_SESSION_SECRET='existing-cloud-app-session-secret-value' \
@@ -1020,13 +1365,24 @@ test_oidc_env_contract
 test_oidc_env_contract_rejects_missing_required_values
 test_builtin_admin_rejects_oidc_bootstrap_credentials
 test_existing_cloud_oidc_reads_default_env_names
+test_existing_cloud_rejects_postgresql_juicefs_meta_url
 test_self_hosted_default_kube_context_is_empty
+test_self_hosted_default_juicefs_bucket_is_http_bucket_url
+test_self_hosted_default_juicefs_meta_url_uses_postgres_scheme
+test_juicefs_bucket_contract_rejects_s3_prefix_url
+test_juicefs_meta_url_contract_requires_postgres_scheme
+test_json_schemas_match_juicefs_contract
 test_self_hosted_force_reuses_existing_persistent_secrets
 test_self_hosted_force_rejects_partial_or_invalid_output
 test_self_hosted_skip_k3s_requires_readable_kubeconfig
 test_self_hosted_skip_k3s_live_uses_existing_cluster_chain
 test_minio_bucket_job_uses_mc_alias_and_retry
+test_s3_probe_job_uses_mc_alias_and_object_lifecycle
 test_minio_statefulset_has_health_probes
+test_juicefs_format_job_surfaces_failure_logs_and_checks_storage
+test_postgres_statefulset_has_pg_isready_readiness_probe
+test_postgres_init_complete_does_not_require_log_sentinel
+test_postgres_init_wait_failure_keeps_job_and_collects_debug
 test_minio_bucket_init_failure_keeps_job_and_collects_debug
 test_contract_cache_install_and_static_juicefs
 test_self_hosted_keycloak_render_from_p1_cache

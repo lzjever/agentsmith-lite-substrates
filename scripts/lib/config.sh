@@ -169,6 +169,24 @@ env_or_existing_secret() {
   return 1
 }
 
+env_or_existing_nonempty_secret() {
+  local env_name="$1"
+  local existing_secrets_file="${2:-}"
+  local value
+  if [[ -n "${!env_name:-}" ]]; then
+    printf '%s' "${!env_name}"
+    return 0
+  fi
+  if [[ -n "${existing_secrets_file}" ]] && env_has_key "${existing_secrets_file}" "${env_name}"; then
+    value="$(env_value_or_empty "${existing_secrets_file}" "${env_name}")"
+    if [[ -n "${value}" ]]; then
+      printf '%s' "${value}"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 write_env_contract_from_config() {
   local config_file="$1"
   local output_dir="$2"
@@ -240,7 +258,14 @@ write_env_contract_from_config() {
 
   local juicefs_volume juicefs_bucket juicefs_secret juicefs_driver juicefs_sc juicefs_pvc juicefs_mount
   juicefs_volume="$(config_value "${config_file}" "juicefs.volumeName" "agentsmith-lite-files")"
-  juicefs_bucket="$(config_value "${config_file}" "juicefs.bucket" "s3://${bucket}/agentsmith-lite/")"
+  if juicefs_bucket="$(config_raw_value "${config_file}" "juicefs.bucket" 2>/dev/null)"; then
+    [[ -n "${juicefs_bucket}" ]] || die "config contract requires non-empty juicefs.bucket"
+  else
+    juicefs_bucket="${endpoint%/}/${bucket}"
+  fi
+  if ! is_juicefs_bucket_url "${juicefs_bucket}"; then
+    die "config contract juicefs.bucket must be a full http(s) bucket URL"
+  fi
   juicefs_secret="$(config_value "${config_file}" "juicefs.secretName" "agentsmith-lite-juicefs")"
   juicefs_driver="$(config_value "${config_file}" "juicefs.csiDriver" "csi.juicefs.com")"
   juicefs_sc="$(config_value "${config_file}" "juicefs.storageClass" "agentsmith-lite-juicefs-rwx")"
@@ -248,9 +273,15 @@ write_env_contract_from_config() {
   juicefs_mount="$(config_value "${config_file}" "juicefs.mountRoot" "/agentsmith-lite")"
 
   local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret oidc_bootstrap_username oidc_bootstrap_password
+  local keycloak_db_user keycloak_db_password keycloak_db_database keycloak_admin_username keycloak_admin_password
   oidc_secret=""
   oidc_bootstrap_username=""
   oidc_bootstrap_password=""
+  keycloak_db_user=""
+  keycloak_db_password=""
+  keycloak_db_database=""
+  keycloak_admin_username=""
+  keycloak_admin_password=""
   if [[ "${mode}" == "existing-cloud" ]]; then
     local app_url_env meta_url_env access_env secret_env oidc_issuer_env oidc_client_id_env oidc_client_secret_env oidc_backchannel_env
     app_url_env="$(config_value "${config_file}" "postgres.appUrlFromEnv" "POSTGRES_APP_URL")"
@@ -263,6 +294,8 @@ write_env_contract_from_config() {
     s3_secret="${!secret_env:-}"
     [[ -n "${postgres_app_url}" ]] || die "existing-cloud requires ${app_url_env}"
     [[ -n "${juicefs_meta_url}" ]] || die "existing-cloud requires ${meta_url_env}"
+    [[ "${juicefs_meta_url}" == postgres://* ]] || die "JUICEFS_META_URL must start with postgres://"
+    is_juicefs_meta_url "${juicefs_meta_url}" || die "JUICEFS_META_URL must be postgres://user:password@host:port/db"
     [[ -n "${s3_access}" ]] || die "existing-cloud requires ${access_env}"
     [[ -n "${s3_secret}" ]] || die "existing-cloud requires ${secret_env}"
     if [[ "${auth_mode}" == "oidc" ]]; then
@@ -286,7 +319,7 @@ write_env_contract_from_config() {
     fi
     if ! juicefs_meta_url="$(env_or_existing_secret JUICEFS_META_URL "${reuse_self_hosted_secrets_file}")"; then
       juicefs_password="$(env_or_generated_secret JUICEFS_META_PASSWORD)"
-      juicefs_meta_url="postgresql://juicefs:${juicefs_password}@postgres.${namespace}.svc.cluster.local:5432/juicefs_meta"
+      juicefs_meta_url="postgres://juicefs:${juicefs_password}@postgres.${namespace}.svc.cluster.local:5432/juicefs_meta"
     fi
     if ! s3_access="$(env_or_existing_secret S3_ACCESS_KEY "${reuse_self_hosted_secrets_file}")"; then
       s3_access="minio$(random_secret | cut -c1-12)"
@@ -311,6 +344,21 @@ write_env_contract_from_config() {
       fi
       if ! oidc_bootstrap_password="$(env_or_existing_secret OIDC_BOOTSTRAP_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
         oidc_bootstrap_password="$(random_secret)"
+      fi
+      if ! keycloak_db_user="$(env_or_existing_nonempty_secret KEYCLOAK_DB_USER "${reuse_self_hosted_secrets_file}")"; then
+        keycloak_db_user="keycloak"
+      fi
+      if ! keycloak_db_password="$(env_or_existing_nonempty_secret KEYCLOAK_DB_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+        keycloak_db_password="$(random_secret)"
+      fi
+      if ! keycloak_db_database="$(env_or_existing_nonempty_secret KEYCLOAK_DB_DATABASE "${reuse_self_hosted_secrets_file}")"; then
+        keycloak_db_database="keycloak"
+      fi
+      if ! keycloak_admin_username="$(env_or_existing_nonempty_secret KEYCLOAK_ADMIN_USERNAME "${reuse_self_hosted_secrets_file}")"; then
+        keycloak_admin_username="admin"
+      fi
+      if ! keycloak_admin_password="$(env_or_existing_nonempty_secret KEYCLOAK_ADMIN_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+        keycloak_admin_password="$(random_secret)"
       fi
     fi
   fi
@@ -367,6 +415,11 @@ BUILTIN_ADMIN_INITIAL_PASSWORD=${admin_password}
 OIDC_CLIENT_SECRET=${oidc_secret}
 OIDC_BOOTSTRAP_USERNAME=${oidc_bootstrap_username}
 OIDC_BOOTSTRAP_PASSWORD=${oidc_bootstrap_password}
+KEYCLOAK_DB_USER=${keycloak_db_user}
+KEYCLOAK_DB_PASSWORD=${keycloak_db_password}
+KEYCLOAK_DB_DATABASE=${keycloak_db_database}
+KEYCLOAK_ADMIN_USERNAME=${keycloak_admin_username}
+KEYCLOAK_ADMIN_PASSWORD=${keycloak_admin_password}
 EOF_SECRETS
   chmod 0600 "${output_secrets_file}"
 

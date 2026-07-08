@@ -124,22 +124,8 @@ spec:
               object_key="agentsmith-lite-doctor/s3-probe/\${S3_PROBE_RUN_ID}"
               object_uri="\${alias_name}/\${S3_BUCKET}/\${object_key}"
               payload="agentsmith-lite-s3-probe:\${S3_PROBE_RUN_ID}"
-              MC_CONFIG_DIR="\$(mktemp -d)"
-              payload_file="\$(mktemp)"
-              readback_file="\$(mktemp)"
-
-              json_escape_env() {
-                awk -v name="\$1" '
-                  BEGIN {
-                    value = ENVIRON[name]
-                    gsub(/\\/, "\\\\", value)
-                    gsub(/"/, "\\\"", value)
-                    gsub(/\r/, "\\r", value)
-                    gsub(/\n/, "\\n", value)
-                    printf "%s", value
-                  }
-                '
-              }
+              MC_CONFIG_DIR="/tmp/agentsmith-lite-s3-probe-\${S3_PROBE_RUN_ID}"
+              readback=""
 
               fail_probe() {
                 printf 'agentsmith-lite-s3-probe failed: %s\n' "\$1" >&2
@@ -147,52 +133,25 @@ spec:
               }
 
               cleanup() {
-                mc --config-dir "\${MC_CONFIG_DIR}" rm --quiet --force "\${object_uri}" >/dev/null 2>&1 || true
-                rm -rf "\${MC_CONFIG_DIR}"
-                rm -f "\${payload_file}" "\${readback_file}"
+                mc --config-dir "\${MC_CONFIG_DIR}" rm --quiet --force "\${object_uri}" >/dev/null 2>&1 || :
               }
               trap cleanup EXIT INT TERM
-              chmod 0700 "\${MC_CONFIG_DIR}"
 
-              case "\$(printf '%s' "\${S3_FORCE_PATH_STYLE}" | tr '[:upper:]' '[:lower:]')" in
-                true|1|yes|y) path_style="on" ;;
-                false|0|no|n) path_style="off" ;;
-                *) path_style="auto" ;;
+              case "\${S3_FORCE_PATH_STYLE}" in
+                true) path_style="on" ;;
+                false) path_style="off" ;;
+                *) fail_probe "invalid S3_FORCE_PATH_STYLE" ;;
               esac
 
-              export MC_PATH_STYLE="\${path_style}"
               export AWS_REGION="\${S3_REGION}"
-              {
-                printf '{\n'
-                printf '  "version": "10",\n'
-                printf '  "aliases": {\n'
-                printf '    "%s": {\n' "\${alias_name}"
-                printf '      "url": "'
-                json_escape_env S3_ENDPOINT
-                printf '",\n'
-                printf '      "accessKey": "'
-                json_escape_env S3_ACCESS_KEY
-                printf '",\n'
-                printf '      "secretKey": "'
-                json_escape_env S3_SECRET_KEY
-                printf '",\n'
-                printf '      "api": "s3v4",\n'
-                printf '      "path": "'
-                json_escape_env MC_PATH_STYLE
-                printf '"\n'
-                printf '    }\n'
-                printf '  }\n'
-                printf '}\n'
-              } >"\${MC_CONFIG_DIR}/config.json" \
+              mc --config-dir "\${MC_CONFIG_DIR}" alias set "\${alias_name}" "\${S3_ENDPOINT}" "\${S3_ACCESS_KEY}" "\${S3_SECRET_KEY}" --api S3v4 --path "\${path_style}" >/dev/null 2>&1 \
                 || fail_probe "configure client"
-              chmod 0600 "\${MC_CONFIG_DIR}/config.json"
 
-              printf '%s' "\${payload}" >"\${payload_file}"
-              mc --config-dir "\${MC_CONFIG_DIR}" cp "\${payload_file}" "\${object_uri}" >/dev/null 2>&1 \
+              printf '%s' "\${payload}" | mc --config-dir "\${MC_CONFIG_DIR}" pipe "\${object_uri}" >/dev/null 2>&1 \
                 || fail_probe "write object"
-              mc --config-dir "\${MC_CONFIG_DIR}" cp "\${object_uri}" "\${readback_file}" >/dev/null 2>&1 \
+              readback="\$(mc --config-dir "\${MC_CONFIG_DIR}" cat "\${object_uri}" 2>/dev/null)" \
                 || fail_probe "read object"
-              [ "\$(cat "\${readback_file}")" = "\${payload}" ] \
+              [ "\${readback}" = "\${payload}" ] \
                 || fail_probe "verify object"
               mc --config-dir "\${MC_CONFIG_DIR}" rm --quiet --force "\${object_uri}" >/dev/null 2>&1 \
                 || fail_probe "delete object"
