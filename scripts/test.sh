@@ -37,6 +37,46 @@ assert_not_contains() {
   fi
 }
 
+set_env_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp="${file}.tmp"
+  local mode=""
+  mode="$(stat -c '%a' "${file}" 2>/dev/null || stat -f '%Lp' "${file}" 2>/dev/null || true)"
+  awk -v wanted="${key}" -v replacement="${key}=${value}" '
+    BEGIN { found=0 }
+    {
+      line=$0
+      sub(/^[[:space:]]*export[[:space:]]+/, "", line)
+      idx=index(line, "=")
+      current=idx ? substr(line, 1, idx - 1) : ""
+      if (current == wanted) {
+        print replacement
+        found=1
+        next
+      }
+      print
+    }
+    END { if (!found) exit 1 }
+  ' "${file}" >"${tmp}" || fail "expected ${file} to contain ${key}"
+  mv "${tmp}" "${file}"
+  [[ -z "${mode}" ]] || chmod "${mode}" "${file}"
+}
+
+assert_command_fails_contains() {
+  local out="$1"
+  local needle="$2"
+  shift 2
+  local status=0
+  set +e
+  "$@" >"${out}" 2>&1
+  status=$?
+  set -e
+  [[ "${status}" -ne 0 ]] || fail "expected command to fail: $*"
+  assert_contains "${out}" "${needle}"
+}
+
 write_valid_env_pair() {
   local dir="$1"
   mkdir -p "${dir}"
@@ -76,6 +116,17 @@ JUICEFS_META_URL=postgresql://juicefs:juicefs-secret-value@postgres.agentsmith.s
 BUILTIN_ADMIN_INITIAL_PASSWORD=admin-secret-value
 OIDC_CLIENT_SECRET=
 EOF_SECRETS
+  chmod 0600 "${dir}/substrate.secrets.env"
+}
+
+write_valid_oidc_env_pair() {
+  local dir="$1"
+  write_valid_env_pair "${dir}"
+  set_env_value "${dir}/substrate.env" "AUTH_MODE" "oidc"
+  set_env_value "${dir}/substrate.env" "OIDC_ISSUER_URL" "https://auth.agentsmith.example.com/realms/agentsmith"
+  set_env_value "${dir}/substrate.env" "OIDC_CLIENT_ID" "agentsmith-lite"
+  set_env_value "${dir}/substrate.secrets.env" "BUILTIN_ADMIN_INITIAL_PASSWORD" ""
+  set_env_value "${dir}/substrate.secrets.env" "OIDC_CLIENT_SECRET" "oidc-client-secret-value"
   chmod 0600 "${dir}/substrate.secrets.env"
 }
 
@@ -188,6 +239,110 @@ test_env_secrets_contract() {
   pass "env/secrets contract validates and redacts raw values"
 }
 
+test_oidc_env_contract() {
+  local env_dir="${TMP_DIR}/oidc-env-contract"
+  local out="${TMP_DIR}/oidc-validate-env.out"
+
+  write_valid_oidc_env_pair "${env_dir}"
+  "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env" \
+    >"${out}" 2>&1
+
+  assert_contains "${out}" "validated substrate env contract"
+  assert_contains "${out}" "secret OIDC_CLIENT_SECRET fingerprint=sha256:"
+  assert_not_contains "${out}" "oidc-client-secret-value"
+  pass "OIDC env/secrets contract validates and redacts raw client secret"
+}
+
+test_oidc_env_contract_rejects_missing_required_values() {
+  local env_dir="${TMP_DIR}/oidc-env-contract-missing-issuer"
+  local out="${TMP_DIR}/oidc-missing-issuer.out"
+  write_valid_oidc_env_pair "${env_dir}"
+  set_env_value "${env_dir}/substrate.env" "OIDC_ISSUER_URL" ""
+  assert_command_fails_contains \
+    "${out}" \
+    "substrate.env key OIDC_ISSUER_URL must not be empty" \
+    "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+
+  env_dir="${TMP_DIR}/oidc-env-contract-missing-secret"
+  out="${TMP_DIR}/oidc-missing-secret.out"
+  write_valid_oidc_env_pair "${env_dir}"
+  set_env_value "${env_dir}/substrate.secrets.env" "OIDC_CLIENT_SECRET" ""
+  assert_command_fails_contains \
+    "${out}" \
+    "substrate.secrets.env key OIDC_CLIENT_SECRET must not be empty" \
+    "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+
+  pass "OIDC env/secrets contract rejects missing issuer or client secret"
+}
+
+test_existing_cloud_oidc_reads_default_env_names() {
+  local cache="${TMP_DIR}/existing-cloud-oidc-cache"
+  local output="${TMP_DIR}/existing-cloud-oidc-out"
+  local config="${TMP_DIR}/existing-cloud-oidc.yaml"
+  local out="${TMP_DIR}/existing-cloud-oidc-install.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/existing-cloud-oidc-cache.out" 2>&1
+  cat >"${config}" <<'EOF_CONFIG'
+mode: existing-cloud
+kubernetes:
+  namespace: agentsmith
+  kubeconfigPath: /secure/path/kubeconfig
+  context: production
+postgres:
+  appUrlFromEnv: POSTGRES_APP_URL
+  juicefsMetaUrlFromEnv: JUICEFS_META_URL
+objectStorage:
+  provider: s3
+  endpoint: https://s3.us-east-1.amazonaws.com
+  region: us-east-1
+  bucket: agentsmith-lite-files
+  accessKeyFromEnv: S3_ACCESS_KEY
+  secretKeyFromEnv: S3_SECRET_KEY
+juicefs:
+  volumeName: agentsmith-lite-files
+  secretName: agentsmith-lite-juicefs
+  csiDriver: csi.juicefs.com
+  storageClass: agentsmith-lite-juicefs-rwx
+  pvcName: agentsmith-lite-files
+  mountRoot: /agentsmith-lite
+auth:
+  mode: oidc
+ingress:
+  publicBaseUrl: https://agentsmith.example.com
+  ingressClass: ""
+  tlsSecretName: ""
+EOF_CONFIG
+
+  POSTGRES_APP_URL='postgresql://agentsmith:secret@postgres.example.com:5432/agentsmith_lite' \
+    JUICEFS_META_URL='postgresql://juicefs:secret@postgres.example.com:5432/juicefs_meta' \
+    S3_ACCESS_KEY='existing-cloud-access-key' \
+    S3_SECRET_KEY='existing-cloud-secret-key' \
+    APP_SESSION_SECRET='existing-cloud-app-session-secret-value' \
+    OIDC_ISSUER_URL='https://auth.agentsmith.example.com/realms/agentsmith' \
+    OIDC_CLIENT_ID='agentsmith-lite' \
+    OIDC_CLIENT_SECRET='existing-cloud-oidc-secret' \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${config}" \
+      --output "${output}" \
+      --dry-run \
+      --force \
+      >"${out}" 2>&1
+
+  assert_contains "${output}/substrate.env" "AUTH_MODE=oidc"
+  assert_contains "${output}/substrate.env" "OIDC_ISSUER_URL=https://auth.agentsmith.example.com/realms/agentsmith"
+  assert_contains "${output}/substrate.env" "OIDC_CLIENT_ID=agentsmith-lite"
+  assert_contains "${output}/substrate.secrets.env" "OIDC_CLIENT_SECRET=existing-cloud-oidc-secret"
+  assert_not_contains "${out}" "existing-cloud-oidc-secret"
+  pass "existing-cloud OIDC config reads default env names"
+}
+
 test_contract_cache_install_and_static_juicefs() {
   local cache="${TMP_DIR}/contract-cache"
   local output="${TMP_DIR}/install-out"
@@ -216,6 +371,9 @@ test_contract_cache_install_and_static_juicefs() {
     --secrets "${output}/substrate.secrets.env" \
     >"${juicefs_out}" 2>&1
 
+  assert_contains "${output}/substrate.env" "AUTH_MODE=oidc"
+  assert_contains "${output}/substrate.env" "OIDC_ISSUER_URL=http://keycloak.agentsmith.localhost/realms/agentsmith"
+  assert_contains "${output}/substrate.env" "OIDC_CLIENT_ID=agentsmith-lite"
   assert_contains "${juicefs_out}" "JuiceFS CSI contract validated"
   pass "contract-only cache, install-online dry-run, env, and static JuiceFS contracts pass"
 }
@@ -295,6 +453,9 @@ test_live_pvc_bound_rwx_success() {
 }
 
 test_env_secrets_contract
+test_oidc_env_contract
+test_oidc_env_contract_rejects_missing_required_values
+test_existing_cloud_oidc_reads_default_env_names
 test_contract_cache_install_and_static_juicefs
 test_doctor_dry_run_status_lines
 test_live_juicefs_contract_mismatch

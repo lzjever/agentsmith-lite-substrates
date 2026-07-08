@@ -17,6 +17,12 @@ are intentionally outside this substrate contract.
 The schema remains intentionally light on unknown keys so operators can carry
 future or installer-specific metadata without breaking validation.
 
+For `auth.mode: oidc`, self-hosted config derives the app-facing issuer from
+`auth.keycloak.publicBaseUrl` and `auth.realm`, and writes `auth.clientId` to
+`OIDC_CLIENT_ID`. Existing-cloud config reads OIDC values from
+`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` unless custom
+`auth.*FromEnv` names are set.
+
 ## Non-Secret File
 
 `substrate.env` contains routing and resource names only: namespace,
@@ -30,10 +36,11 @@ empty. Ingress config is only an app-facing env contract:
 `APP_PUBLIC_BASE_URL`, `APP_INGRESS_CLASS`, and `APP_TLS_SECRET_NAME`;
 substrates do not install app ingress manifests.
 
-OIDC/Keycloak auth is deferred. `AUTH_MODE` must be `builtin_admin`.
-`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` may remain in the
-v1 files only as empty compatibility placeholders; non-builtin auth or a
-non-empty OIDC secret is invalid.
+OIDC is the production auth path. `AUTH_MODE=oidc` requires non-empty
+`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET`; the issuer must
+be an http(s) URL without query or fragment. `AUTH_MODE=builtin_admin` remains
+for local or transitional use and requires `BUILTIN_ADMIN_INITIAL_PASSWORD`;
+the OIDC fields must be empty in that mode.
 
 The static env contract rejects invalid resource names before any live cluster
 checks: `KUBE_NAMESPACE`, `JUICEFS_SECRET_NAME`, and `JUICEFS_PVC_NAME` must be
@@ -45,10 +52,10 @@ subdomain name; `S3_BUCKET` must follow S3 bucket-name shape rules.
 `substrate.secrets.env` contains:
 
 - product-secret subset: `POSTGRES_APP_URL`, `APP_SESSION_SECRET`,
-  `BUILTIN_ADMIN_INITIAL_PASSWORD`
+  `OIDC_CLIENT_SECRET` for OIDC, or `BUILTIN_ADMIN_INITIAL_PASSWORD` for
+  builtin admin
 - substrate/CSI scoped values: `S3_ACCESS_KEY`, `S3_SECRET_KEY`,
   `JUICEFS_META_URL`
-- deferred empty placeholder: `OIDC_CLIENT_SECRET`
 
 The validator rejects secret keys in `substrate.env`, rejects unknown keys in
 the secret file, rejects duplicate keys in both files, checks owner-only

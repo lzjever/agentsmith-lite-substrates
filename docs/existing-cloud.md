@@ -12,6 +12,9 @@ export JUICEFS_META_URL='postgresql://...'
 export S3_ACCESS_KEY='...'
 export S3_SECRET_KEY='...'
 export APP_SESSION_SECRET='...'
+export OIDC_ISSUER_URL='https://auth.example.com/realms/agentsmith'
+export OIDC_CLIENT_ID='agentsmith-lite'
+export OIDC_CLIENT_SECRET='...'
 
 scripts/download-online.sh --contract-only --output dist/offline-cache --force
 scripts/install-online.sh \
@@ -25,14 +28,16 @@ Set `kubernetes.kubeconfigPath` to the existing kubeconfig the operator wants
 doctor/live validation to use. `kubernetes.kubeconfigOutput` is for self-hosted
 k3s output paths and is not needed for existing-cloud configs.
 
-OIDC/Keycloak auth is deferred. Keep `auth.mode: builtin_admin`; configs with
-non-builtin auth fail validation, and generated env contracts reject non-empty
-`OIDC_CLIENT_SECRET`.
+OIDC is the production auth path. `auth.mode: oidc` reads
+`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` by default; set
+`auth.issuerUrlFromEnv`, `auth.clientIdFromEnv`, or
+`auth.clientSecretFromEnv` only when the operator uses different env names.
+`auth.mode: builtin_admin` is still accepted for local or transitional use.
 
 The generated contract is the same as self-hosted mode. S3 and JuiceFS raw
 credentials remain substrate/CSI scoped. App deployment should render only the
-product-secret subset and should reference the existing PVC and CSI Secret by
-name.
+product-secret subset for the selected auth mode and should reference the
+existing PVC and CSI Secret by name.
 
 Existing-cloud mode does not create or mutate a self-hosted PostgreSQL Secret or
 StatefulSet, and it does not render self-hosted MinIO resources or install k3s.

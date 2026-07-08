@@ -138,10 +138,12 @@ block only writes the app-facing env contract: `APP_PUBLIC_BASE_URL`,
 `APP_INGRESS_CLASS`, and `APP_TLS_SECRET_NAME`. The app repo consumes those
 values when it renders app-owned ingress resources.
 
-OIDC/Keycloak auth is deferred. The only valid auth mode in the substrate
-contract is `AUTH_MODE=builtin_admin`; non-builtin auth and non-empty
-`OIDC_CLIENT_SECRET` are invalid. The v1 env shape may still include empty OIDC
-placeholder keys so older consumers can filter them safely.
+OIDC/Keycloak is the production auth path. `AUTH_MODE=oidc` uses the existing
+`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` env contract.
+Self-hosted config derives the issuer from
+`auth.keycloak.publicBaseUrl` + `auth.realm`; existing-cloud config reads the
+same OIDC values from env by default. `AUTH_MODE=builtin_admin` remains for
+local or transitional use and requires empty OIDC fields.
 
 ## Secret Boundary
 
@@ -149,8 +151,9 @@ placeholder keys so older consumers can filter them safely.
 `substrate.secrets.env` is owner-only (`0600`) and contains both product secrets
 and substrate/CSI setup secrets.
 
-The product-secret subset is `POSTGRES_APP_URL`, `APP_SESSION_SECRET`, and
-`BUILTIN_ADMIN_INITIAL_PASSWORD`.
+The product-secret subset is `POSTGRES_APP_URL`, `APP_SESSION_SECRET`, and the
+selected auth secret: `OIDC_CLIENT_SECRET` for OIDC or
+`BUILTIN_ADMIN_INITIAL_PASSWORD` for builtin admin.
 `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and `JUICEFS_META_URL` are substrate/CSI scoped
 only. They are used by substrate setup and doctor checks to create or validate
 the JuiceFS CSI Secret, metadata database, and one-shot format Job; they must

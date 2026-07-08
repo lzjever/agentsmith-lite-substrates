@@ -20,7 +20,11 @@ juicefs:
   pvcName: agentsmith-lite-files
   mountRoot: /agentsmith-lite
 auth:
-  mode: builtin_admin
+  mode: oidc
+  realm: agentsmith
+  clientId: agentsmith-lite
+  keycloak:
+    publicBaseUrl: http://keycloak.agentsmith.localhost
 ingress:
   publicBaseUrl: http://localhost:3000
   ingressClass: ""

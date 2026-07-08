@@ -21,7 +21,10 @@ juicefs:
   pvcName: agentsmith-lite-files
   mountRoot: /agentsmith-lite
 auth:
-  mode: builtin_admin
+  mode: oidc
+  issuerUrlFromEnv: OIDC_ISSUER_URL
+  clientIdFromEnv: OIDC_CLIENT_ID
+  clientSecretFromEnv: OIDC_CLIENT_SECRET
 ingress:
   publicBaseUrl: https://agentsmith.example.com
   ingressClass: ""

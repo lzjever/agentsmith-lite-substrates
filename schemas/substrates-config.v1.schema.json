@@ -24,6 +24,32 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": { "const": "self-hosted" },
+          "auth": {
+            "properties": {
+              "mode": { "const": "oidc" }
+            },
+            "required": ["mode"]
+          }
+        },
+        "required": ["mode", "auth"]
+      },
+      "then": {
+        "properties": {
+          "auth": {
+            "required": ["realm", "clientId", "keycloak"],
+            "properties": {
+              "keycloak": {
+                "required": ["publicBaseUrl"]
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "properties": {
@@ -79,7 +105,18 @@
       "type": "object",
       "required": ["mode"],
       "properties": {
-        "mode": { "const": "builtin_admin" }
+        "mode": { "enum": ["builtin_admin", "oidc"] },
+        "realm": { "type": "string", "minLength": 1 },
+        "clientId": { "type": "string", "minLength": 1 },
+        "issuerUrlFromEnv": { "type": "string", "minLength": 1 },
+        "clientIdFromEnv": { "type": "string", "minLength": 1 },
+        "clientSecretFromEnv": { "type": "string", "minLength": 1 },
+        "keycloak": {
+          "type": "object",
+          "properties": {
+            "publicBaseUrl": { "type": "string", "minLength": 1, "pattern": "^https?://" }
+          }
+        }
       }
     },
     "ingress": {

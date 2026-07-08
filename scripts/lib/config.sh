@@ -14,25 +14,27 @@ config_raw_value() {
       gsub(/^\047|\047$/, "", v)
       return v
     }
-    /^[[:space:]]*($|#)/ { next }
-    /^[A-Za-z0-9_-]+:[[:space:]]*/ {
-      line=$0
-      split(line, parts, ":")
-      section=trim(parts[1])
-      value=trim(substr(line, index(line, ":") + 1))
-      if (section == wanted) {
-        print value
-        found=1
+    function joined_path(level,    i, full) {
+      full=keys[0]
+      for (i=1; i<=level; i++) {
+        full=full "." keys[i]
       }
-      next
+      return full
     }
-    /^[[:space:]]{2}[A-Za-z0-9_-]+:[[:space:]]*/ {
+    /^[[:space:]]*($|#)/ { next }
+    /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*/ {
       line=$0
+      match(line, /^[[:space:]]*/)
+      indent=RLENGTH
+      level=int(indent / 2)
       sub(/^[[:space:]]+/, "", line)
       split(line, parts, ":")
-      key=trim(parts[1])
+      keys[level]=trim(parts[1])
       value=trim(substr(line, index(line, ":") + 1))
-      full=section "." key
+      for (i=level + 1; i<20; i++) {
+        delete keys[i]
+      }
+      full=joined_path(level)
       if (full == wanted) {
         print value
         found=1
@@ -102,9 +104,19 @@ validate_config_contract() {
 
   auth_mode="$(config_required_value "${config_file}" "auth.mode")"
   case "${auth_mode}" in
-    builtin_admin) ;;
-    *) die "OIDC/Keycloak is deferred; AUTH_MODE must be builtin_admin" ;;
+    builtin_admin|oidc) ;;
+    *) die "config contract auth.mode must be builtin_admin or oidc" ;;
   esac
+
+  if [[ "${auth_mode}" == "oidc" && "${mode}" == "self-hosted" ]]; then
+    for required_key in \
+      auth.realm \
+      auth.clientId \
+      auth.keycloak.publicBaseUrl
+    do
+      config_required_value "${config_file}" "${required_key}" >/dev/null
+    done
+  fi
 
   if csi_driver="$(config_raw_value "${config_file}" "juicefs.csiDriver" 2>/dev/null)"; then
     [[ "${csi_driver}" == "csi.juicefs.com" ]] || die "config contract juicefs.csiDriver must be csi.juicefs.com"
@@ -193,7 +205,7 @@ write_env_contract_from_config() {
   local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret
   oidc_secret=""
   if [[ "${mode}" == "existing-cloud" ]]; then
-    local app_url_env meta_url_env access_env secret_env
+    local app_url_env meta_url_env access_env secret_env oidc_issuer_env oidc_client_id_env oidc_client_secret_env
     app_url_env="$(config_value "${config_file}" "postgres.appUrlFromEnv" "POSTGRES_APP_URL")"
     meta_url_env="$(config_value "${config_file}" "postgres.juicefsMetaUrlFromEnv" "JUICEFS_META_URL")"
     access_env="$(config_value "${config_file}" "objectStorage.accessKeyFromEnv" "S3_ACCESS_KEY")"
@@ -206,6 +218,17 @@ write_env_contract_from_config() {
     [[ -n "${juicefs_meta_url}" ]] || die "existing-cloud requires ${meta_url_env}"
     [[ -n "${s3_access}" ]] || die "existing-cloud requires ${access_env}"
     [[ -n "${s3_secret}" ]] || die "existing-cloud requires ${secret_env}"
+    if [[ "${auth_mode}" == "oidc" ]]; then
+      oidc_issuer_env="$(config_value "${config_file}" "auth.issuerUrlFromEnv" "OIDC_ISSUER_URL")"
+      oidc_client_id_env="$(config_value "${config_file}" "auth.clientIdFromEnv" "OIDC_CLIENT_ID")"
+      oidc_client_secret_env="$(config_value "${config_file}" "auth.clientSecretFromEnv" "OIDC_CLIENT_SECRET")"
+      oidc_issuer="${!oidc_issuer_env:-}"
+      oidc_client_id="${!oidc_client_id_env:-}"
+      oidc_secret="${!oidc_client_secret_env:-}"
+      [[ -n "${oidc_issuer}" ]] || die "existing-cloud OIDC requires ${oidc_issuer_env}"
+      [[ -n "${oidc_client_id}" ]] || die "existing-cloud OIDC requires ${oidc_client_id_env}"
+      [[ -n "${oidc_secret}" ]] || die "existing-cloud OIDC requires ${oidc_client_secret_env}"
+    fi
   else
     local postgres_password juicefs_password
     postgres_password="$(env_or_generated_secret POSTGRES_PASSWORD)"
@@ -214,8 +237,22 @@ write_env_contract_from_config() {
     s3_secret="${S3_SECRET_KEY:-$(random_secret)}"
     postgres_app_url="${POSTGRES_APP_URL:-postgresql://agentsmith:${postgres_password}@postgres.${namespace}.svc.cluster.local:5432/agentsmith_lite}"
     juicefs_meta_url="${JUICEFS_META_URL:-postgresql://juicefs:${juicefs_password}@postgres.${namespace}.svc.cluster.local:5432/juicefs_meta}"
+    if [[ "${auth_mode}" == "oidc" ]]; then
+      local auth_realm auth_client_id keycloak_public_base
+      auth_realm="$(config_required_value "${config_file}" "auth.realm")"
+      auth_client_id="$(config_required_value "${config_file}" "auth.clientId")"
+      keycloak_public_base="$(config_required_value "${config_file}" "auth.keycloak.publicBaseUrl")"
+      keycloak_public_base="${keycloak_public_base%/}"
+      oidc_issuer="${keycloak_public_base}/realms/${auth_realm}"
+      oidc_client_id="${auth_client_id}"
+      oidc_secret="${OIDC_CLIENT_SECRET:-$(random_secret)}"
+    fi
   fi
-  admin_password="${BUILTIN_ADMIN_INITIAL_PASSWORD:-$(random_secret)}"
+  if [[ "${auth_mode}" == "builtin_admin" ]]; then
+    admin_password="${BUILTIN_ADMIN_INITIAL_PASSWORD:-$(random_secret)}"
+  else
+    admin_password="${BUILTIN_ADMIN_INITIAL_PASSWORD:-}"
+  fi
   app_session_secret="${APP_SESSION_SECRET:-$(random_secret)}"
 
   if [[ "${force}" != "true" && ( -e "${output_dir}/substrate.env" || -e "${output_dir}/substrate.secrets.env" ) ]]; then

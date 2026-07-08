@@ -229,6 +229,18 @@ is_s3_bucket_name() {
   [[ ! "${value}" =~ ${ipv4_pattern} ]]
 }
 
+is_oidc_issuer_url() {
+  local value="$1"
+  local pattern='^https?://[^[:space:]?#]+(/[^[:space:]?#]*)?$'
+  [[ "${value}" =~ ${pattern} ]]
+}
+
+is_oidc_client_id() {
+  local value="$1"
+  local pattern='^[A-Za-z0-9._:-]+$'
+  [[ "${value}" =~ ${pattern} ]]
+}
+
 require_env_value_rule() {
   local file="$1"
   local key="$2"
@@ -326,17 +338,24 @@ validate_env_contract() {
   case "${auth_mode}" in
     builtin_admin)
       require_key_nonempty "${secrets_file}" "BUILTIN_ADMIN_INITIAL_PASSWORD" "substrate.secrets.env"
+      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_ISSUER_URL")" ]] \
+        || die "OIDC_ISSUER_URL must be empty when AUTH_MODE=builtin_admin"
+      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_CLIENT_ID")" ]] \
+        || die "OIDC_CLIENT_ID must be empty when AUTH_MODE=builtin_admin"
+      oidc_secret="$(env_value_or_empty "${secrets_file}" "OIDC_CLIENT_SECRET")"
+      [[ -z "${oidc_secret}" ]] || die "OIDC_CLIENT_SECRET must be empty when AUTH_MODE=builtin_admin"
+      ;;
+    oidc)
+      require_key_nonempty "${env_file}" "OIDC_ISSUER_URL" "substrate.env"
+      require_key_nonempty "${env_file}" "OIDC_CLIENT_ID" "substrate.env"
+      require_key_nonempty "${secrets_file}" "OIDC_CLIENT_SECRET" "substrate.secrets.env"
+      require_env_value_rule "${env_file}" "OIDC_ISSUER_URL" "an http(s) OIDC issuer URL without query or fragment" is_oidc_issuer_url
+      require_env_value_rule "${env_file}" "OIDC_CLIENT_ID" "an OIDC client id made of letters, digits, dot, underscore, colon, or dash" is_oidc_client_id
       ;;
     *)
-      die "OIDC/Keycloak is deferred; AUTH_MODE must be builtin_admin"
+      die "AUTH_MODE must be builtin_admin or oidc"
       ;;
   esac
-  [[ -z "$(env_value_or_empty "${env_file}" "OIDC_ISSUER_URL")" ]] \
-    || die "OIDC/Keycloak is deferred; OIDC_ISSUER_URL must be empty"
-  [[ -z "$(env_value_or_empty "${env_file}" "OIDC_CLIENT_ID")" ]] \
-    || die "OIDC/Keycloak is deferred; OIDC_CLIENT_ID must be empty"
-  oidc_secret="$(env_value_or_empty "${secrets_file}" "OIDC_CLIENT_SECRET")"
-  [[ -z "${oidc_secret}" ]] || die "OIDC/Keycloak is deferred; OIDC_CLIENT_SECRET must be empty"
 
   require_value_regex "$(env_value_or_empty "${secrets_file}" "POSTGRES_APP_URL")" '^postgres(ql)?://' "POSTGRES_APP_URL must start with postgres:// or postgresql://"
   require_value_regex "$(env_value_or_empty "${secrets_file}" "JUICEFS_META_URL")" '^postgres(ql)?://' "JUICEFS_META_URL must start with postgres:// or postgresql://"
