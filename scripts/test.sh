@@ -1243,6 +1243,13 @@ test_self_hosted_keycloak_render_from_p1_cache() {
   assert_contains "${bootstrap_job}" "command -v timeout"
   assert_contains "${bootstrap_job}" "OIDC_BOOTSTRAP_USERNAME"
   assert_contains "${bootstrap_job}" "emailVerified=true"
+  assert_contains "${bootstrap_job}" 'bootstrap_email="bootstrap@agentsmith.localhost"'
+  assert_contains "${bootstrap_job}" 'bootstrap_first_name="Agentsmith"'
+  assert_contains "${bootstrap_job}" 'bootstrap_last_name="Local"'
+  assert_contains "${bootstrap_job}" 'email=$bootstrap_email'
+  assert_contains "${bootstrap_job}" 'firstName=$bootstrap_first_name'
+  assert_contains "${bootstrap_job}" 'lastName=$bootstrap_last_name'
+  assert_contains "${bootstrap_job}" "requiredActions=[]"
   assert_contains "${bootstrap_job}" "set-password"
   assert_contains "${bootstrap_job}" "--fields id"
   assert_contains "${bootstrap_job}" "--format csv"

@@ -117,6 +117,9 @@ spec:
               )"
               redirect_uri="${APP_PUBLIC_BASE_URL%/}/*"
               web_origin="${APP_PUBLIC_BASE_URL%/}"
+              bootstrap_email="bootstrap@agentsmith.localhost"
+              bootstrap_first_name="Agentsmith"
+              bootstrap_last_name="Local"
               if [ -z "$client_uuid" ]; then
                 kcadm create clients \
                   -r "$OIDC_REALM" \
@@ -154,7 +157,11 @@ spec:
                   -r "$OIDC_REALM" \
                   -s "username=$OIDC_BOOTSTRAP_USERNAME" \
                   -s enabled=true \
-                  -s emailVerified=true
+                  -s "email=$bootstrap_email" \
+                  -s emailVerified=true \
+                  -s "firstName=$bootstrap_first_name" \
+                  -s "lastName=$bootstrap_last_name" \
+                  -s "requiredActions=[]"
                 user_id="$(
                   kcadm get users \
                     -r "$OIDC_REALM" \
@@ -168,7 +175,11 @@ spec:
                 kcadm update "users/$user_id" \
                   -r "$OIDC_REALM" \
                   -s enabled=true \
-                  -s emailVerified=true
+                  -s "email=$bootstrap_email" \
+                  -s emailVerified=true \
+                  -s "firstName=$bootstrap_first_name" \
+                  -s "lastName=$bootstrap_last_name" \
+                  -s "requiredActions=[]"
               fi
               [ -n "$user_id" ] || {
                 printf 'keycloak bootstrap user lookup failed\n' >&2
