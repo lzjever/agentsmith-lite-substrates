@@ -134,7 +134,8 @@ without rendering or installing self-hosted PostgreSQL, MinIO, or k3s.
 operator, most commonly in `existing-cloud` mode. `kubernetes.kubeconfigOutput`
 means the path where a self-hosted k3s install should write its generated
 kubeconfig. If both are set, `kubeconfigPath` wins; if neither is set,
-`KUBECONFIG_PATH` is empty in `substrate.env`.
+`KUBECONFIG_PATH` is empty in `substrate.env`. `KUBE_CONTEXT` is emitted only
+when `kubernetes.context` is explicitly configured.
 
 Substrates do not install an app ingress or reference app Services. The ingress
 block only writes the app-facing env contract: `APP_PUBLIC_BASE_URL`,
@@ -148,10 +149,18 @@ Self-hosted config derives the issuer from
 same OIDC values from env by default. `AUTH_MODE=builtin_admin` remains for
 local or transitional use and requires empty OIDC fields.
 In self-hosted OIDC mode, substrates install Keycloak as the auth provider.
+They also emit `OIDC_BACKCHANNEL_BASE_URL` as
+`http://keycloak.<namespace>.svc.cluster.local:8080/realms/<realm>` and create
+or update the substrate-owned local login from `OIDC_BOOTSTRAP_USERNAME` and
+`OIDC_BOOTSTRAP_PASSWORD`.
 Existing-cloud mode does not install Keycloak; it supplies the same app-facing
-OIDC env/secrets contract from operator-owned identity infrastructure.
-`auth.keycloak.publicBaseUrl` must resolve to the cluster ingress from both the
-browser and app runtime; existing-cloud provides an external OIDC issuer.
+OIDC env/secrets contract from operator-owned identity infrastructure and may
+read `OIDC_BACKCHANNEL_BASE_URL` from env.
+`auth.keycloak.publicBaseUrl` is the browser-facing OIDC issuer identity.
+Self-hosted app runtime calls Keycloak through `OIDC_BACKCHANNEL_BASE_URL`,
+which substrates generate as the in-cluster Keycloak service realm URL.
+Existing-cloud provides an external OIDC issuer and may provide a separate
+backchannel URL.
 
 ## Secret Boundary
 
@@ -166,6 +175,9 @@ selected auth secret: `OIDC_CLIENT_SECRET` for OIDC or
 only. They are used by substrate setup and doctor checks to create or validate
 the JuiceFS CSI Secret, metadata database, and one-shot format Job; they must
 not be projected into app workload env.
+`OIDC_BOOTSTRAP_USERNAME` and `OIDC_BOOTSTRAP_PASSWORD` are substrate-only
+operator/local login credentials for self-hosted Keycloak and must not be
+projected into app runtime Secret/ConfigMap resources.
 Self-hosted Keycloak DB and bootstrap admin secrets are rendered only into
 substrate-owned Kubernetes Secrets and are not added to the app env contract.
 

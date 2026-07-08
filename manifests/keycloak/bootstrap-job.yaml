@@ -42,6 +42,16 @@ spec:
                 secretKeyRef:
                   name: agentsmith-lite-keycloak
                   key: oidcClientSecret
+            - name: OIDC_BOOTSTRAP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: oidcBootstrapUsername
+            - name: OIDC_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: oidcBootstrapPassword
             - name: APP_PUBLIC_BASE_URL
               valueFrom:
                 secretKeyRef:
@@ -56,6 +66,8 @@ spec:
               : "${OIDC_REALM:?}"
               : "${OIDC_CLIENT_ID:?}"
               : "${OIDC_CLIENT_SECRET:?}"
+              : "${OIDC_BOOTSTRAP_USERNAME:?}"
+              : "${OIDC_BOOTSTRAP_PASSWORD:?}"
               : "${APP_PUBLIC_BASE_URL:?}"
 
               server="http://keycloak:8080"
@@ -114,4 +126,44 @@ spec:
                   -s "webOrigins=[\"$web_origin\"]"
               fi
 
-              printf 'keycloak realm client ready\n'
+              user_id="$(
+                /opt/keycloak/bin/kcadm.sh get users \
+                  -r "$OIDC_REALM" \
+                  -q "username=$OIDC_BOOTSTRAP_USERNAME" \
+                  --fields id \
+                  --format csv \
+                  --noquotes 2>/dev/null \
+                  | awk 'NR == 1 && $1 != "id" { print $1; exit } NR > 1 && $1 != "" { print $1; exit }'
+              )"
+              if [ -z "$user_id" ]; then
+                /opt/keycloak/bin/kcadm.sh create users \
+                  -r "$OIDC_REALM" \
+                  -s "username=$OIDC_BOOTSTRAP_USERNAME" \
+                  -s enabled=true \
+                  -s emailVerified=true
+                user_id="$(
+                  /opt/keycloak/bin/kcadm.sh get users \
+                    -r "$OIDC_REALM" \
+                    -q "username=$OIDC_BOOTSTRAP_USERNAME" \
+                    --fields id \
+                    --format csv \
+                    --noquotes \
+                    | awk 'NR == 1 && $1 != "id" { print $1; exit } NR > 1 && $1 != "" { print $1; exit }'
+                )"
+              else
+                /opt/keycloak/bin/kcadm.sh update "users/$user_id" \
+                  -r "$OIDC_REALM" \
+                  -s enabled=true \
+                  -s emailVerified=true
+              fi
+              [ -n "$user_id" ] || {
+                printf 'keycloak bootstrap user lookup failed\n' >&2
+                exit 1
+              }
+              /opt/keycloak/bin/kcadm.sh set-password \
+                -r "$OIDC_REALM" \
+                --userid "$user_id" \
+                --new-password "$OIDC_BOOTSTRAP_PASSWORD" \
+                --temporary=false
+
+              printf 'keycloak realm client ready; bootstrap user ready\n'

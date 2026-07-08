@@ -19,13 +19,17 @@ future or installer-specific metadata without breaking validation.
 
 For `auth.mode: oidc`, self-hosted config derives the app-facing issuer from
 `auth.keycloak.publicBaseUrl` and `auth.realm`, and writes `auth.clientId` to
-`OIDC_CLIENT_ID`. Existing-cloud config reads OIDC values from
-`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` unless custom
-`auth.*FromEnv` names are set.
+`OIDC_CLIENT_ID`. It also writes `OIDC_BACKCHANNEL_BASE_URL` as the in-cluster
+Keycloak realm URL. Existing-cloud config reads OIDC values from
+`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, optional `OIDC_BACKCHANNEL_BASE_URL`, and
+`OIDC_CLIENT_SECRET` unless custom `auth.*FromEnv` names are set.
 Self-hosted Keycloak DB/bootstrap admin secrets are rendered into
 substrate-owned Kubernetes Secrets only; they are not app runtime env fields.
-`auth.keycloak.publicBaseUrl` must resolve to the cluster ingress from both the
-browser and app runtime; existing-cloud provides an external OIDC issuer.
+`auth.keycloak.publicBaseUrl` is the browser-facing OIDC issuer identity.
+Self-hosted app runtime calls Keycloak through `OIDC_BACKCHANNEL_BASE_URL`,
+which substrates generate as the in-cluster Keycloak service realm URL.
+Existing-cloud provides an external OIDC issuer and may provide a separate
+backchannel URL.
 
 ## Non-Secret File
 
@@ -36,15 +40,18 @@ names, ingress settings, and optional registry coordinates.
 `kubernetes.kubeconfigPath` in config is copied to `KUBECONFIG_PATH` as an
 existing kubeconfig. If it is empty, `kubernetes.kubeconfigOutput` is copied as
 the self-hosted k3s output path. If both are empty, `KUBECONFIG_PATH` stays
-empty. Ingress config is only an app-facing env contract:
+empty. `KUBE_CONTEXT` is written only from explicit `kubernetes.context`; the
+self-hosted default is empty because the k3s kubeconfig context name is not part
+of this contract. Ingress config is only an app-facing env contract:
 `APP_PUBLIC_BASE_URL`, `APP_INGRESS_CLASS`, and `APP_TLS_SECRET_NAME`;
 substrates do not install app ingress manifests.
 
 OIDC is the production auth path. `AUTH_MODE=oidc` requires non-empty
 `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET`; the issuer must
-be an http(s) URL without query or fragment. `AUTH_MODE=builtin_admin` remains
-for local or transitional use and requires `BUILTIN_ADMIN_INITIAL_PASSWORD`;
-the OIDC fields must be empty in that mode.
+be an http(s) URL without query or fragment. `OIDC_BACKCHANNEL_BASE_URL` is
+optional for existing-cloud and non-empty for self-hosted OIDC.
+`AUTH_MODE=builtin_admin` remains for local or transitional use and requires
+`BUILTIN_ADMIN_INITIAL_PASSWORD`; the OIDC fields must be empty in that mode.
 
 The static env contract rejects invalid resource names before any live cluster
 checks: `KUBE_NAMESPACE`, `JUICEFS_SECRET_NAME`, and `JUICEFS_PVC_NAME` must be
@@ -60,6 +67,9 @@ subdomain name; `S3_BUCKET` must follow S3 bucket-name shape rules.
   builtin admin
 - substrate/CSI scoped values: `S3_ACCESS_KEY`, `S3_SECRET_KEY`,
   `JUICEFS_META_URL`
+- substrate-only local Keycloak login: `OIDC_BOOTSTRAP_USERNAME` and
+  `OIDC_BOOTSTRAP_PASSWORD`; app runtime Secret/ConfigMap renderers must ignore
+  these keys
 
 The validator rejects secret keys in `substrate.env`, rejects unknown keys in
 the secret file, rejects duplicate keys in both files, checks owner-only

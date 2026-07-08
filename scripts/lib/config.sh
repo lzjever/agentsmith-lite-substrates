@@ -161,10 +161,6 @@ write_env_contract_from_config() {
   if [[ -z "${kubeconfig_path}" && -n "${kubeconfig_output}" ]]; then
     kubeconfig_path="${kubeconfig_output}"
   fi
-  if [[ -z "${kube_context}" && "${mode}" == "self-hosted" ]]; then
-    kube_context="agentsmith-lite"
-  fi
-
   local provider endpoint region bucket force_path_style
   provider="$(config_value "${config_file}" "objectStorage.provider" "minio")"
   endpoint="$(config_value "${config_file}" "objectStorage.endpoint" "")"
@@ -183,10 +179,11 @@ write_env_contract_from_config() {
     force_path_style="$(config_value "${config_file}" "objectStorage.forcePathStyle" "false")"
   fi
 
-  local auth_mode oidc_issuer oidc_client_id public_base_url ingress_class tls_secret registry image_pull_secret
+  local auth_mode oidc_issuer oidc_client_id oidc_backchannel_base_url public_base_url ingress_class tls_secret registry image_pull_secret
   auth_mode="$(config_value "${config_file}" "auth.mode" "builtin_admin")"
   oidc_issuer=""
   oidc_client_id=""
+  oidc_backchannel_base_url=""
   public_base_url="$(config_value "${config_file}" "ingress.publicBaseUrl" "http://localhost:3000")"
   ingress_class="$(config_value "${config_file}" "ingress.ingressClass" "")"
   tls_secret="$(config_value "${config_file}" "ingress.tlsSecretName" "")"
@@ -202,10 +199,12 @@ write_env_contract_from_config() {
   juicefs_pvc="$(config_value "${config_file}" "juicefs.pvcName" "agentsmith-lite-files")"
   juicefs_mount="$(config_value "${config_file}" "juicefs.mountRoot" "/agentsmith-lite")"
 
-  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret
+  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret oidc_bootstrap_username oidc_bootstrap_password
   oidc_secret=""
+  oidc_bootstrap_username=""
+  oidc_bootstrap_password=""
   if [[ "${mode}" == "existing-cloud" ]]; then
-    local app_url_env meta_url_env access_env secret_env oidc_issuer_env oidc_client_id_env oidc_client_secret_env
+    local app_url_env meta_url_env access_env secret_env oidc_issuer_env oidc_client_id_env oidc_client_secret_env oidc_backchannel_env
     app_url_env="$(config_value "${config_file}" "postgres.appUrlFromEnv" "POSTGRES_APP_URL")"
     meta_url_env="$(config_value "${config_file}" "postgres.juicefsMetaUrlFromEnv" "JUICEFS_META_URL")"
     access_env="$(config_value "${config_file}" "objectStorage.accessKeyFromEnv" "S3_ACCESS_KEY")"
@@ -222,9 +221,11 @@ write_env_contract_from_config() {
       oidc_issuer_env="$(config_value "${config_file}" "auth.issuerUrlFromEnv" "OIDC_ISSUER_URL")"
       oidc_client_id_env="$(config_value "${config_file}" "auth.clientIdFromEnv" "OIDC_CLIENT_ID")"
       oidc_client_secret_env="$(config_value "${config_file}" "auth.clientSecretFromEnv" "OIDC_CLIENT_SECRET")"
+      oidc_backchannel_env="$(config_value "${config_file}" "auth.backchannelBaseUrlFromEnv" "OIDC_BACKCHANNEL_BASE_URL")"
       oidc_issuer="${!oidc_issuer_env:-}"
       oidc_client_id="${!oidc_client_id_env:-}"
       oidc_secret="${!oidc_client_secret_env:-}"
+      oidc_backchannel_base_url="${!oidc_backchannel_env:-}"
       [[ -n "${oidc_issuer}" ]] || die "existing-cloud OIDC requires ${oidc_issuer_env}"
       [[ -n "${oidc_client_id}" ]] || die "existing-cloud OIDC requires ${oidc_client_id_env}"
       [[ -n "${oidc_secret}" ]] || die "existing-cloud OIDC requires ${oidc_client_secret_env}"
@@ -245,7 +246,10 @@ write_env_contract_from_config() {
       keycloak_public_base="${keycloak_public_base%/}"
       oidc_issuer="${keycloak_public_base}/realms/${auth_realm}"
       oidc_client_id="${auth_client_id}"
+      oidc_backchannel_base_url="http://keycloak.${namespace}.svc.cluster.local:8080/realms/${auth_realm}"
       oidc_secret="${OIDC_CLIENT_SECRET:-$(random_secret)}"
+      oidc_bootstrap_username="${OIDC_BOOTSTRAP_USERNAME:-$(config_value "${config_file}" "auth.bootstrapUsername" "agentsmith-local")}"
+      oidc_bootstrap_password="${OIDC_BOOTSTRAP_PASSWORD:-$(random_secret)}"
     fi
   fi
   if [[ "${auth_mode}" == "builtin_admin" ]]; then
@@ -271,6 +275,7 @@ S3_FORCE_PATH_STYLE=${force_path_style}
 AUTH_MODE=${auth_mode}
 OIDC_ISSUER_URL=${oidc_issuer}
 OIDC_CLIENT_ID=${oidc_client_id}
+OIDC_BACKCHANNEL_BASE_URL=${oidc_backchannel_base_url}
 JUICEFS_VOLUME_NAME=${juicefs_volume}
 JUICEFS_BUCKET=${juicefs_bucket}
 JUICEFS_SECRET_NAME=${juicefs_secret}
@@ -295,6 +300,8 @@ S3_SECRET_KEY=${s3_secret}
 JUICEFS_META_URL=${juicefs_meta_url}
 BUILTIN_ADMIN_INITIAL_PASSWORD=${admin_password}
 OIDC_CLIENT_SECRET=${oidc_secret}
+OIDC_BOOTSTRAP_USERNAME=${oidc_bootstrap_username}
+OIDC_BOOTSTRAP_PASSWORD=${oidc_bootstrap_password}
 EOF_SECRETS
   chmod 0600 "${output_dir}/substrate.secrets.env"
 

@@ -111,6 +111,8 @@
         "issuerUrlFromEnv": { "type": "string", "minLength": 1 },
         "clientIdFromEnv": { "type": "string", "minLength": 1 },
         "clientSecretFromEnv": { "type": "string", "minLength": 1 },
+        "backchannelBaseUrlFromEnv": { "type": "string", "minLength": 1 },
+        "bootstrapUsername": { "type": "string", "minLength": 1 },
         "keycloak": {
           "type": "object",
           "properties": {

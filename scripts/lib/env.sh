@@ -30,6 +30,7 @@ NON_SECRET_ALLOWED_KEYS=(
   KUBE_CONTEXT
   OIDC_ISSUER_URL
   OIDC_CLIENT_ID
+  OIDC_BACKCHANNEL_BASE_URL
   APP_INGRESS_CLASS
   APP_TLS_SECRET_NAME
   REGISTRY_URL
@@ -47,7 +48,11 @@ SECRET_REQUIRED_KEYS=(
   OIDC_CLIENT_SECRET
 )
 
-SECRET_ALLOWED_KEYS=("${SECRET_REQUIRED_KEYS[@]}")
+SECRET_ALLOWED_KEYS=(
+  "${SECRET_REQUIRED_KEYS[@]}"
+  OIDC_BOOTSTRAP_USERNAME
+  OIDC_BOOTSTRAP_PASSWORD
+)
 
 contains_key() {
   local needle="$1"
@@ -342,8 +347,14 @@ validate_env_contract() {
         || die "OIDC_ISSUER_URL must be empty when AUTH_MODE=builtin_admin"
       [[ -z "$(env_value_or_empty "${env_file}" "OIDC_CLIENT_ID")" ]] \
         || die "OIDC_CLIENT_ID must be empty when AUTH_MODE=builtin_admin"
+      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_BACKCHANNEL_BASE_URL")" ]] \
+        || die "OIDC_BACKCHANNEL_BASE_URL must be empty when AUTH_MODE=builtin_admin"
       oidc_secret="$(env_value_or_empty "${secrets_file}" "OIDC_CLIENT_SECRET")"
       [[ -z "${oidc_secret}" ]] || die "OIDC_CLIENT_SECRET must be empty when AUTH_MODE=builtin_admin"
+      [[ -z "$(env_value_or_empty "${secrets_file}" "OIDC_BOOTSTRAP_USERNAME")" ]] \
+        || die "OIDC_BOOTSTRAP_USERNAME must be empty when AUTH_MODE=builtin_admin"
+      [[ -z "$(env_value_or_empty "${secrets_file}" "OIDC_BOOTSTRAP_PASSWORD")" ]] \
+        || die "OIDC_BOOTSTRAP_PASSWORD must be empty when AUTH_MODE=builtin_admin"
       ;;
     oidc)
       require_key_nonempty "${env_file}" "OIDC_ISSUER_URL" "substrate.env"
@@ -351,6 +362,9 @@ validate_env_contract() {
       require_key_nonempty "${secrets_file}" "OIDC_CLIENT_SECRET" "substrate.secrets.env"
       require_env_value_rule "${env_file}" "OIDC_ISSUER_URL" "an http(s) OIDC issuer URL without query or fragment" is_oidc_issuer_url
       require_env_value_rule "${env_file}" "OIDC_CLIENT_ID" "an OIDC client id made of letters, digits, dot, underscore, colon, or dash" is_oidc_client_id
+      if [[ -n "$(env_value_or_empty "${env_file}" "OIDC_BACKCHANNEL_BASE_URL")" ]]; then
+        require_env_value_rule "${env_file}" "OIDC_BACKCHANNEL_BASE_URL" "an http(s) OIDC backchannel URL without query or fragment" is_oidc_issuer_url
+      fi
       ;;
     *)
       die "AUTH_MODE must be builtin_admin or oidc"
@@ -375,7 +389,7 @@ validate_env_contract() {
   check_no_placeholder_values "${secrets_file}"
 
   info "secret boundary: app deploy may render only product-secret subset; S3_ACCESS_KEY, S3_SECRET_KEY, and JUICEFS_META_URL are substrate/CSI scoped"
-  for key in POSTGRES_APP_URL APP_SESSION_SECRET S3_ACCESS_KEY S3_SECRET_KEY JUICEFS_META_URL BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_CLIENT_SECRET; do
+  for key in POSTGRES_APP_URL APP_SESSION_SECRET S3_ACCESS_KEY S3_SECRET_KEY JUICEFS_META_URL BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_CLIENT_SECRET OIDC_BOOTSTRAP_USERNAME OIDC_BOOTSTRAP_PASSWORD; do
     if env_has_key "${secrets_file}" "${key}"; then
       local value
       value="$(env_value_or_empty "${secrets_file}" "${key}")"

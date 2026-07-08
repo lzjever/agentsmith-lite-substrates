@@ -168,6 +168,7 @@ S3_FORCE_PATH_STYLE=true
 AUTH_MODE=builtin_admin
 OIDC_ISSUER_URL=
 OIDC_CLIENT_ID=
+OIDC_BACKCHANNEL_BASE_URL=
 JUICEFS_VOLUME_NAME=agentsmith-lite-files
 JUICEFS_BUCKET=s3://agentsmith-lite-files/agentsmith-lite/
 JUICEFS_SECRET_NAME=agentsmith-lite-juicefs
@@ -191,6 +192,8 @@ S3_SECRET_KEY=minio-secret-value
 JUICEFS_META_URL=postgresql://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta
 BUILTIN_ADMIN_INITIAL_PASSWORD=admin-secret-value
 OIDC_CLIENT_SECRET=
+OIDC_BOOTSTRAP_USERNAME=
+OIDC_BOOTSTRAP_PASSWORD=
 EOF_SECRETS
   chmod 0600 "${dir}/substrate.secrets.env"
 }
@@ -201,8 +204,11 @@ write_valid_oidc_env_pair() {
   set_env_value "${dir}/substrate.env" "AUTH_MODE" "oidc"
   set_env_value "${dir}/substrate.env" "OIDC_ISSUER_URL" "https://auth.agentsmith.example.com/realms/agentsmith"
   set_env_value "${dir}/substrate.env" "OIDC_CLIENT_ID" "agentsmith-lite"
+  set_env_value "${dir}/substrate.env" "OIDC_BACKCHANNEL_BASE_URL" "http://keycloak.agentsmith.svc.cluster.local:8080/realms/agentsmith"
   set_env_value "${dir}/substrate.secrets.env" "BUILTIN_ADMIN_INITIAL_PASSWORD" ""
   set_env_value "${dir}/substrate.secrets.env" "OIDC_CLIENT_SECRET" "oidc-client-secret-value"
+  set_env_value "${dir}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME" "agentsmith-local"
+  set_env_value "${dir}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD" "oidc-bootstrap-password-value"
   chmod 0600 "${dir}/substrate.secrets.env"
 }
 
@@ -357,6 +363,31 @@ test_oidc_env_contract_rejects_missing_required_values() {
   pass "OIDC env/secrets contract rejects missing issuer or client secret"
 }
 
+test_builtin_admin_rejects_oidc_bootstrap_credentials() {
+  local env_dir="${TMP_DIR}/builtin-admin-oidc-bootstrap"
+  local out="${TMP_DIR}/builtin-admin-oidc-bootstrap.out"
+
+  write_valid_env_pair "${env_dir}"
+  set_env_value "${env_dir}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME" "agentsmith-local"
+  assert_command_fails_contains \
+    "${out}" \
+    "OIDC_BOOTSTRAP_USERNAME must be empty when AUTH_MODE=builtin_admin" \
+    "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+
+  write_valid_env_pair "${env_dir}"
+  set_env_value "${env_dir}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD" "oidc-bootstrap-password-value"
+  assert_command_fails_contains \
+    "${out}" \
+    "OIDC_BOOTSTRAP_PASSWORD must be empty when AUTH_MODE=builtin_admin" \
+    "${ROOT_DIR}/scripts/validate-env.sh" \
+    --env "${env_dir}/substrate.env" \
+    --secrets "${env_dir}/substrate.secrets.env"
+
+  pass "builtin admin env rejects OIDC bootstrap credentials"
+}
+
 test_existing_cloud_oidc_reads_default_env_names() {
   local cache="${TMP_DIR}/existing-cloud-oidc-cache"
   local output="${TMP_DIR}/existing-cloud-oidc-out"
@@ -402,6 +433,7 @@ EOF_CONFIG
     APP_SESSION_SECRET='existing-cloud-app-session-secret-value' \
     OIDC_ISSUER_URL='https://auth.agentsmith.example.com/realms/agentsmith' \
     OIDC_CLIENT_ID='agentsmith-lite' \
+    OIDC_BACKCHANNEL_BASE_URL='http://keycloak.agentsmith.svc.cluster.local:8080/realms/agentsmith' \
     OIDC_CLIENT_SECRET='existing-cloud-oidc-secret' \
     "${ROOT_DIR}/scripts/install-online.sh" \
       --cache "${cache}" \
@@ -414,9 +446,31 @@ EOF_CONFIG
   assert_contains "${output}/substrate.env" "AUTH_MODE=oidc"
   assert_contains "${output}/substrate.env" "OIDC_ISSUER_URL=https://auth.agentsmith.example.com/realms/agentsmith"
   assert_contains "${output}/substrate.env" "OIDC_CLIENT_ID=agentsmith-lite"
+  assert_contains "${output}/substrate.env" "OIDC_BACKCHANNEL_BASE_URL=http://keycloak.agentsmith.svc.cluster.local:8080/realms/agentsmith"
   assert_contains "${output}/substrate.secrets.env" "OIDC_CLIENT_SECRET=existing-cloud-oidc-secret"
+  assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME="
+  assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD="
   assert_not_contains "${out}" "existing-cloud-oidc-secret"
   pass "existing-cloud OIDC config reads default env names"
+}
+
+test_self_hosted_default_kube_context_is_empty() {
+  local cache="${TMP_DIR}/self-hosted-empty-context-cache"
+  local output="${TMP_DIR}/self-hosted-empty-context-out"
+  local out="${TMP_DIR}/self-hosted-empty-context-install.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/self-hosted-empty-context-cache.out" 2>&1
+  "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${output}" \
+    --dry-run \
+    --force \
+    >"${out}" 2>&1
+
+  assert_contains "${output}/substrate.env" "KUBE_CONTEXT="
+  assert_not_contains "${output}/substrate.env" "KUBE_CONTEXT=agentsmith-lite"
+  pass "self-hosted default env leaves KUBE_CONTEXT empty"
 }
 
 test_contract_cache_install_and_static_juicefs() {
@@ -452,8 +506,13 @@ test_contract_cache_install_and_static_juicefs() {
     >"${juicefs_out}" 2>&1
 
   assert_contains "${output}/substrate.env" "AUTH_MODE=oidc"
+  assert_contains "${output}/substrate.env" "KUBE_CONTEXT="
   assert_contains "${output}/substrate.env" "OIDC_ISSUER_URL=http://keycloak.agentsmith.localhost/realms/agentsmith"
   assert_contains "${output}/substrate.env" "OIDC_CLIENT_ID=agentsmith-lite"
+  assert_contains "${output}/substrate.env" "OIDC_BACKCHANNEL_BASE_URL=http://keycloak.agentsmith.svc.cluster.local:8080/realms/agentsmith"
+  assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME=agentsmith-local"
+  assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD="
+  assert_not_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_PASSWORD=$"
   assert_contains "${juicefs_out}" "JuiceFS CSI contract validated"
   pass "contract-only cache, install-online dry-run, env, and static JuiceFS contracts pass"
 }
@@ -483,6 +542,11 @@ test_self_hosted_keycloak_render_from_p1_cache() {
   assert_contains "${output}/rendered/offline-install/keycloak.yaml" "name: keycloak"
   assert_contains "${output}/rendered/offline-install/keycloak.yaml" "number: 8080"
   assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "name: agentsmith-lite-keycloak-bootstrap"
+  assert_contains "${output}/rendered/offline-install/keycloak-secret.yaml" "oidcBootstrapUsername:"
+  assert_contains "${output}/rendered/offline-install/keycloak-secret.yaml" "oidcBootstrapPassword:"
+  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "OIDC_BOOTSTRAP_USERNAME"
+  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "emailVerified=true"
+  assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "set-password"
   assert_contains "${output}/rendered/offline-install/keycloak-bootstrap-job.yaml" "keycloak realm client ready"
   assert_contains "${output}/rendered/offline-install/postgres-secret.yaml" "keycloakDatabase:"
   assert_contains "${output}/rendered/offline-install/postgres-init-job.yaml" "KEYCLOAK_DB_USER"
@@ -502,6 +566,7 @@ test_existing_cloud_dry_run_does_not_render_keycloak() {
     APP_SESSION_SECRET='existing-cloud-app-session-secret-value' \
     OIDC_ISSUER_URL='https://auth.agentsmith.example.com/realms/agentsmith' \
     OIDC_CLIENT_ID='agentsmith-lite' \
+    OIDC_BACKCHANNEL_BASE_URL='http://keycloak.agentsmith.svc.cluster.local:8080/realms/agentsmith' \
     OIDC_CLIENT_SECRET='existing-cloud-oidc-secret' \
     "${ROOT_DIR}/scripts/install-online.sh" \
       --cache "${cache}" \
@@ -594,7 +659,9 @@ test_live_pvc_bound_rwx_success() {
 test_env_secrets_contract
 test_oidc_env_contract
 test_oidc_env_contract_rejects_missing_required_values
+test_builtin_admin_rejects_oidc_bootstrap_credentials
 test_existing_cloud_oidc_reads_default_env_names
+test_self_hosted_default_kube_context_is_empty
 test_contract_cache_install_and_static_juicefs
 test_self_hosted_keycloak_render_from_p1_cache
 test_existing_cloud_dry_run_does_not_render_keycloak
