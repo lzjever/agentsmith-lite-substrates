@@ -72,7 +72,7 @@ validate_config_contract() {
   local config_file="$1"
   need_file "${config_file}"
 
-  local mode provider auth_mode csi_driver distribution
+  local mode provider auth_mode csi_driver distribution skip_k3s kubeconfig_path
   mode="$(config_required_value "${config_file}" "mode")"
   case "${mode}" in
     self-hosted|existing-cloud) ;;
@@ -81,6 +81,16 @@ validate_config_contract() {
 
   if distribution="$(config_raw_value "${config_file}" "kubernetes.distribution" 2>/dev/null)"; then
     [[ "${distribution}" == "k3s" ]] || die "config contract kubernetes.distribution must be k3s"
+  fi
+
+  skip_k3s="$(config_value "${config_file}" "kubernetes.skipK3s" "false")"
+  case "${skip_k3s}" in
+    true|false) ;;
+    *) die "config contract kubernetes.skipK3s must be true or false" ;;
+  esac
+  if [[ "${mode}" == "self-hosted" && "${skip_k3s}" == "true" ]]; then
+    kubeconfig_path="$(config_required_value "${config_file}" "kubernetes.kubeconfigPath")"
+    [[ -r "${kubeconfig_path}" ]] || die "config contract kubernetes.kubeconfigPath must be readable when kubernetes.skipK3s=true"
   fi
 
   local required_key
@@ -151,12 +161,13 @@ write_env_contract_from_config() {
   validate_config_contract "${config_file}"
   mkdir -p "${output_dir}"
 
-  local mode namespace kubeconfig_path kube_context kubeconfig_output
+  local mode namespace kubeconfig_path kube_context kubeconfig_output skip_k3s
   mode="$(config_value "${config_file}" "mode" "self-hosted")"
   namespace="$(config_value "${config_file}" "kubernetes.namespace" "agentsmith")"
   kubeconfig_path="$(config_value "${config_file}" "kubernetes.kubeconfigPath" "")"
   kube_context="$(config_value "${config_file}" "kubernetes.context" "")"
   kubeconfig_output="$(config_value "${config_file}" "kubernetes.kubeconfigOutput" "")"
+  skip_k3s="$(config_value "${config_file}" "kubernetes.skipK3s" "false")"
 
   if [[ -z "${kubeconfig_path}" && -n "${kubeconfig_output}" ]]; then
     kubeconfig_path="${kubeconfig_output}"
@@ -267,6 +278,7 @@ write_env_contract_from_config() {
 SUBSTRATE_SCHEMA_VERSION=agentsmith-lite.substrate.env/v1
 KUBECONFIG_PATH=${kubeconfig_path}
 KUBE_CONTEXT=${kube_context}
+KUBERNETES_SKIP_K3S=${skip_k3s}
 KUBE_NAMESPACE=${namespace}
 S3_ENDPOINT=${endpoint}
 S3_REGION=${region}

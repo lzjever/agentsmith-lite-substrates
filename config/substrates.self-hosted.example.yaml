@@ -2,6 +2,7 @@ mode: self-hosted
 kubernetes:
   distribution: k3s
   namespace: agentsmith
+  skipK3s: false
   kubeconfigOutput: out/kubeconfig
 postgres:
   storageClass: local-path

@@ -50,6 +50,27 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": { "const": "self-hosted" },
+          "kubernetes": {
+            "properties": {
+              "skipK3s": { "const": true }
+            },
+            "required": ["skipK3s"]
+          }
+        },
+        "required": ["mode", "kubernetes"]
+      },
+      "then": {
+        "properties": {
+          "kubernetes": {
+            "required": ["kubeconfigPath"]
+          }
+        }
+      }
     }
   ],
   "properties": {
@@ -60,6 +81,7 @@
       "properties": {
         "distribution": { "const": "k3s" },
         "namespace": { "type": "string", "minLength": 1 },
+        "skipK3s": { "type": "boolean" },
         "kubeconfigOutput": { "type": "string" },
         "kubeconfigPath": { "type": "string" },
         "context": { "type": "string" }

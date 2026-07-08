@@ -94,11 +94,21 @@ write_fake_p1_artifact_lock() {
   local dir="$1"
   local lock="$2"
   mkdir -p "${dir}/bin" "${dir}/scripts" "${dir}/images/k3s" "${dir}/images/oci" "${dir}/charts"
-  write_fake_artifact "${dir}/bin/k3s" "fake k3s"
-  write_fake_artifact "${dir}/scripts/install-k3s.sh" "#!/usr/bin/env bash"
+  cat >"${dir}/bin/k3s" <<'EOF_K3S'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'unexpected k3s call: %s\n' "$*" >&2
+exit 23
+EOF_K3S
+  cat >"${dir}/scripts/install-k3s.sh" <<'EOF_INSTALL_K3S'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'unexpected k3s installer call\n' >&2
+exit 24
+EOF_INSTALL_K3S
   write_fake_artifact "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst" "fake airgap"
-  write_fake_artifact "${dir}/bin/kubectl" "fake kubectl"
-  write_fake_artifact "${dir}/bin/helm" "fake helm"
+  write_live_kubectl_stub "${dir}/bin/kubectl"
+  write_live_helm_stub "${dir}/bin/helm"
   write_fake_artifact "${dir}/charts/juicefs-csi.tgz" "fake juicefs chart"
   chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl" "${dir}/bin/helm"
 
@@ -271,6 +281,15 @@ case "$*" in
   *" logs job/asl-pg-probe-"*)
     printf 'agentsmith-lite-postgres-probe passed\n'
     ;;
+  *" logs job/agentsmith-lite-postgres-init"*)
+    printf 'postgres init ready\n'
+    ;;
+  *" logs job/agentsmith-lite-minio-bucket-init"*)
+    printf 'minio bucket ready\n'
+    ;;
+  *" logs job/agentsmith-lite-juicefs-format"*)
+    printf 'agentsmith-lite-juicefs-format: ok\n'
+    ;;
   *" logs job/agentsmith-lite-s3-probe-"*)
     printf 'agentsmith-lite-s3-probe passed\n'
     ;;
@@ -280,6 +299,19 @@ case "$*" in
 esac
 exit 0
 EOF_KUBECTL
+  chmod +x "${file}"
+}
+
+write_live_helm_stub() {
+  local file="$1"
+  mkdir -p "$(dirname "${file}")"
+  cat >"${file}" <<'EOF_HELM'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${HELM_LOG:?HELM_LOG is required}"
+printf 'helm %s\n' "$*" >>"${HELM_LOG}"
+exit 0
+EOF_HELM
   chmod +x "${file}"
 }
 
@@ -473,6 +505,143 @@ test_self_hosted_default_kube_context_is_empty() {
   pass "self-hosted default env leaves KUBE_CONTEXT empty"
 }
 
+test_self_hosted_skip_k3s_requires_readable_kubeconfig() {
+  local cache="${TMP_DIR}/skip-k3s-contract-cache"
+  local output="${TMP_DIR}/skip-k3s-missing-kubeconfig-out"
+  local config="${TMP_DIR}/skip-k3s-missing-kubeconfig.yaml"
+  local out="${TMP_DIR}/skip-k3s-missing-kubeconfig.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/skip-k3s-contract-cache.out" 2>&1
+  cat >"${config}" <<'EOF_CONFIG'
+mode: self-hosted
+kubernetes:
+  namespace: agentsmith
+  skipK3s: true
+objectStorage:
+  provider: minio
+  bucket: agentsmith-lite-files
+juicefs:
+  storageClass: agentsmith-lite-juicefs-rwx
+  pvcName: agentsmith-lite-files
+auth:
+  mode: builtin_admin
+ingress:
+  publicBaseUrl: http://localhost:3000
+EOF_CONFIG
+
+  assert_command_fails_contains \
+    "${out}" \
+    "config contract requires kubernetes.kubeconfigPath" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${config}" \
+    --output "${output}" \
+    --dry-run \
+    --force
+
+  config="${TMP_DIR}/skip-k3s-unreadable-kubeconfig.yaml"
+  out="${TMP_DIR}/skip-k3s-unreadable-kubeconfig.out"
+  cat >"${config}" <<'EOF_CONFIG'
+mode: self-hosted
+kubernetes:
+  namespace: agentsmith
+  skipK3s: true
+  kubeconfigPath: /no/such/kubeconfig
+objectStorage:
+  provider: minio
+  bucket: agentsmith-lite-files
+juicefs:
+  storageClass: agentsmith-lite-juicefs-rwx
+  pvcName: agentsmith-lite-files
+auth:
+  mode: builtin_admin
+ingress:
+  publicBaseUrl: http://localhost:3000
+EOF_CONFIG
+
+  assert_command_fails_contains \
+    "${out}" \
+    "config contract kubernetes.kubeconfigPath must be readable when kubernetes.skipK3s=true" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${config}" \
+    --output "${output}" \
+    --dry-run \
+    --force
+
+  pass "self-hosted skipK3s config requires readable kubeconfigPath"
+}
+
+test_self_hosted_skip_k3s_live_uses_existing_cluster_chain() {
+  local artifacts="${TMP_DIR}/skip-k3s-live-artifacts"
+  local lock="${TMP_DIR}/skip-k3s-live-artifacts.env"
+  local cache="${TMP_DIR}/skip-k3s-live-cache"
+  local output="${TMP_DIR}/skip-k3s-live-out"
+  local config="${TMP_DIR}/skip-k3s-live.yaml"
+  local kubeconfig="${TMP_DIR}/kind-kubeconfig"
+  local kubectl_log="${TMP_DIR}/skip-k3s-live-kubectl.log"
+  local helm_log="${TMP_DIR}/skip-k3s-live-helm.log"
+  local out="${TMP_DIR}/skip-k3s-live.out"
+
+  write_fake_p1_artifact_lock "${artifacts}" "${lock}"
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock}" --output "${cache}" --force >"${TMP_DIR}/skip-k3s-live-cache.out" 2>&1
+  write_fake_artifact "${kubeconfig}" "apiVersion: v1"
+  cat >"${config}" <<EOF_CONFIG
+mode: self-hosted
+kubernetes:
+  namespace: agentsmith
+  skipK3s: true
+  kubeconfigPath: ${kubeconfig}
+  context: kind-agentsmith
+objectStorage:
+  provider: minio
+  bucket: agentsmith-lite-files
+juicefs:
+  storageClass: agentsmith-lite-juicefs-rwx
+  pvcName: agentsmith-lite-files
+auth:
+  mode: builtin_admin
+ingress:
+  publicBaseUrl: http://localhost:3000
+EOF_CONFIG
+
+  local status=0
+  set +e
+  KUBECTL_LOG="${kubectl_log}" \
+    HELM_LOG="${helm_log}" \
+    S3_ACCESS_KEY="minio-access-key" \
+    S3_SECRET_KEY="minio-secret-value" \
+    JUICEFS_META_PASSWORD="juicefs-secret-value" \
+    POSTGRES_PROBE_RUN_ID="pgprobe" \
+    S3_PROBE_RUN_ID="s3probe" \
+    RWX_CHECK_RUN_ID="rwxprobe" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${config}" \
+      --output "${output}" \
+      --force \
+      >"${out}" 2>&1
+  status=$?
+  set -e
+  if [[ "${status}" -ne 0 ]]; then
+    printf 'skipK3s live install output:\n' >&2
+    sed -n '1,260p' "${out}" >&2
+    fail "skipK3s live install should exit 0, got ${status}"
+  fi
+
+  assert_contains "${out}" "kubernetes.skipK3s=true; using existing kubeconfig and skipping k3s installer plus k3s image import"
+  assert_contains "${output}/substrate.env" "KUBERNETES_SKIP_K3S=true"
+  assert_contains "${output}/substrate.env" "KUBECONFIG_PATH=${kubeconfig}"
+  assert_contains "${output}/substrate.env" "KUBE_CONTEXT=kind-agentsmith"
+  assert_contains "${kubectl_log}" "--kubeconfig ${kubeconfig} --context kind-agentsmith apply -f ${output}/rendered/offline-install/namespace.yaml"
+  assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/minio.yaml"
+  assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/juicefs-storageclass-pvc.yaml"
+  assert_contains "${helm_log}" "--kubeconfig ${kubeconfig} --context kind-agentsmith upgrade --install juicefs-csi-driver"
+  assert_contains "${out}" "doctor passed"
+  pass "self-hosted skipK3s live install skips k3s/import and runs service chain"
+}
+
 test_contract_cache_install_and_static_juicefs() {
   local cache="${TMP_DIR}/contract-cache"
   local output="${TMP_DIR}/install-out"
@@ -662,6 +831,8 @@ test_oidc_env_contract_rejects_missing_required_values
 test_builtin_admin_rejects_oidc_bootstrap_credentials
 test_existing_cloud_oidc_reads_default_env_names
 test_self_hosted_default_kube_context_is_empty
+test_self_hosted_skip_k3s_requires_readable_kubeconfig
+test_self_hosted_skip_k3s_live_uses_existing_cluster_chain
 test_contract_cache_install_and_static_juicefs
 test_self_hosted_keycloak_render_from_p1_cache
 test_existing_cloud_dry_run_does_not_render_keycloak

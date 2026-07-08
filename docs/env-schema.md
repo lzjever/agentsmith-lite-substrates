@@ -12,8 +12,10 @@ same key boundary as the schemas.
 `schemas/substrates-config.v1.schema.json` is kept aligned with
 `scripts/lib/config.sh::validate_config_contract`: required mode-specific config
 keys and small enums should be accepted or rejected the same way in both places.
-When `kubernetes.distribution` is present it must be `k3s`; local `kind` configs
-are intentionally outside this substrate contract.
+When `kubernetes.distribution` is present it must be `k3s`. For an existing
+local kubeconfig, including kind, keep `mode: self-hosted`, set
+`kubernetes.skipK3s: true`, and provide a readable
+`kubernetes.kubeconfigPath`; do not set `distribution: kind`.
 The schema remains intentionally light on unknown keys so operators can carry
 future or installer-specific metadata without breaking validation.
 
@@ -42,7 +44,9 @@ existing kubeconfig. If it is empty, `kubernetes.kubeconfigOutput` is copied as
 the self-hosted k3s output path. If both are empty, `KUBECONFIG_PATH` stays
 empty. `KUBE_CONTEXT` is written only from explicit `kubernetes.context`; the
 self-hosted default is empty because the k3s kubeconfig context name is not part
-of this contract. Ingress config is only an app-facing env contract:
+of this contract. `kubernetes.skipK3s: true` writes
+`KUBERNETES_SKIP_K3S=true` and requires a readable
+`kubernetes.kubeconfigPath`. Ingress config is only an app-facing env contract:
 `APP_PUBLIC_BASE_URL`, `APP_INGRESS_CLASS`, and `APP_TLS_SECRET_NAME`;
 substrates do not install app ingress manifests.
 

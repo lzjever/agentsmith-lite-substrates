@@ -572,16 +572,22 @@ run_p1_real_offline_install() {
   local env_file="$2"
   local secrets_file="$3"
   local output_dir="$4"
-  local render_dir namespace_manifest rendered_namespace_manifest
+  local render_dir namespace_manifest rendered_namespace_manifest skip_k3s
 
   render_dir="${output_dir}/rendered/offline-install"
   namespace_manifest="$(cache_relative_path "${cache_dir}" "manifests/namespace-bootstrap/namespace.yaml" "namespace bootstrap manifest")"
   rendered_namespace_manifest="${render_dir}/namespace.yaml"
+  skip_k3s="$(env_value_or_empty "${env_file}" KUBERNETES_SKIP_K3S)"
 
   postgres_validate_self_hosted_urls "${env_file}" "${secrets_file}"
   minio_validate_self_hosted_env "${env_file}" "${secrets_file}"
-  offline_install_run_k3s_installer "${cache_dir}" "${env_file}" "${output_dir}"
-  offline_install_import_images "${cache_dir}"
+  if [[ "${skip_k3s}" == "true" ]]; then
+    need_file "$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
+    info "install-offline: kubernetes.skipK3s=true; using existing kubeconfig and skipping k3s installer plus k3s image import"
+  else
+    offline_install_run_k3s_installer "${cache_dir}" "${env_file}" "${output_dir}"
+    offline_install_import_images "${cache_dir}"
+  fi
 
   offline_install_render_namespace_manifest "${namespace_manifest}" "${rendered_namespace_manifest}" "${env_file}"
   info "install-offline: applying rendered namespace bootstrap"

@@ -205,8 +205,8 @@ Then it writes `out/substrate.env` and `out/substrate.secrets.env`, validates th
 split contract, and clearly skips cluster mutation in `--dry-run`.
 
 Without `--dry-run`, a P0 skeleton fails immediately as not installable. A
-p1-real cache runs the cached `scripts/install-k3s.sh` with offline download
-guards, runs the cached `scripts/import-images.sh`, renders the namespace
+p1-real cache normally runs the cached `scripts/install-k3s.sh` with offline
+download guards, runs the cached `scripts/import-images.sh`, renders the namespace
 bootstrap to `${output}/rendered/offline-install/namespace.yaml` with
 `metadata.name` set from `KUBE_NAMESPACE`, applies it with `bin/kubectl`,
 renders the JuiceFS CSI Secret plus StorageClass/PVC contract, renders
@@ -230,3 +230,10 @@ Jobs against the same PVC. Live self-hosted install now requires doctor
 exit code 0. Doctor exit code 2 (`partial`), including checks that cannot be
 verified because kubectl or the namespace is unavailable, fails closed just like
 exit code 1 (`failed`).
+
+For an existing local kubeconfig, including kind, use `mode: self-hosted` with
+`kubernetes.skipK3s: true`, a readable `kubernetes.kubeconfigPath`, and
+optionally `kubernetes.context`. That skips the k3s installer and k3s-specific
+image import, then reuses the same namespace, Helm, kubectl apply, wait, and
+doctor chain. The existing cluster must already be able to pull or have the
+dependency images listed in the p1-real cache.

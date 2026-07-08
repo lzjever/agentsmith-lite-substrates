@@ -28,6 +28,7 @@ NON_SECRET_ALLOWED_KEYS=(
   "${NON_SECRET_REQUIRED_KEYS[@]}"
   KUBECONFIG_PATH
   KUBE_CONTEXT
+  KUBERNETES_SKIP_K3S
   OIDC_ISSUER_URL
   OIDC_CLIENT_ID
   OIDC_BACKCHANNEL_BASE_URL
@@ -375,6 +376,9 @@ validate_env_contract() {
   require_value_regex "$(env_value_or_empty "${secrets_file}" "JUICEFS_META_URL")" '^postgres(ql)?://' "JUICEFS_META_URL must start with postgres:// or postgresql://"
   require_value_regex "$(env_value_or_empty "${env_file}" "S3_ENDPOINT")" '^https?://' "S3_ENDPOINT must start with http:// or https://"
   require_value_regex "$(env_value_or_empty "${env_file}" "S3_FORCE_PATH_STYLE")" '^(true|false)$' "S3_FORCE_PATH_STYLE must be true or false"
+  if env_has_key "${env_file}" "KUBERNETES_SKIP_K3S"; then
+    require_value_regex "$(env_value_or_empty "${env_file}" "KUBERNETES_SKIP_K3S")" '^(true|false)$' "KUBERNETES_SKIP_K3S must be true or false"
+  fi
   require_value_regex "$(env_value_or_empty "${env_file}" "JUICEFS_BUCKET")" '^s3://' "JUICEFS_BUCKET must start with s3://"
   require_value_regex "$(env_value_or_empty "${env_file}" "JUICEFS_MOUNT_ROOT")" '^/' "JUICEFS_MOUNT_ROOT must be an absolute path"
   require_value_regex "$(env_value_or_empty "${env_file}" "APP_PUBLIC_BASE_URL")" '^https?://' "APP_PUBLIC_BASE_URL must start with http:// or https://"
