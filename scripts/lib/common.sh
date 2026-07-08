@@ -70,15 +70,6 @@ random_secret() {
   fi
 }
 
-json_escape() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  value="${value//$'\n'/\\n}"
-  value="${value//$'\r'/}"
-  printf '%s' "${value}"
-}
-
 truthy() {
   case "${1:-}" in
     1|true|TRUE|yes|YES|y|Y) return 0 ;;

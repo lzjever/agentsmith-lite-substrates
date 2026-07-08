@@ -161,7 +161,7 @@ substrate_allowed_image_archive() {
     juicefs-csi-node-driver-registrar) printf '%s\n' "images/oci/juicefs-csi-node-driver-registrar.tar" ;;
     juicefs-csi-provisioner) printf '%s\n' "images/oci/juicefs-csi-provisioner.tar" ;;
     juicefs-csi-resizer) printf '%s\n' "images/oci/juicefs-csi-resizer.tar" ;;
-    rwx-smoke) printf '%s\n' "images/oci/rwx-smoke.tar" ;;
+    rwx-check) printf '%s\n' "images/oci/rwx-check.tar" ;;
     *) return 1 ;;
   esac
 }
@@ -177,7 +177,7 @@ is_substrate_allowed_oci_archive() {
     images/oci/juicefs-csi-node-driver-registrar.tar|\
     images/oci/juicefs-csi-provisioner.tar|\
     images/oci/juicefs-csi-resizer.tar|\
-    images/oci/rwx-smoke.tar)
+    images/oci/rwx-check.tar)
       return 0
       ;;
   esac
@@ -500,7 +500,7 @@ validate_p1_real_cache() {
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-node-driver-registrar.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-provisioner.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-resizer.tar"
-  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/rwx-smoke.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/rwx-check.tar"
 
   require_executable_artifact "${cache_dir}" "bin/k3s"
   require_executable_artifact "${cache_dir}" "scripts/install-k3s.sh"
@@ -516,7 +516,7 @@ validate_p1_real_cache() {
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-node-driver-registrar" "images/oci/juicefs-csi-node-driver-registrar.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-provisioner" "images/oci/juicefs-csi-provisioner.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-resizer" "images/oci/juicefs-csi-resizer.tar"
-  require_image_lock_archive "${cache_dir}" "${lock_file}" "rwx-smoke" "images/oci/rwx-smoke.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "rwx-check" "images/oci/rwx-check.tar"
 
   local helm_image_name helm_image
   for helm_image_name in \

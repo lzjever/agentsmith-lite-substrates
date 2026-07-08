@@ -287,14 +287,10 @@ offline_install_run_doctor() {
   local cache_dir="$1"
   local env_file="$2"
   local secrets_file="$3"
-  local output_dir="$4"
-  local require_passed="${5:-allow-partial}"
-  local require_passed_context="${6:-existing-cloud live validation}"
-  local doctor_entrypoint="${7:-doctor}"
-  local doctor_install_mode="${8:-unspecified}"
-  local kubectl_bin report_file status
+  local require_passed="${4:-allow-partial}"
+  local require_passed_context="${5:-existing-cloud live validation}"
+  local kubectl_bin status
   kubectl_bin="$(cache_relative_path "${cache_dir}" "bin/kubectl" "kubectl binary")"
-  report_file="${output_dir}/doctor-report.json"
 
   set +e
   KUBECTL_BIN="${kubectl_bin}" \
@@ -302,10 +298,7 @@ offline_install_run_doctor() {
     "${OFFLINE_INSTALL_ROOT}/scripts/doctor.sh" \
     --env "${env_file}" \
     --secrets "${secrets_file}" \
-    --offline-cache "${cache_dir}" \
-    --report "${report_file}" \
-    --entrypoint "${doctor_entrypoint}" \
-    --install-mode "${doctor_install_mode}"
+    --offline-cache "${cache_dir}"
   status=$?
   set -e
 
@@ -315,16 +308,16 @@ offline_install_run_doctor() {
       ;;
     2)
       if [[ "${require_passed}" == "require-passed" ]]; then
-        die "${require_passed_context} requires passed doctor; doctor reported partial; see ${report_file}"
+        die "${require_passed_context} requires passed doctor; doctor returned partial; see doctor stdout/stderr above"
       else
-        warn "install-offline: doctor reported partial; see doctor report for live checks that remain unverified"
+        warn "install-offline: doctor returned partial; see doctor stdout/stderr above for live checks that remain unverified"
       fi
       ;;
     *)
       if [[ "${require_passed}" == "require-passed" ]]; then
-        die "${require_passed_context} requires passed doctor; doctor failed; see ${report_file}"
+        die "${require_passed_context} requires passed doctor; doctor failed; see doctor stdout/stderr above"
       else
-        die "doctor failed after offline install; see ${report_file}"
+        die "doctor failed after offline install; see doctor stdout/stderr above"
       fi
       ;;
   esac
@@ -395,7 +388,7 @@ offline_install_init_minio_bucket() {
     die "MinIO bucket init Job logs could not be read; refusing to continue"
   fi
   if ! grep -Fq "minio bucket ready" <<<"${logs}"; then
-    die "MinIO bucket init Job did not report bucket readiness"
+    die "MinIO bucket init Job did not confirm bucket readiness"
   fi
 }
 
@@ -439,7 +432,7 @@ offline_install_format_juicefs() {
     die "JuiceFS format Job logs could not be read; refusing to apply JuiceFS PVC contract"
   fi
   if ! grep -Fq "agentsmith-lite-juicefs-format: ok" <<<"${logs}"; then
-    die "JuiceFS format Job did not report a successful idempotent format"
+    die "JuiceFS format Job did not confirm a successful idempotent format"
   fi
 }
 
@@ -478,7 +471,7 @@ offline_install_init_postgres_databases() {
     die "Postgres init Job logs could not be read; refusing to continue"
   fi
   if ! grep -Fq "postgres init ready" <<<"${logs}"; then
-    die "Postgres init Job did not report database readiness"
+    die "Postgres init Job did not confirm database readiness"
   fi
 }
 
@@ -486,12 +479,9 @@ run_p1_real_existing_cloud_validation() {
   local cache_dir="$1"
   local env_file="$2"
   local secrets_file="$3"
-  local output_dir="$4"
-  local doctor_entrypoint="${5:-install-offline}"
-  local doctor_install_mode="${6:-existing-cloud}"
 
   info "install-offline: existing-cloud mode; skipping self-hosted PostgreSQL, MinIO, and k3s mutation"
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed" "existing-cloud live validation" "${doctor_entrypoint}" "${doctor_install_mode}"
+  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "require-passed" "existing-cloud live validation"
 }
 
 run_p1_real_offline_install() {
@@ -499,8 +489,6 @@ run_p1_real_offline_install() {
   local env_file="$2"
   local secrets_file="$3"
   local output_dir="$4"
-  local doctor_entrypoint="${5:-install-offline}"
-  local doctor_install_mode="${6:-self-hosted}"
   local render_dir namespace_manifest rendered_namespace_manifest
 
   render_dir="${output_dir}/rendered/offline-install"
@@ -536,5 +524,5 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
   offline_install_wait_juicefs_pvc_bound "${cache_dir}" "${env_file}"
 
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "${output_dir}" "require-passed" "self-hosted live install" "${doctor_entrypoint}" "${doctor_install_mode}"
+  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "require-passed" "self-hosted live install"
 }

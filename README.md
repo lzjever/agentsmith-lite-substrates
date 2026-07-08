@@ -15,7 +15,7 @@ This first public-ready skeleton is validate-first:
 - produces `cacheMode: p1-real` offline caches from a non-secret artifact lock
 - provides `scripts/prepare-offline-cache.sh` as a thin one-command helper that
   downloads fixed-version substrate artifacts, resolves/export images with
-  `skopeo`, writes `out/artifacts/offline-artifacts.env`, and delegates to the
+  `skopeo`, writes `out/artifacts/offline-artifacts.env`, and calls the
   p1-real producer
 - includes namespace bootstrap and offline image import helper artifacts in
   p1-real caches
@@ -36,11 +36,9 @@ This first public-ready skeleton is validate-first:
   images while leaving StorageClass/Secret/PVC ownership to the substrate
   contract
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
-- provides `scripts/preflight.sh` as a substrate-repo thin wrapper over
-  `scripts/doctor.sh --dry-run` for local/static configuration diagnostics
 - runs a substrate-only doctor for static dry-run checks and live K8s,
-  PostgreSQL, S3 object read/write/delete, JuiceFS PVC, and two-Job RWX smoke
-  checks
+  PostgreSQL, S3 object read/write/delete, JuiceFS PVC, and two-Job RWX
+  write/read checks
 
 ## Quick Start
 
@@ -58,24 +56,21 @@ scripts/validate-env.sh \
   --env out/substrate.env \
   --secrets out/substrate.secrets.env
 
-scripts/preflight.sh \
-  --env out/substrate.env \
-  --secrets out/substrate.secrets.env \
-  --cache dist/offline-cache
-
 scripts/doctor.sh \
   --env out/substrate.env \
   --secrets out/substrate.secrets.env \
+  --offline-cache dist/offline-cache \
   --dry-run
 ```
 
-Live doctor runs Postgres, S3, and RWX probes from the cluster network. It reads
-digest-pinned `name: postgres`, `name: minio-client`, and `name: rwx-smoke`
-images from `--offline-cache images/images.lock`, or accepts explicit
-`--postgres-probe-image`, `--s3-probe-image`, and `--rwx-smoke-image`
-`image@sha256:<digest>` refs. The Postgres probes run read-only `select 1`
-checks for both `POSTGRES_APP_URL` and `JUICEFS_META_URL`; the RWX smoke runs
-only after the configured JuiceFS PVC is `Bound`.
+Live doctor runs Postgres, S3, and RWX checks from the cluster network. It
+reads digest-pinned `name: postgres`, `name: minio-client`, and
+`name: rwx-check` images from `--offline-cache images/images.lock`, or accepts
+explicit `--postgres-probe-image`, `--s3-probe-image`, and
+`--rwx-check-image` `image@sha256:<digest>` refs. The Postgres probes run
+read-only `select 1` checks for both `POSTGRES_APP_URL` and
+`JUICEFS_META_URL`; the RWX write/read check runs only after the configured
+JuiceFS PVC is `Bound`.
 
 For an offline contract skeleton dry-run:
 
@@ -148,18 +143,6 @@ contract is `AUTH_MODE=builtin_admin`; non-builtin auth and non-empty
 `OIDC_CLIENT_SECRET` are invalid. The v1 env shape may still include empty OIDC
 placeholder keys so older consumers can filter them safely.
 
-## Preflight Boundary
-
-`scripts/preflight.sh` is a command in this substrate repo, not a third repo or
-external evidence surface. It accepts `--env`, `--secrets`,
-`--cache`/`--offline-cache`, and `--report`, then delegates to
-`scripts/doctor.sh --dry-run`.
-
-Preflight is static only: it does not run app checks, Botified checks, API smoke,
-live kubectl, Postgres/S3/RWX probes, Helm, k3s install, downloads, or image
-import. It does not replace live doctor, clean-VM install evidence,
-disconnected-VM validation, or existing-cloud validation.
-
 ## Secret Boundary
 
 `substrate.env` is non-secret and can be attached to support tickets.
@@ -183,7 +166,6 @@ scripts/install-online.sh --cache dist/offline-cache --config config/substrates.
 scripts/install-offline.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.secrets.env
 scripts/validate-juicefs-contract.sh --env out/substrate.env --secrets out/substrate.secrets.env
-scripts/preflight.sh --env out/substrate.env --secrets out/substrate.secrets.env --cache dist/offline-cache
-scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env --dry-run
+scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env --offline-cache dist/offline-cache --dry-run
 scripts/reset-dev.sh --config config/substrates.self-hosted.example.yaml --destroy-data
 ```

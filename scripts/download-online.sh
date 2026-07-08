@@ -137,7 +137,7 @@ write_p1_real_cache() {
   local juicefs_image juicefs_url juicefs_sha
   local liveness_image liveness_url liveness_sha registrar_image registrar_url registrar_sha
   local provisioner_image provisioner_url provisioner_sha resizer_image resizer_url resizer_sha
-  local rwx_smoke_image rwx_smoke_url rwx_smoke_sha
+  local rwx_check_image rwx_check_url rwx_check_sha
   k3s_url="$(artifact_lock_required_url "${lock_file}" "K3S_BINARY_URL")"
   k3s_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_BINARY_SHA256")"
   install_url="$(artifact_lock_required_url "${lock_file}" "K3S_INSTALL_SCRIPT_URL")"
@@ -174,9 +174,9 @@ write_p1_real_cache() {
   resizer_image="$(artifact_lock_required_helm_image "${lock_file}" "JUICEFS_CSI_RESIZER_IMAGE")"
   resizer_url="$(artifact_lock_required_url "${lock_file}" "JUICEFS_CSI_RESIZER_ARCHIVE_URL")"
   resizer_sha="$(artifact_lock_required_sha256 "${lock_file}" "JUICEFS_CSI_RESIZER_ARCHIVE_SHA256")"
-  rwx_smoke_image="$(artifact_lock_required_digest_image "${lock_file}" "RWX_SMOKE_IMAGE")"
-  rwx_smoke_url="$(artifact_lock_required_url "${lock_file}" "RWX_SMOKE_ARCHIVE_URL")"
-  rwx_smoke_sha="$(artifact_lock_required_sha256 "${lock_file}" "RWX_SMOKE_ARCHIVE_SHA256")"
+  rwx_check_image="$(artifact_lock_required_digest_image "${lock_file}" "RWX_CHECK_IMAGE")"
+  rwx_check_url="$(artifact_lock_required_url "${lock_file}" "RWX_CHECK_ARCHIVE_URL")"
+  rwx_check_sha="$(artifact_lock_required_sha256 "${lock_file}" "RWX_CHECK_ARCHIVE_SHA256")"
 
   prepare_output_dir "${dir}"
 
@@ -194,7 +194,7 @@ write_p1_real_cache() {
   download_verified_artifact "JUICEFS_CSI_NODE_DRIVER_REGISTRAR_ARCHIVE_URL" "${registrar_url}" "${registrar_sha}" "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar"
   download_verified_artifact "JUICEFS_CSI_PROVISIONER_ARCHIVE_URL" "${provisioner_url}" "${provisioner_sha}" "${dir}/images/oci/juicefs-csi-provisioner.tar"
   download_verified_artifact "JUICEFS_CSI_RESIZER_ARCHIVE_URL" "${resizer_url}" "${resizer_sha}" "${dir}/images/oci/juicefs-csi-resizer.tar"
-  download_verified_artifact "RWX_SMOKE_ARCHIVE_URL" "${rwx_smoke_url}" "${rwx_smoke_sha}" "${dir}/images/oci/rwx-smoke.tar"
+  download_verified_artifact "RWX_CHECK_ARCHIVE_URL" "${rwx_check_url}" "${rwx_check_sha}" "${dir}/images/oci/rwx-check.tar"
   chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl" "${dir}/bin/helm"
 
   cat >"${dir}/scripts/import-images.sh" <<'EOF_IMPORT'
@@ -366,7 +366,7 @@ EOF_IMPORT
   cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
 
   local k3s_sum install_sum airgap_sum kubectl_sum helm_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum minio_client_sum juicefs_sum
-  local liveness_sum registrar_sum provisioner_sum resizer_sum rwx_smoke_sum lock_sum manifest_sum
+  local liveness_sum registrar_sum provisioner_sum resizer_sum rwx_check_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
   airgap_sum="$(sha256_file "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")"
@@ -383,7 +383,7 @@ EOF_IMPORT
   registrar_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-node-driver-registrar.tar")"
   provisioner_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-provisioner.tar")"
   resizer_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-resizer.tar")"
-  rwx_smoke_sum="$(sha256_file "${dir}/images/oci/rwx-smoke.tar")"
+  rwx_check_sum="$(sha256_file "${dir}/images/oci/rwx-check.tar")"
 
   cat >"${dir}/images/images.lock" <<EOF_LOCK
 schemaVersion: agentsmith-lite.substrate.images/v1
@@ -420,10 +420,10 @@ images:
     image: ${resizer_image}
     archive: images/oci/juicefs-csi-resizer.tar
     sha256: ${resizer_sum}
-  - name: rwx-smoke
-    image: ${rwx_smoke_image}
-    archive: images/oci/rwx-smoke.tar
-    sha256: ${rwx_smoke_sum}
+  - name: rwx-check
+    image: ${rwx_check_image}
+    archive: images/oci/rwx-check.tar
+    sha256: ${rwx_check_sum}
 EOF_LOCK
   lock_sum="$(sha256_file "${dir}/images/images.lock")"
 
@@ -482,8 +482,8 @@ artifacts:
   - path: images/oci/juicefs-csi-resizer.tar
     sha256: ${resizer_sum}
     kind: oci-archive
-  - path: images/oci/rwx-smoke.tar
-    sha256: ${rwx_smoke_sum}
+  - path: images/oci/rwx-check.tar
+    sha256: ${rwx_check_sum}
     kind: oci-archive
 EOF_MANIFEST
   manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
@@ -507,12 +507,12 @@ ${liveness_sum}  images/oci/juicefs-csi-liveness-probe.tar
 ${registrar_sum}  images/oci/juicefs-csi-node-driver-registrar.tar
 ${provisioner_sum}  images/oci/juicefs-csi-provisioner.tar
 ${resizer_sum}  images/oci/juicefs-csi-resizer.tar
-${rwx_smoke_sum}  images/oci/rwx-smoke.tar
+${rwx_check_sum}  images/oci/rwx-check.tar
 EOF_SUMS
 
   validate_offline_cache "${dir}"
   info "wrote p1-real offline cache: ${dir}"
-  info "note: install-offline.sh can run the cached p1-real chain through JuiceFS CSI Helm install, format bootstrap, PVC Bound wait, and doctor RWX smoke"
+  info "note: install-offline.sh can run the cached p1-real chain through JuiceFS CSI Helm install, format bootstrap, PVC Bound wait, and doctor RWX write/read check"
 }
 
 if [[ -n "${artifact_lock}" ]]; then

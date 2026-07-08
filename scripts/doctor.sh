@@ -12,12 +12,12 @@ source "${ROOT_DIR}/scripts/lib/postgres.sh"
 source "${ROOT_DIR}/scripts/lib/postgres_probe.sh"
 # shellcheck source=lib/s3_probe.sh
 source "${ROOT_DIR}/scripts/lib/s3_probe.sh"
-# shellcheck source=lib/rwx_smoke.sh
-source "${ROOT_DIR}/scripts/lib/rwx_smoke.sh"
+# shellcheck source=lib/rwx_write_read_check.sh
+source "${ROOT_DIR}/scripts/lib/rwx_write_read_check.sh"
 
 usage() {
   cat <<'EOF_USAGE'
-Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--postgres-probe-image image@sha256:<digest>] [--s3-probe-image image@sha256:<digest>] [--rwx-smoke-image image@sha256:<digest>] [--dry-run] [--report out/doctor-report.json]
+Usage: scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env [--offline-cache dist/offline-cache] [--postgres-probe-image image@sha256:<digest>] [--s3-probe-image image@sha256:<digest>] [--rwx-check-image image@sha256:<digest>] [--dry-run]
 
 Substrate-only checks:
   K8s reachability/namespace, PostgreSQL URL/connectivity, S3 credential presence/probe,
@@ -27,7 +27,9 @@ Substrate-only checks:
 cluster, Postgres probe, S3, JuiceFS, or RWX checks partial or failed; skipped
 live checks are never treated as a full pass.
 
-This script does not check app delivery smoke.
+This script does not check app deployment, API, or task runtime behavior.
+It prints "name: status - message" lines and exits 0 for passed, 2 for
+partial, or 1 for failed.
 EOF_USAGE
 }
 
@@ -36,11 +38,8 @@ secrets_file=""
 offline_cache=""
 postgres_probe_image=""
 s3_probe_image=""
-rwx_smoke_image=""
-report_file=""
+rwx_check_image=""
 dry_run=false
-context_entrypoint="doctor"
-context_install_mode="unspecified"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -69,29 +68,14 @@ while [[ $# -gt 0 ]]; do
       s3_probe_image="${2:-}"
       shift 2
       ;;
-    --rwx-smoke-image)
+    --rwx-check-image)
       require_cli_value "$1" "${2-}"
-      rwx_smoke_image="${2:-}"
+      rwx_check_image="${2:-}"
       shift 2
       ;;
     --dry-run)
       dry_run=true
       shift
-      ;;
-    --report)
-      require_cli_value "$1" "${2-}"
-      report_file="${2:-}"
-      shift 2
-      ;;
-    --entrypoint)
-      require_cli_value "$1" "${2-}"
-      context_entrypoint="${2:-}"
-      shift 2
-      ;;
-    --install-mode)
-      require_cli_value "$1" "${2-}"
-      context_install_mode="${2:-}"
-      shift 2
       ;;
     -h|--help)
       usage
@@ -105,34 +89,20 @@ done
 
 [[ -n "${env_file}" ]] || die "--env is required"
 [[ -n "${secrets_file}" ]] || die "--secrets is required"
-case "${context_entrypoint}" in
-  doctor|preflight|install-online|install-offline) ;;
-  *) die "--entrypoint must be doctor, preflight, install-online, or install-offline" ;;
-esac
-case "${context_install_mode}" in
-  self-hosted|existing-cloud|unspecified) ;;
-  *) die "--install-mode must be self-hosted, existing-cloud, or unspecified" ;;
-esac
-if [[ -z "${report_file}" ]]; then
-  report_file="$(dirname "${env_file}")/doctor-report.json"
-fi
 
-checks_json=()
 failed=false
 partial=false
 resolved_postgres_probe_image=""
 doctor_postgres_probe_image_error=""
 resolved_s3_probe_image=""
 doctor_s3_probe_image_error=""
-resolved_rwx_smoke_image=""
-doctor_rwx_smoke_image_error=""
+resolved_rwx_check_image=""
+doctor_rwx_check_image_error=""
 
 add_check() {
   local name="$1"
   local status="$2"
   local message="$3"
-  local boundary="${4:-substrate}"
-  checks_json+=("    {\"name\": \"$(json_escape "${name}")\", \"status\": \"$(json_escape "${status}")\", \"boundary\": \"$(json_escape "${boundary}")\", \"message\": \"$(json_escape "${message}")\"}")
   case "${status}" in
     failed)
       failed=true
@@ -142,72 +112,6 @@ add_check() {
       ;;
   esac
   printf '%s: %s - %s\n' "${name}" "${status}" "${message}"
-}
-
-doctor_safe_cache_file() {
-  local cache_dir="$1"
-  local rel="$2"
-  local cache_root file resolved
-
-  [[ -n "${cache_dir}" && -d "${cache_dir}" ]] || return 1
-  cache_root="$(cd "${cache_dir}" && pwd -P)" || return 1
-  file="${cache_root}/${rel}"
-  [[ -f "${file}" && -r "${file}" ]] || return 1
-  resolved="$(realpath "${file}" 2>/dev/null || readlink -f "${file}" 2>/dev/null || true)"
-  [[ -n "${resolved}" ]] || resolved="${file}"
-  case "${resolved}" in
-    "${cache_root}/"*) ;;
-    *) return 1 ;;
-  esac
-  printf '%s\n' "${resolved}"
-}
-
-doctor_context_cache_mode() {
-  local cache_dir="$1"
-  local manifest_file mode
-
-  if [[ -z "${cache_dir}" ]]; then
-    printf '%s\n' "none"
-    return 0
-  fi
-  if ! manifest_file="$(doctor_safe_cache_file "${cache_dir}" "manifest.yaml")"; then
-    printf '%s\n' "invalid"
-    return 0
-  fi
-  mode="$(awk '
-    /^[[:space:]]*cacheMode:[[:space:]]*/ {
-      value=$0
-      sub(/^[[:space:]]*cacheMode:[[:space:]]*/, "", value)
-      gsub(/^"|"$/, "", value)
-      gsub(/^\047|\047$/, "", value)
-      print value
-      found=1
-    }
-    END { if (!found) exit 1 }
-  ' "${manifest_file}" 2>/dev/null || true)"
-  case "${mode}" in
-    p0-contract|p1-real)
-      printf '%s\n' "${mode}"
-      ;;
-    *)
-      printf '%s\n' "invalid"
-      ;;
-  esac
-}
-
-doctor_context_file_sha256() {
-  local cache_dir="$1"
-  local rel="$2"
-  local file sum
-
-  if ! file="$(doctor_safe_cache_file "${cache_dir}" "${rel}")"; then
-    return 0
-  fi
-  sum="$(sha256_file "${file}" 2>/dev/null || true)"
-  if [[ "${sum}" =~ ^[0-9a-f]{64}$ ]]; then
-    printf '%s\n' "${sum}"
-  fi
-  return 0
 }
 
 doctor_check_postgres_url() {
@@ -351,47 +255,182 @@ doctor_resolve_s3_probe_image() {
   return 1
 }
 
-doctor_validate_rwx_smoke_image_ref() {
+doctor_validate_rwx_check_image_ref() {
   local image_ref="$1"
   if [[ ! "${image_ref}" =~ @sha256:[0-9a-f]{64}$ ]]; then
-    doctor_rwx_smoke_image_error="RWX smoke image must be digest-pinned with @sha256:<64 lowercase hex>"
+    doctor_rwx_check_image_error="RWX check image must be digest-pinned with @sha256:<64 lowercase hex>"
     return 1
   fi
   if is_app_owned_image_ref "${image_ref}"; then
-    doctor_rwx_smoke_image_error="RWX smoke image must not reference app-owned images"
+    doctor_rwx_check_image_error="RWX check image must not reference app-owned images"
     return 1
   fi
   return 0
 }
 
-doctor_resolve_rwx_smoke_image() {
+doctor_resolve_rwx_check_image() {
   local lock_file image_ref
-  resolved_rwx_smoke_image=""
-  doctor_rwx_smoke_image_error=""
+  resolved_rwx_check_image=""
+  doctor_rwx_check_image_error=""
 
-  if [[ -n "${rwx_smoke_image}" ]]; then
-    doctor_validate_rwx_smoke_image_ref "${rwx_smoke_image}" || return 1
-    resolved_rwx_smoke_image="${rwx_smoke_image}"
+  if [[ -n "${rwx_check_image}" ]]; then
+    doctor_validate_rwx_check_image_ref "${rwx_check_image}" || return 1
+    resolved_rwx_check_image="${rwx_check_image}"
     return 0
   fi
 
   if [[ -n "${offline_cache}" ]]; then
     lock_file="${offline_cache}/images/images.lock"
     if [[ ! -f "${lock_file}" ]]; then
-      doctor_rwx_smoke_image_error="RWX smoke image is required after PVC Bound; offline cache images.lock was not readable"
+      doctor_rwx_check_image_error="RWX check image is required after PVC Bound; offline cache images.lock was not readable"
       return 1
     fi
-    if ! image_ref="$(images_lock_image_ref "${lock_file}" "rwx-smoke" 2>/dev/null)"; then
-      doctor_rwx_smoke_image_error="RWX smoke image is required after PVC Bound; offline cache images.lock is missing name: rwx-smoke"
+    if ! image_ref="$(images_lock_image_ref "${lock_file}" "rwx-check" 2>/dev/null)"; then
+      doctor_rwx_check_image_error="RWX check image is required after PVC Bound; offline cache images.lock is missing name: rwx-check"
       return 1
     fi
-    doctor_validate_rwx_smoke_image_ref "${image_ref}" || return 1
-    resolved_rwx_smoke_image="${image_ref}"
+    doctor_validate_rwx_check_image_ref "${image_ref}" || return 1
+    resolved_rwx_check_image="${image_ref}"
     return 0
   fi
 
-  doctor_rwx_smoke_image_error="RWX smoke image is required after PVC Bound; supply --offline-cache with images.lock name: rwx-smoke or --rwx-smoke-image"
+  doctor_rwx_check_image_error="RWX check image is required after PVC Bound; supply --offline-cache with images.lock name: rwx-check or --rwx-check-image"
   return 1
+}
+
+doctor_base64() {
+  printf '%s' "$1" | base64 | tr -d '\n'
+}
+
+doctor_kubectl_jsonpath() {
+  local value
+  value="$("${kubectl_cmd[@]}" "${kubectl_args[@]}" "$@" 2>/dev/null)" || return 1
+  printf '%s' "${value}"
+}
+
+doctor_live_value_matches() {
+  local label="$1"
+  local expected="$2"
+  shift 2
+  local observed
+
+  if ! observed="$(doctor_kubectl_jsonpath "$@")" || [[ -z "${observed}" ]]; then
+    doctor_juicefs_contract_error="live JuiceFS ${label} could not be read"
+    return 1
+  fi
+  if [[ "${observed}" != "${expected}" ]]; then
+    doctor_juicefs_contract_error="live JuiceFS ${label} does not match substrate contract"
+    return 1
+  fi
+  return 0
+}
+
+doctor_live_named_value_matches() {
+  local label="$1"
+  local expected_name="$2"
+  local expected="$3"
+  shift 3
+  local observed
+
+  if ! observed="$(doctor_kubectl_jsonpath "$@")" || [[ -z "${observed}" ]]; then
+    doctor_juicefs_contract_error="live JuiceFS ${label} could not be read"
+    return 1
+  fi
+  if [[ "${observed}" != "${expected}" ]]; then
+    doctor_juicefs_contract_error="live JuiceFS ${label} does not match ${expected_name}"
+    return 1
+  fi
+  return 0
+}
+
+doctor_live_optional_value_matches() {
+  local label="$1"
+  local expected="$2"
+  shift 2
+  local observed
+
+  if ! observed="$(doctor_kubectl_jsonpath "$@")"; then
+    doctor_juicefs_contract_error="live JuiceFS ${label} could not be read"
+    return 1
+  fi
+  if [[ -n "${observed}" && "${observed}" != "${expected}" ]]; then
+    doctor_juicefs_contract_error="live JuiceFS ${label} does not match substrate contract"
+    return 1
+  fi
+  return 0
+}
+
+doctor_live_secret_data_matches() {
+  local key="$1"
+  local expected_value="$2"
+  local expected_b64
+  expected_b64="$(doctor_base64 "${expected_value}")"
+  doctor_live_value_matches \
+    "Secret data.${key}" \
+    "${expected_b64}" \
+    -n "${namespace}" get secret "${juicefs_secret_name}" -o "jsonpath={.data['${key}']}"
+}
+
+doctor_live_juicefs_contract_matches() {
+  doctor_juicefs_contract_error=""
+
+  doctor_live_named_value_matches \
+    "StorageClass provisioner" \
+    "JUICEFS_CSI_DRIVER" \
+    "${juicefs_csi_driver}" \
+    get storageclass "${juicefs_storage_class}" -o "jsonpath={.provisioner}" \
+    || return 1
+
+  doctor_live_optional_value_matches \
+    "StorageClass provisioner secret name" \
+    "${juicefs_secret_name}" \
+    get storageclass "${juicefs_storage_class}" -o 'jsonpath={.parameters.csi\.storage\.k8s\.io/provisioner-secret-name}' \
+    || return 1
+  doctor_live_optional_value_matches \
+    "StorageClass provisioner secret namespace" \
+    "${namespace}" \
+    get storageclass "${juicefs_storage_class}" -o 'jsonpath={.parameters.csi\.storage\.k8s\.io/provisioner-secret-namespace}' \
+    || return 1
+  doctor_live_optional_value_matches \
+    "StorageClass node-publish secret name" \
+    "${juicefs_secret_name}" \
+    get storageclass "${juicefs_storage_class}" -o 'jsonpath={.parameters.csi\.storage\.k8s\.io/node-publish-secret-name}' \
+    || return 1
+  doctor_live_optional_value_matches \
+    "StorageClass node-publish secret namespace" \
+    "${namespace}" \
+    get storageclass "${juicefs_storage_class}" -o 'jsonpath={.parameters.csi\.storage\.k8s\.io/node-publish-secret-namespace}' \
+    || return 1
+
+  doctor_live_secret_data_matches "name" "$(env_value_or_empty "${env_file}" JUICEFS_VOLUME_NAME)" || return 1
+  doctor_live_secret_data_matches "metaurl" "${juicefs_meta}" || return 1
+  doctor_live_secret_data_matches "storage" "s3" || return 1
+  doctor_live_secret_data_matches "bucket" "$(env_value_or_empty "${env_file}" JUICEFS_BUCKET)" || return 1
+  doctor_live_secret_data_matches "access-key" "${s3_access}" || return 1
+  doctor_live_secret_data_matches "secret-key" "${s3_secret}" || return 1
+
+  doctor_live_named_value_matches \
+    "PVC storageClassName" \
+    "JUICEFS_STORAGE_CLASS" \
+    "${juicefs_storage_class}" \
+    -n "${namespace}" get pvc "${juicefs_pvc_name}" -o "jsonpath={.spec.storageClassName}" \
+    || return 1
+
+  local access_modes
+  if ! access_modes="$(doctor_kubectl_jsonpath -n "${namespace}" get pvc "${juicefs_pvc_name}" -o "jsonpath={.spec.accessModes[*]}")" \
+    || [[ -z "${access_modes}" ]]; then
+    doctor_juicefs_contract_error="live JuiceFS PVC accessModes could not be read"
+    return 1
+  fi
+  case " ${access_modes} " in
+    *" ReadWriteMany "*) ;;
+    *)
+      doctor_juicefs_contract_error="live JuiceFS PVC accessModes do not include ReadWriteMany"
+      return 1
+      ;;
+  esac
+
+  return 0
 }
 
 if validate_output="$(validate_env_contract "${env_file}" "${secrets_file}" 2>&1)"; then
@@ -499,65 +538,70 @@ if [[ "${juicefs_meta}" =~ ^postgres(ql)?:// ]]; then
     printf '%s\n' "${juicefs_output}"
     if [[ "${dry_run}" == "true" ]]; then
       add_check "juicefs-csi" "passed" "dry-run static: rendered JuiceFS Secret, StorageClass, and PVC contract is valid" "substrate-csi-secret"
-      add_check "rwx" "passed" "dry-run static: PVC contract requests ReadWriteMany; skipped two-Job RWX smoke"
+      add_check "rwx-check" "passed" "dry-run static: PVC contract requests ReadWriteMany; skipped two-Job RWX write/read check"
     elif [[ "${kubeconfig_unreadable}" == "true" ]]; then
       add_check "juicefs-csi" "partial" "configured KUBECONFIG_PATH is not readable; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
-      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires a readable configured KUBECONFIG_PATH; RWX was not verified"
+      add_check "rwx-check" "partial" "live two-Job ReadWriteMany write/read check requires a readable configured KUBECONFIG_PATH; RWX was not verified"
     elif [[ "${kubectl_available}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "kubectl not found; live JuiceFS Secret, StorageClass, and PVC were not verified" "substrate-csi-secret"
-      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires kubectl; RWX was not verified"
+      add_check "rwx-check" "partial" "live two-Job ReadWriteMany write/read check requires kubectl; RWX was not verified"
     elif [[ "${cluster_reachable}" != "true" ]]; then
       add_check "juicefs-csi" "partial" "cluster namespace is not reachable; live JuiceFS resources were not verified" "substrate-csi-secret"
-      add_check "rwx" "partial" "live two-job ReadWriteMany smoke requires a reachable namespace; RWX was not verified"
+      add_check "rwx-check" "partial" "live two-Job ReadWriteMany write/read check requires a reachable namespace; RWX was not verified"
     elif ! "${kubectl_cmd[@]}" "${kubectl_args[@]}" get csidriver "${juicefs_csi_driver}" >/dev/null 2>&1; then
       add_check "juicefs-csi" "failed" "live JuiceFS CSIDriver ${juicefs_csi_driver} is missing" "substrate-csi-secret"
-      add_check "rwx" "failed" "RWX was not verified because live JuiceFS CSIDriver ${juicefs_csi_driver} is missing"
+      add_check "rwx-check" "failed" "RWX was not verified because live JuiceFS CSIDriver ${juicefs_csi_driver} is missing"
     elif "${kubectl_cmd[@]}" "${kubectl_args[@]}" get storageclass "${juicefs_storage_class}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get secret "${juicefs_secret_name}" >/dev/null 2>&1 \
       && "${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" >/dev/null 2>&1; then
-      pvc_phase=""
-      if pvc_phase="$("${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" -o jsonpath={.status.phase} 2>/dev/null)" \
-        && [[ -n "${pvc_phase}" ]]; then
-        case "${pvc_phase}" in
-          Bound)
-            add_check "juicefs-csi" "passed" "live JuiceFS PVC phase is Bound" "substrate-csi-secret"
-            if doctor_resolve_rwx_smoke_image; then
-              if rwx_output="$(rwx_smoke_run "${namespace}" "${juicefs_pvc_name}" "${resolved_rwx_smoke_image}" "${kubectl_cmd[0]}" "${kubectl_args[@]}" 2>&1)"; then
-                printf '%s\n' "${rwx_output}"
-                add_check "rwx" "passed" "live two-job ReadWriteMany smoke passed against PVC ${juicefs_pvc_name}"
+      if doctor_live_juicefs_contract_matches; then
+        pvc_phase=""
+        if pvc_phase="$("${kubectl_cmd[@]}" "${kubectl_args[@]}" -n "${namespace}" get pvc "${juicefs_pvc_name}" -o jsonpath={.status.phase} 2>/dev/null)" \
+          && [[ -n "${pvc_phase}" ]]; then
+          case "${pvc_phase}" in
+            Bound)
+              add_check "juicefs-csi" "passed" "live JuiceFS PVC phase is Bound and StorageClass, Secret, and PVC contract matches" "substrate-csi-secret"
+              if doctor_resolve_rwx_check_image; then
+                if rwx_output="$(rwx_write_read_check_run "${namespace}" "${juicefs_pvc_name}" "${resolved_rwx_check_image}" "${kubectl_cmd[0]}" "${kubectl_args[@]}" 2>&1)"; then
+                  printf '%s\n' "${rwx_output}"
+                  add_check "rwx-check" "passed" "live two-Job ReadWriteMany write/read check passed against PVC ${juicefs_pvc_name}"
+                else
+                  printf '%s\n' "${rwx_output}" >&2
+                  add_check "rwx-check" "failed" "live two-Job ReadWriteMany write/read check failed; see doctor output for sanitized Job logs"
+                fi
               else
-                printf '%s\n' "${rwx_output}" >&2
-                add_check "rwx" "failed" "live two-job ReadWriteMany smoke failed; see doctor output for sanitized Job logs"
+                add_check "rwx-check" "failed" "${doctor_rwx_check_image_error}"
               fi
-            else
-              add_check "rwx" "failed" "${doctor_rwx_smoke_image_error}"
-            fi
-            ;;
-          Pending|Lost)
-            add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is ${pvc_phase}, expected Bound" "substrate-csi-secret"
-            add_check "rwx" "failed" "RWX was not verified because live JuiceFS PVC phase is ${pvc_phase}, expected Bound"
-            ;;
-          *)
-            add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is not Bound" "substrate-csi-secret"
-            add_check "rwx" "failed" "RWX was not verified because live JuiceFS PVC phase is not Bound"
-            ;;
-        esac
+              ;;
+            Pending|Lost)
+              add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is ${pvc_phase}, expected Bound" "substrate-csi-secret"
+              add_check "rwx-check" "failed" "RWX was not verified because live JuiceFS PVC phase is ${pvc_phase}, expected Bound"
+              ;;
+            *)
+              add_check "juicefs-csi" "failed" "live JuiceFS PVC phase is not Bound" "substrate-csi-secret"
+              add_check "rwx-check" "failed" "RWX was not verified because live JuiceFS PVC phase is not Bound"
+              ;;
+          esac
+        else
+          add_check "juicefs-csi" "failed" "live JuiceFS PVC phase could not be read" "substrate-csi-secret"
+          add_check "rwx-check" "failed" "RWX was not verified because live JuiceFS PVC phase could not be read"
+        fi
       else
-        add_check "juicefs-csi" "failed" "live JuiceFS PVC phase could not be read" "substrate-csi-secret"
-        add_check "rwx" "failed" "RWX was not verified because live JuiceFS PVC phase could not be read"
+        add_check "juicefs-csi" "failed" "${doctor_juicefs_contract_error}" "substrate-csi-secret"
+        add_check "rwx-check" "failed" "RWX was not verified because live JuiceFS contract did not match"
       fi
     else
       add_check "juicefs-csi" "failed" "live JuiceFS StorageClass, Secret, or PVC is missing" "substrate-csi-secret"
-      add_check "rwx" "failed" "RWX was not verified because live JuiceFS StorageClass, Secret, or PVC is missing"
+      add_check "rwx-check" "failed" "RWX was not verified because live JuiceFS StorageClass, Secret, or PVC is missing"
     fi
   else
     printf '%s\n' "${juicefs_output}" >&2
     add_check "juicefs-csi" "failed" "rendered JuiceFS CSI static contract is invalid" "substrate-csi-secret"
-    add_check "rwx" "failed" "RWX cannot be checked without a valid JuiceFS PVC contract"
+    add_check "rwx-check" "failed" "RWX cannot be checked without a valid JuiceFS PVC contract"
   fi
 else
   add_check "juicefs-csi" "failed" "JUICEFS_META_URL shape is invalid" "substrate-csi-secret"
-  add_check "rwx" "failed" "RWX cannot be checked without complete JuiceFS config"
+  add_check "rwx-check" "failed" "RWX cannot be checked without complete JuiceFS config"
 fi
 
 if [[ -n "${offline_cache}" ]]; then
@@ -581,7 +625,6 @@ else
   add_check "offline-cache" "skipped" "no --offline-cache supplied"
 fi
 
-mkdir -p "$(dirname "${report_file}")"
 overall="passed"
 if [[ "${failed}" == "true" ]]; then
   overall="failed"
@@ -589,62 +632,17 @@ elif [[ "${partial}" == "true" ]]; then
   overall="partial"
 fi
 
-context_cache_mode="$(doctor_context_cache_mode "${offline_cache}")"
-context_manifest_sha256=""
-context_images_lock_sha256=""
-if [[ -n "${offline_cache}" ]]; then
-  context_manifest_sha256="$(doctor_context_file_sha256 "${offline_cache}" "manifest.yaml")"
-  context_images_lock_sha256="$(doctor_context_file_sha256 "${offline_cache}" "images/images.lock")"
-fi
-context_json=(
-  "    \"entrypoint\": \"$(json_escape "${context_entrypoint}")\""
-  "    \"installMode\": \"$(json_escape "${context_install_mode}")\""
-  "    \"cacheMode\": \"$(json_escape "${context_cache_mode}")\""
-)
-if [[ -n "${context_manifest_sha256}" ]]; then
-  context_json+=("    \"offlineCacheManifestSha256\": \"${context_manifest_sha256}\"")
-fi
-if [[ -n "${context_images_lock_sha256}" ]]; then
-  context_json+=("    \"imagesLockSha256\": \"${context_images_lock_sha256}\"")
-fi
-
-{
-  printf '{\n'
-  printf '  "schemaVersion": "agentsmith-lite.substrate.doctor/v1",\n'
-  printf '  "dryRun": %s,\n' "${dry_run}"
-  printf '  "overallStatus": "%s",\n' "${overall}"
-  printf '  "scope": "substrate-only",\n'
-  printf '  "context": {\n'
-  for i in "${!context_json[@]}"; do
-    printf '%s' "${context_json[$i]}"
-    if [[ "${i}" -lt $((${#context_json[@]} - 1)) ]]; then
-      printf ','
-    fi
-    printf '\n'
-  done
-  printf '  },\n'
-  printf '  "secretBoundary": "S3 and JuiceFS raw credentials are substrate/CSI scoped and redacted",\n'
-  printf '  "checks": [\n'
-  for i in "${!checks_json[@]}"; do
-    printf '%s' "${checks_json[$i]}"
-    if [[ "${i}" -lt $((${#checks_json[@]} - 1)) ]]; then
-      printf ','
-    fi
-    printf '\n'
-  done
-  printf '  ]\n'
-  printf '}\n'
-} >"${report_file}"
-
-info "doctor report written: ${report_file}"
 case "${overall}" in
   passed)
+    info "doctor passed"
     exit 0
     ;;
   partial)
+    warn "doctor partial"
     exit 2
     ;;
   failed)
+    warn "doctor failed"
     exit 1
     ;;
 esac

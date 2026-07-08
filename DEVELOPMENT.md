@@ -8,23 +8,14 @@ Use small shell tests before changing behavior:
 scripts/test.sh
 ```
 
-The current test slices are:
+The current test slices are intentionally small:
 
-- S1: env/secrets contract, redaction, and secret file mode
-- S2: substrate-only doctor and offline cache validation
-- S3: JuiceFS CSI Secret, StorageClass, and RWX PVC contract
-- S4: guard against copied legacy governance/reference surfaces
-- S5: `cacheMode: p1-real` offline cache contract, including k3s binary,
-  install script, k3s airgap archive, kubectl/Helm binaries, dependency OCI
-  archives, JuiceFS CSI artifact, CSI sidecar image archives, the `rwx-smoke`
-  OCI archive, and `images.lock` archive sha256 validation
-- S6: rendered JuiceFS CSI contract, cross-checking env-rendered namespace,
-  secretName, storageClass, pvcName, ReadWriteMany, and bucket URL
-- S7: doctor dry-run/live layering; dry-run proves static contracts, while live
-  kubectl/cluster checks observe reachable resources, Postgres `select 1` via
-  the cached `postgres` image, JuiceFS PVC `Bound`, S3 object read/write/delete
-  via the cached `minio-client` image, and two-Job RWX behavior when a
-  digest-pinned smoke image is available
+- env/secrets contract, redaction, and secret file mode
+- contract-only offline cache plus `install-online.sh --dry-run`
+- rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
+- `doctor.sh --dry-run` status lines and exit code, without generated files
+- live JuiceFS StorageClass/Secret/PVC contract mismatch and PVC
+  `Bound`/two-Job RWX write/read success paths through a kubectl stub
 
 ## Shell Style
 
@@ -42,8 +33,8 @@ The current test slices are:
   the minimum cached k3s/import/kubectl apply chain, self-hosted PostgreSQL and
   MinIO bootstrap, cached JuiceFS CSI Helm chart install, and idempotent JuiceFS
   format. Live doctor then runs the Postgres probe from cached `postgres`, the
-  S3 probe from cached `minio-client`, and the RWX smoke from cached
-  `rwx-smoke` after the JuiceFS PVC is `Bound`.
+  S3 probe from cached `minio-client`, and the RWX write/read check from cached
+  `rwx-check` after the JuiceFS PVC is `Bound`.
 - The default `download-online.sh` output is still a P0 static contract
   skeleton. It is useful for contract generation and dry-run validation only.
 - A p1-real offline cache must be supplied with all required artifacts and

@@ -42,7 +42,9 @@ only: `doctor.sh` creates temporary probe Secret/Job resources for read-only
 Postgres `select 1` checks against both `POSTGRES_APP_URL` and
 `JUICEFS_META_URL`, plus the S3 object probe against the configured existing
 bucket. Probe images come from digest-pinned `name: postgres`,
-`name: minio-client`, and `name: rwx-smoke` entries in `images.lock`, or explicit
-`--postgres-probe-image`, `--s3-probe-image`, and `--rwx-smoke-image` refs. Live
-install succeeds only when doctor reports `overallStatus: passed`; partial
-results, including an unreachable namespace or missing kubectl, fail closed.
+`name: minio-client`, and `name: rwx-check` entries in `images.lock`, or explicit
+`--postgres-probe-image`, `--s3-probe-image`, and `--rwx-check-image` refs. For
+JuiceFS, live doctor verifies the existing StorageClass, Secret, and PVC match
+the generated env/secrets contract, not only that they exist. Live install
+succeeds only when doctor exits 0; exit code 2 (`partial`), including an
+unreachable namespace or missing kubectl, fails closed like exit code 1.
