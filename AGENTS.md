@@ -21,7 +21,7 @@ Remove governance overhead aggressively:
 - process bureaucracy unrelated to install/runtime behavior;
 - generated diagnostic documents;
 - output-only flags and output-shape tests;
-- generic health-check concepts detached from core install paths;
+- umbrella validation commands detached from core install paths;
 - tests of the test harness;
 - broad fake test sets that do not protect core install/runtime behavior.
 
