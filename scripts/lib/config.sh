@@ -3,6 +3,8 @@
 SCRIPT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_LIB_DIR}/common.sh"
+# shellcheck source=env.sh
+source "${SCRIPT_LIB_DIR}/env.sh"
 
 config_raw_value() {
   local file="$1"
@@ -146,9 +148,25 @@ validate_config_contract() {
 
 env_or_generated_secret() {
   local env_name="$1"
-  local fallback
-  fallback="$(random_secret)"
-  printf '%s' "${!env_name:-${fallback}}"
+  if [[ -n "${!env_name:-}" ]]; then
+    printf '%s' "${!env_name}"
+  else
+    random_secret
+  fi
+}
+
+env_or_existing_secret() {
+  local env_name="$1"
+  local existing_secrets_file="${2:-}"
+  if [[ -n "${!env_name:-}" ]]; then
+    printf '%s' "${!env_name}"
+    return 0
+  fi
+  if [[ -n "${existing_secrets_file}" ]] && env_has_key "${existing_secrets_file}" "${env_name}"; then
+    env_value_or_empty "${existing_secrets_file}" "${env_name}"
+    return 0
+  fi
+  return 1
 }
 
 write_env_contract_from_config() {
@@ -163,6 +181,25 @@ write_env_contract_from_config() {
 
   local mode namespace kubeconfig_path kube_context kubeconfig_output skip_k3s
   mode="$(config_value "${config_file}" "mode" "self-hosted")"
+  local output_env_file output_secrets_file reuse_self_hosted_secrets_file
+  output_env_file="${output_dir}/substrate.env"
+  output_secrets_file="${output_dir}/substrate.secrets.env"
+  reuse_self_hosted_secrets_file=""
+
+  if [[ "${mode}" == "self-hosted" && ( -e "${output_env_file}" || -e "${output_secrets_file}" ) ]]; then
+    [[ "${force}" == "true" ]] || die "output env files already exist; rerun with --force to overwrite"
+    if [[ ! -f "${output_env_file}" || ! -f "${output_secrets_file}" ]]; then
+      die "self-hosted output env files are incomplete; restore both substrate.env and substrate.secrets.env or clear local substrate state before reinstalling"
+    fi
+    local validation_output
+    if ! validation_output="$(validate_env_contract "${output_env_file}" "${output_secrets_file}" 2>&1)"; then
+      die "existing self-hosted output env files do not validate; restore the original output or clear local substrate state before reinstalling: ${validation_output}"
+    fi
+    reuse_self_hosted_secrets_file="${output_secrets_file}"
+  elif [[ "${force}" != "true" && ( -e "${output_env_file}" || -e "${output_secrets_file}" ) ]]; then
+    die "output env files already exist; rerun with --force to overwrite"
+  fi
+
   namespace="$(config_value "${config_file}" "kubernetes.namespace" "agentsmith")"
   kubeconfig_path="$(config_value "${config_file}" "kubernetes.kubeconfigPath" "")"
   kube_context="$(config_value "${config_file}" "kubernetes.context" "")"
@@ -243,12 +280,20 @@ write_env_contract_from_config() {
     fi
   else
     local postgres_password juicefs_password
-    postgres_password="$(env_or_generated_secret POSTGRES_PASSWORD)"
-    juicefs_password="$(env_or_generated_secret JUICEFS_META_PASSWORD)"
-    s3_access="${S3_ACCESS_KEY:-minio$(random_secret | cut -c1-12)}"
-    s3_secret="${S3_SECRET_KEY:-$(random_secret)}"
-    postgres_app_url="${POSTGRES_APP_URL:-postgresql://agentsmith:${postgres_password}@postgres.${namespace}.svc.cluster.local:5432/agentsmith_lite}"
-    juicefs_meta_url="${JUICEFS_META_URL:-postgresql://juicefs:${juicefs_password}@postgres.${namespace}.svc.cluster.local:5432/juicefs_meta}"
+    if ! postgres_app_url="$(env_or_existing_secret POSTGRES_APP_URL "${reuse_self_hosted_secrets_file}")"; then
+      postgres_password="$(env_or_generated_secret POSTGRES_PASSWORD)"
+      postgres_app_url="postgresql://agentsmith:${postgres_password}@postgres.${namespace}.svc.cluster.local:5432/agentsmith_lite"
+    fi
+    if ! juicefs_meta_url="$(env_or_existing_secret JUICEFS_META_URL "${reuse_self_hosted_secrets_file}")"; then
+      juicefs_password="$(env_or_generated_secret JUICEFS_META_PASSWORD)"
+      juicefs_meta_url="postgresql://juicefs:${juicefs_password}@postgres.${namespace}.svc.cluster.local:5432/juicefs_meta"
+    fi
+    if ! s3_access="$(env_or_existing_secret S3_ACCESS_KEY "${reuse_self_hosted_secrets_file}")"; then
+      s3_access="minio$(random_secret | cut -c1-12)"
+    fi
+    if ! s3_secret="$(env_or_existing_secret S3_SECRET_KEY "${reuse_self_hosted_secrets_file}")"; then
+      s3_secret="$(random_secret)"
+    fi
     if [[ "${auth_mode}" == "oidc" ]]; then
       local auth_realm auth_client_id keycloak_public_base
       auth_realm="$(config_required_value "${config_file}" "auth.realm")"
@@ -258,23 +303,31 @@ write_env_contract_from_config() {
       oidc_issuer="${keycloak_public_base}/realms/${auth_realm}"
       oidc_client_id="${auth_client_id}"
       oidc_backchannel_base_url="http://keycloak.${namespace}.svc.cluster.local:8080/realms/${auth_realm}"
-      oidc_secret="${OIDC_CLIENT_SECRET:-$(random_secret)}"
-      oidc_bootstrap_username="${OIDC_BOOTSTRAP_USERNAME:-$(config_value "${config_file}" "auth.bootstrapUsername" "agentsmith-local")}"
-      oidc_bootstrap_password="${OIDC_BOOTSTRAP_PASSWORD:-$(random_secret)}"
+      if ! oidc_secret="$(env_or_existing_secret OIDC_CLIENT_SECRET "${reuse_self_hosted_secrets_file}")"; then
+        oidc_secret="$(random_secret)"
+      fi
+      if ! oidc_bootstrap_username="$(env_or_existing_secret OIDC_BOOTSTRAP_USERNAME "${reuse_self_hosted_secrets_file}")"; then
+        oidc_bootstrap_username="$(config_value "${config_file}" "auth.bootstrapUsername" "agentsmith-local")"
+      fi
+      if ! oidc_bootstrap_password="$(env_or_existing_secret OIDC_BOOTSTRAP_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+        oidc_bootstrap_password="$(random_secret)"
+      fi
     fi
   fi
   if [[ "${auth_mode}" == "builtin_admin" ]]; then
-    admin_password="${BUILTIN_ADMIN_INITIAL_PASSWORD:-$(random_secret)}"
+    if ! admin_password="$(env_or_existing_secret BUILTIN_ADMIN_INITIAL_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+      admin_password="$(random_secret)"
+    fi
   else
-    admin_password="${BUILTIN_ADMIN_INITIAL_PASSWORD:-}"
+    if ! admin_password="$(env_or_existing_secret BUILTIN_ADMIN_INITIAL_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+      admin_password=""
+    fi
   fi
-  app_session_secret="${APP_SESSION_SECRET:-$(random_secret)}"
-
-  if [[ "${force}" != "true" && ( -e "${output_dir}/substrate.env" || -e "${output_dir}/substrate.secrets.env" ) ]]; then
-    die "output env files already exist; rerun with --force to overwrite"
+  if ! app_session_secret="$(env_or_existing_secret APP_SESSION_SECRET "${reuse_self_hosted_secrets_file}")"; then
+    app_session_secret="$(random_secret)"
   fi
 
-  cat >"${output_dir}/substrate.env" <<EOF_ENV
+  cat >"${output_env_file}" <<EOF_ENV
 SUBSTRATE_SCHEMA_VERSION=agentsmith-lite.substrate.env/v1
 KUBECONFIG_PATH=${kubeconfig_path}
 KUBE_CONTEXT=${kube_context}
@@ -303,7 +356,7 @@ IMAGE_PULL_SECRET_NAME=${image_pull_secret}
 EOF_ENV
 
   umask 077
-  cat >"${output_dir}/substrate.secrets.env" <<EOF_SECRETS
+  cat >"${output_secrets_file}" <<EOF_SECRETS
 SUBSTRATE_SCHEMA_VERSION=agentsmith-lite.substrate.env/v1
 POSTGRES_APP_URL=${postgres_app_url}
 APP_SESSION_SECRET=${app_session_secret}
@@ -315,8 +368,8 @@ OIDC_CLIENT_SECRET=${oidc_secret}
 OIDC_BOOTSTRAP_USERNAME=${oidc_bootstrap_username}
 OIDC_BOOTSTRAP_PASSWORD=${oidc_bootstrap_password}
 EOF_SECRETS
-  chmod 0600 "${output_dir}/substrate.secrets.env"
+  chmod 0600 "${output_secrets_file}"
 
-  info "${install_path}: wrote ${output_dir}/substrate.env"
-  info "${install_path}: wrote ${output_dir}/substrate.secrets.env with owner-only permissions"
+  info "${install_path}: wrote ${output_env_file}"
+  info "${install_path}: wrote ${output_secrets_file} with owner-only permissions"
 }

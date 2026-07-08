@@ -65,6 +65,27 @@ set_env_value() {
   [[ -z "${mode}" ]] || chmod "${mode}" "${file}"
 }
 
+env_file_value() {
+  local file="$1"
+  local key="$2"
+  local value
+  value="$(awk -v wanted="${key}" '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      line=$0
+      sub(/^[[:space:]]*export[[:space:]]+/, "", line)
+      idx=index(line, "=")
+      current=idx ? substr(line, 1, idx - 1) : ""
+      if (current == wanted) {
+        print substr(line, idx + 1)
+        found=1
+      }
+    }
+    END { if (!found) exit 1 }
+  ' "${file}")" || fail "expected ${file} to contain ${key}"
+  printf '%s' "${value}"
+}
+
 assert_command_fails_contains() {
   local out="$1"
   local needle="$2"
@@ -231,6 +252,11 @@ set -euo pipefail
 : "${KUBECTL_LOG:?KUBECTL_LOG is required}"
 printf 'kubectl %s\n' "$*" >>"${KUBECTL_LOG}"
 
+if [[ "${KUBECTL_FAIL_MINIO_BUCKET_WAIT:-}" == "true" && "$*" == *"-n agentsmith wait --for=condition=complete job/agentsmith-lite-minio-bucket-init"* ]]; then
+  printf 'bucket init wait timed out\n' >&2
+  exit 1
+fi
+
 juicefs_b64() {
   printf '%s' "$1" | base64 | tr -d '\n'
 }
@@ -286,6 +312,12 @@ case "$*" in
     ;;
   *" logs job/agentsmith-lite-minio-bucket-init"*)
     printf 'minio bucket ready\n'
+    ;;
+  *"-n agentsmith logs -l job-name=agentsmith-lite-minio-bucket-init --all-containers --tail=-1"*)
+    printf 'bucket init failed log\n'
+    ;;
+  *"-n agentsmith describe job agentsmith-lite-minio-bucket-init"*)
+    printf 'bucket init describe\n'
     ;;
   *" logs job/agentsmith-lite-juicefs-format"*)
     printf 'agentsmith-lite-juicefs-format: ok\n'
@@ -505,6 +537,105 @@ test_self_hosted_default_kube_context_is_empty() {
   pass "self-hosted default env leaves KUBE_CONTEXT empty"
 }
 
+test_self_hosted_force_reuses_existing_persistent_secrets() {
+  local cache="${TMP_DIR}/self-hosted-force-reuse-cache"
+  local output="${TMP_DIR}/self-hosted-force-reuse-out"
+  local first_out="${TMP_DIR}/self-hosted-force-reuse-first.out"
+  local second_out="${TMP_DIR}/self-hosted-force-reuse-second.out"
+  local override_out="${TMP_DIR}/self-hosted-force-reuse-override.out"
+  local snapshot="${TMP_DIR}/self-hosted-force-reuse.snapshot"
+  local key
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/self-hosted-force-reuse-cache.out" 2>&1
+  "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${output}" \
+    --dry-run \
+    --force \
+    >"${first_out}" 2>&1
+  set_env_value "${output}/substrate.secrets.env" "BUILTIN_ADMIN_INITIAL_PASSWORD" "admin-force-stable-password-0123456789"
+
+  : >"${snapshot}"
+  for key in POSTGRES_APP_URL JUICEFS_META_URL S3_ACCESS_KEY S3_SECRET_KEY APP_SESSION_SECRET OIDC_CLIENT_SECRET OIDC_BOOTSTRAP_PASSWORD BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_BOOTSTRAP_USERNAME; do
+    printf '%s=%s\n' "${key}" "$(env_file_value "${output}/substrate.secrets.env" "${key}")" >>"${snapshot}"
+  done
+
+  "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${output}" \
+    --dry-run \
+    --force \
+    >"${second_out}" 2>&1
+  while IFS= read -r key; do
+    assert_contains "${output}/substrate.secrets.env" "${key}"
+  done <"${snapshot}"
+
+  S3_SECRET_KEY="explicit-s3-secret-value" \
+    OIDC_BOOTSTRAP_USERNAME="agentsmith-explicit" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+      --output "${output}" \
+      --dry-run \
+      --force \
+      >"${override_out}" 2>&1
+  assert_contains "${output}/substrate.secrets.env" "S3_SECRET_KEY=explicit-s3-secret-value"
+  assert_contains "${output}/substrate.secrets.env" "OIDC_BOOTSTRAP_USERNAME=agentsmith-explicit"
+  pass "self-hosted --force reuses persistent secrets unless env overrides"
+}
+
+test_self_hosted_force_rejects_partial_or_invalid_output() {
+  local cache="${TMP_DIR}/self-hosted-force-invalid-cache"
+  local source_dir="${TMP_DIR}/self-hosted-force-invalid-source"
+  local only_env="${TMP_DIR}/self-hosted-force-only-env"
+  local only_secrets="${TMP_DIR}/self-hosted-force-only-secrets"
+  local invalid="${TMP_DIR}/self-hosted-force-invalid-secrets"
+  local out="${TMP_DIR}/self-hosted-force-invalid.out"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/self-hosted-force-invalid-cache.out" 2>&1
+  write_valid_oidc_env_pair "${source_dir}"
+
+  mkdir -p "${only_env}"
+  cp "${source_dir}/substrate.env" "${only_env}/substrate.env"
+  assert_command_fails_contains \
+    "${out}" \
+    "self-hosted output env files are incomplete" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${only_env}" \
+    --dry-run \
+    --force
+
+  mkdir -p "${only_secrets}"
+  cp "${source_dir}/substrate.secrets.env" "${only_secrets}/substrate.secrets.env"
+  assert_command_fails_contains \
+    "${out}" \
+    "self-hosted output env files are incomplete" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${only_secrets}" \
+    --dry-run \
+    --force
+
+  write_valid_oidc_env_pair "${invalid}"
+  set_env_value "${invalid}/substrate.secrets.env" "S3_SECRET_KEY" ""
+  assert_command_fails_contains \
+    "${out}" \
+    "existing self-hosted output env files do not validate" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${invalid}" \
+    --dry-run \
+    --force
+  assert_contains "${out}" "substrate.secrets.env key S3_SECRET_KEY must not be empty"
+  pass "self-hosted --force rejects partial output and invalid secrets"
+}
+
 test_self_hosted_skip_k3s_requires_readable_kubeconfig() {
   local cache="${TMP_DIR}/skip-k3s-contract-cache"
   local output="${TMP_DIR}/skip-k3s-missing-kubeconfig-out"
@@ -637,9 +768,68 @@ EOF_CONFIG
   assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
   assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/minio.yaml"
   assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/juicefs-storageclass-pvc.yaml"
-  assert_contains "${helm_log}" "--kubeconfig ${kubeconfig} --context kind-agentsmith upgrade --install juicefs-csi-driver"
+  assert_contains "${helm_log}" "--kubeconfig ${kubeconfig} --kube-context kind-agentsmith upgrade --install juicefs-csi-driver"
+  assert_not_contains "${helm_log}" "--context kind-agentsmith"
   assert_contains "${out}" "doctor passed"
   pass "self-hosted skipK3s live install skips k3s/import and runs service chain"
+}
+
+test_minio_bucket_job_uses_mc_alias_and_retry() {
+  local manifest="${ROOT_DIR}/manifests/minio/bucket-init-job.yaml"
+
+  assert_not_contains "${manifest}" "awk"
+  assert_not_contains "${manifest}" "config.json"
+  assert_contains "${manifest}" 'mc alias set agentsmith-minio "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4'
+  assert_contains "${manifest}" 'while [ "${attempt}" -lt 30 ]; do'
+  assert_contains "${manifest}" 'mc mb --ignore-existing "agentsmith-minio/$S3_BUCKET"'
+  assert_contains "${manifest}" 'mc stat "agentsmith-minio/$S3_BUCKET"'
+  pass "MinIO bucket init Job uses mc alias and bounded retry without awk config rendering"
+}
+
+test_minio_statefulset_has_health_probes() {
+  local manifest="${ROOT_DIR}/manifests/minio/minio.yaml"
+
+  assert_contains "${manifest}" "startupProbe:"
+  assert_contains "${manifest}" "readinessProbe:"
+  assert_contains "${manifest}" "path: /minio/health/ready"
+  assert_contains "${manifest}" "port: api"
+  pass "MinIO StatefulSet probes readiness endpoint"
+}
+
+test_minio_bucket_init_failure_keeps_job_and_collects_debug() {
+  local cache="${TMP_DIR}/bucket-init-failure-cache"
+  local env_dir="${TMP_DIR}/bucket-init-failure-env"
+  local render_dir="${TMP_DIR}/bucket-init-failure-render"
+  local kubectl_log="${TMP_DIR}/bucket-init-failure-kubectl.log"
+  local out="${TMP_DIR}/bucket-init-failure.out"
+  local delete_count
+  local status=0
+
+  mkdir -p "${cache}/bin" "${render_dir}"
+  write_valid_env_pair "${env_dir}"
+  write_live_kubectl_stub "${cache}/bin/kubectl"
+  write_fake_artifact "${render_dir}/minio-bucket-init-job.yaml" "kind: Job"
+
+  set +e
+  KUBECTL_LOG="${kubectl_log}" \
+    KUBECTL_FAIL_MINIO_BUCKET_WAIT=true \
+    bash -c 'set -euo pipefail; source "$1"; offline_install_init_minio_bucket "$2" "$3" "$4"' \
+      _ \
+      "${ROOT_DIR}/scripts/lib/offline_install.sh" \
+      "${cache}" \
+      "${env_dir}/substrate.env" \
+      "${render_dir}" \
+      >"${out}" 2>&1
+  status=$?
+  set -e
+
+  [[ "${status}" -ne 0 ]] || fail "bucket init failure test should fail"
+  assert_contains "${out}" "MinIO bucket init Job failed; refusing to continue"
+  assert_contains "${kubectl_log}" "logs -l job-name=agentsmith-lite-minio-bucket-init --all-containers --tail=-1"
+  assert_contains "${kubectl_log}" "describe job agentsmith-lite-minio-bucket-init"
+  delete_count="$(grep -Fc "delete job agentsmith-lite-minio-bucket-init" "${kubectl_log}" || true)"
+  [[ "${delete_count}" -eq 1 ]] || fail "bucket init failure should not delete Job after failure"
+  pass "MinIO bucket init failure keeps Job and collects logs plus describe"
 }
 
 test_contract_cache_install_and_static_juicefs() {
@@ -831,8 +1021,13 @@ test_oidc_env_contract_rejects_missing_required_values
 test_builtin_admin_rejects_oidc_bootstrap_credentials
 test_existing_cloud_oidc_reads_default_env_names
 test_self_hosted_default_kube_context_is_empty
+test_self_hosted_force_reuses_existing_persistent_secrets
+test_self_hosted_force_rejects_partial_or_invalid_output
 test_self_hosted_skip_k3s_requires_readable_kubeconfig
 test_self_hosted_skip_k3s_live_uses_existing_cluster_chain
+test_minio_bucket_job_uses_mc_alias_and_retry
+test_minio_statefulset_has_health_probes
+test_minio_bucket_init_failure_keeps_job_and_collects_debug
 test_contract_cache_install_and_static_juicefs
 test_self_hosted_keycloak_render_from_p1_cache
 test_existing_cloud_dry_run_does_not_render_keycloak

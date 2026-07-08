@@ -38,6 +38,18 @@ offline_install_delete_job_best_effort() {
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" delete job "${job_name}" --ignore-not-found=true || true
 }
 
+offline_install_describe_job_failure_best_effort() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local namespace="$3"
+  local job_name="$4"
+
+  printf 'install-offline: collecting %s logs\n' "${job_name}" >&2
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs -l "job-name=${job_name}" --all-containers --tail=-1 >&2 || true
+  printf 'install-offline: describing %s\n' "${job_name}" >&2
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" describe job "${job_name}" >&2 || true
+}
+
 offline_install_helm() {
   local cache_dir="$1"
   local env_file="$2"
@@ -48,7 +60,7 @@ offline_install_helm() {
   kubeconfig_path="$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
   kube_context="$(env_value_or_empty "${env_file}" KUBE_CONTEXT)"
   [[ -n "${kubeconfig_path}" ]] && helm_args+=(--kubeconfig "${kubeconfig_path}")
-  [[ -n "${kube_context}" ]] && helm_args+=(--context "${kube_context}")
+  [[ -n "${kube_context}" ]] && helm_args+=(--kube-context "${kube_context}")
   "${helm_bin}" "${helm_args[@]}" "$@"
 }
 
@@ -458,21 +470,24 @@ offline_install_init_minio_bucket() {
     logs="$(offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" logs "job/${job_name}" 2>&1)"
     logs_status=$?
   fi
-  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
   set -e
 
   if [[ "${apply_status}" -ne 0 ]]; then
     die "MinIO bucket init Job apply failed; refusing to continue"
   fi
   if [[ "${wait_status}" -ne 0 ]]; then
+    offline_install_describe_job_failure_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
     die "MinIO bucket init Job failed; refusing to continue"
   fi
   if [[ "${logs_status}" -ne 0 ]]; then
+    offline_install_describe_job_failure_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
     die "MinIO bucket init Job logs could not be read; refusing to continue"
   fi
   if ! grep -Fq "minio bucket ready" <<<"${logs}"; then
+    offline_install_describe_job_failure_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
     die "MinIO bucket init Job did not confirm bucket readiness"
   fi
+  offline_install_delete_job_best_effort "${cache_dir}" "${env_file}" "${namespace}" "${job_name}"
 }
 
 offline_install_format_juicefs() {

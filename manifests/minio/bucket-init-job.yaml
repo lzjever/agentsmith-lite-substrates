@@ -35,44 +35,19 @@ spec:
             - /bin/sh
             - -ceu
             - |
-              json_escape_env() {
-                awk -v name="$1" '
-                  BEGIN {
-                    value = ENVIRON[name]
-                    gsub(/\\/, "\\\\", value)
-                    gsub(/"/, "\\\"", value)
-                    gsub(/\r/, "\\r", value)
-                    gsub(/\n/, "\\n", value)
-                    printf "%s", value
-                  }
-                '
-              }
+              mc alias set agentsmith-minio "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 >/dev/null
 
-              MC_CONFIG_DIR="$(mktemp -d)"
-              chmod 0700 "$MC_CONFIG_DIR"
-              trap 'rm -rf "$MC_CONFIG_DIR"' EXIT
-              {
-                printf '{\n'
-                printf '  "version": "10",\n'
-                printf '  "aliases": {\n'
-                printf '    "agentsmith-minio": {\n'
-                printf '      "url": "'
-                json_escape_env S3_ENDPOINT
-                printf '",\n'
-                printf '      "accessKey": "'
-                json_escape_env MINIO_ROOT_USER
-                printf '",\n'
-                printf '      "secretKey": "'
-                json_escape_env MINIO_ROOT_PASSWORD
-                printf '",\n'
-                printf '      "api": "s3v4",\n'
-                printf '      "path": "auto"\n'
-                printf '    }\n'
-                printf '  }\n'
-                printf '}\n'
-              } >"$MC_CONFIG_DIR/config.json"
-              chmod 0600 "$MC_CONFIG_DIR/config.json"
+              attempt=0
+              while [ "${attempt}" -lt 30 ]; do
+                if mc mb --ignore-existing "agentsmith-minio/$S3_BUCKET" >/dev/null \
+                  && mc stat "agentsmith-minio/$S3_BUCKET" >/dev/null; then
+                  printf 'minio bucket ready\n'
+                  exit 0
+                fi
+                attempt=$((attempt + 1))
+                sleep 2
+              done
 
-              mc --config-dir "$MC_CONFIG_DIR" mb --ignore-existing "agentsmith-minio/$S3_BUCKET" >/dev/null
-              mc --config-dir "$MC_CONFIG_DIR" stat "agentsmith-minio/$S3_BUCKET" >/dev/null
-              printf 'minio bucket ready\n'
+              printf 'minio bucket init failed\n' >&2
+              mc stat "agentsmith-minio/$S3_BUCKET" >&2 || true
+              exit 1
