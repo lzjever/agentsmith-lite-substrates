@@ -85,6 +85,60 @@ require_cli_value() {
   fi
 }
 
+require_public_base_url_port() {
+  local port="$1"
+
+  [[ "${port}" =~ ^[0-9]+$ ]] || die "public base URL port must be numeric"
+  (( 10#${port} <= 65535 )) || die "public base URL port must be between 0 and 65535"
+}
+
+normalize_public_base_url() {
+  local url="$1"
+  local rest authority path port
+
+  case "${url}" in
+    http://*) rest="${url#http://}" ;;
+    https://*) rest="${url#https://}" ;;
+    *) die "public base URL must start with http:// or https://" ;;
+  esac
+
+  case "${rest}" in
+    *\?*|*#*) die "public base URL must not include query or fragment" ;;
+  esac
+
+  authority="${rest%%/*}"
+  path=""
+  if [[ "${rest}" == */* ]]; then
+    path="/${rest#*/}"
+  fi
+
+  [[ -n "${authority}" ]] || die "public base URL must include a host"
+  [[ "${authority}" != *[[:space:]/\?#]* ]] || die "public base URL authority must be a host without whitespace, path, query, or fragment"
+  [[ "${authority}" != *@* ]] || die "public base URL authority must not include userinfo"
+  if [[ "${authority}" == \[* ]]; then
+    [[ "${authority}" =~ ^\[[0-9A-Fa-f:.]+\](:[0-9]+)?$ ]] \
+      || die "public base URL bracket IPv6 authority must be [IPv6] or [IPv6]:port"
+    if [[ "${authority}" == *]:* ]]; then
+      port="${authority##*:}"
+      require_public_base_url_port "${port}"
+    fi
+  else
+    [[ "${authority}" != *[\[\]]* ]] || die "public base URL authority has malformed IPv6 brackets"
+    [[ "${authority}" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+      || die "public base URL authority must be host or host:port"
+    if [[ "${authority}" == *:* ]]; then
+      port="${authority##*:}"
+      require_public_base_url_port "${port}"
+    fi
+  fi
+
+  while [[ "${path}" == */ ]]; do
+    path="${path%/}"
+  done
+
+  printf '%s%s' "${url%%://*}://${authority}" "${path}"
+}
+
 is_app_owned_image_ref() {
   local image_ref="$1"
   local repo_ref

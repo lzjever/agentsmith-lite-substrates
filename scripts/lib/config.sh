@@ -294,6 +294,9 @@ write_env_contract_from_config() {
   oidc_client_id=""
   oidc_backchannel_base_url=""
   public_base_url="$(config_value "${config_file}" "ingress.publicBaseUrl" "http://localhost:3000")"
+  if ! public_base_url="$(normalize_public_base_url "${public_base_url}")"; then
+    return 1
+  fi
   ingress_class="$(config_value "${config_file}" "ingress.ingressClass" "")"
   tls_secret="$(config_value "${config_file}" "ingress.tlsSecretName" "")"
   registry="$(config_value "${config_file}" "offline.registry" "")"

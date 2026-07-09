@@ -122,7 +122,9 @@ keycloak_prepare_self_hosted_context() {
   keycloak_client_secret="$(env_value_or_empty "${secrets_file}" OIDC_CLIENT_SECRET)"
   keycloak_bootstrap_username="$(env_value_or_empty "${secrets_file}" OIDC_BOOTSTRAP_USERNAME)"
   keycloak_bootstrap_password="$(env_value_or_empty "${secrets_file}" OIDC_BOOTSTRAP_PASSWORD)"
-  keycloak_app_public_base_url="$(env_value_or_empty "${env_file}" APP_PUBLIC_BASE_URL)"
+  if ! keycloak_app_public_base_url="$(normalize_public_base_url "$(env_value_or_empty "${env_file}" APP_PUBLIC_BASE_URL)")"; then
+    return 1
+  fi
   keycloak_ingress_class="$(env_value_or_empty "${env_file}" APP_INGRESS_CLASS)"
   keycloak_tls_secret_name="$(env_value_or_empty "${env_file}" APP_TLS_SECRET_NAME)"
   keycloak_db_user="$(env_value_or_empty "${secrets_file}" KEYCLOAK_DB_USER)"
