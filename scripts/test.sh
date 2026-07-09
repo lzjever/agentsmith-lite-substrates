@@ -123,6 +123,7 @@ write_fake_artifact() {
 write_fake_p1_artifact_lock() {
   local dir="$1"
   local lock="$2"
+  local include_local_openai="${3:-true}"
   mkdir -p "${dir}/bin" "${dir}/scripts" "${dir}/images/k3s" "${dir}/images/oci" "${dir}/charts"
   cat >"${dir}/bin/k3s" <<'EOF_K3S'
 #!/usr/bin/env bash
@@ -146,6 +147,9 @@ EOF_INSTALL_K3S
   for name in postgres minio minio-client keycloak juicefs-csi juicefs-csi-liveness-probe juicefs-csi-node-driver-registrar juicefs-csi-provisioner juicefs-csi-resizer rwx-check; do
     write_fake_artifact "${dir}/images/oci/${name}.tar" "fake ${name} archive"
   done
+  if [[ "${include_local_openai}" == "true" ]]; then
+    write_fake_artifact "${dir}/images/oci/local-openai-provider.tar" "fake local openai provider archive"
+  fi
 
   cat >"${lock}" <<EOF_LOCK
 K3S_BINARY_URL=file://${dir}/bin/k3s
@@ -191,6 +195,13 @@ RWX_CHECK_IMAGE=docker.io/library/busybox:1.36.1@sha256:${FAKE_DIGEST}
 RWX_CHECK_ARCHIVE_URL=file://${dir}/images/oci/rwx-check.tar
 RWX_CHECK_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/rwx-check.tar")
 EOF_LOCK
+  if [[ "${include_local_openai}" == "true" ]]; then
+    cat >>"${lock}" <<EOF_LOCAL_OPENAI
+LOCAL_OPENAI_PROVIDER_IMAGE=docker.io/library/python:3.13-alpine@sha256:${FAKE_DIGEST}
+LOCAL_OPENAI_PROVIDER_ARCHIVE_URL=file://${dir}/images/oci/local-openai-provider.tar
+LOCAL_OPENAI_PROVIDER_ARCHIVE_SHA256=$(fake_file_sha "${dir}/images/oci/local-openai-provider.tar")
+EOF_LOCAL_OPENAI
+  fi
 }
 
 write_valid_env_pair() {
@@ -639,6 +650,55 @@ test_self_hosted_default_juicefs_meta_url_uses_postgres_scheme() {
   assert_contains "${output}/substrate.secrets.env" "JUICEFS_META_URL=postgres://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta"
   assert_not_contains "${output}/substrate.secrets.env" "JUICEFS_META_URL=postgresql://"
   pass "self-hosted default JuiceFS metadata URL uses postgres:// with password"
+}
+
+test_self_hosted_writes_local_openai_app_overlay() {
+  local cache="${TMP_DIR}/self-hosted-app-overlay-cache"
+  local output="${TMP_DIR}/self-hosted-app-overlay-out"
+  local out="${TMP_DIR}/self-hosted-app-overlay-install.out"
+  local mode api_key
+
+  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/self-hosted-app-overlay-cache.out" 2>&1
+  AGENTSMITH_LITE_MODEL_API_KEY_LOCAL="dev-provider-key-value" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+      --output "${output}" \
+      --dry-run \
+      --force \
+      >"${out}" 2>&1
+
+  assert_contains "${output}/app.env" "AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL=https://agentsmith-lite-local-openai.agentsmith.svc.cluster.local/v1"
+  assert_contains "${output}/app.env" "AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP=agentsmith-lite-local-openai-ca"
+  assert_contains "${output}/app.env" "AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY=ca.crt"
+  assert_contains "${output}/app.secrets.env" "AGENTSMITH_LITE_MODEL_API_KEY_LOCAL=dev-provider-key-value"
+  assert_not_contains "${output}/substrate.env" "AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL"
+  assert_not_contains "${output}/substrate.secrets.env" "AGENTSMITH_LITE_MODEL_API_KEY_LOCAL"
+  assert_not_contains "${output}/app.env" "BEGIN CERTIFICATE"
+  assert_not_contains "${output}/app.secrets.env" "BEGIN CERTIFICATE"
+  mode="$(file_mode "${output}/app.secrets.env")"
+  [[ "${mode: -3}" == "600" ]] || fail "app.secrets.env should use owner-only permissions, got ${mode}"
+
+  "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${output}" \
+    --dry-run \
+    --force \
+    >"${TMP_DIR}/self-hosted-app-overlay-reuse.out" 2>&1
+  api_key="$(env_file_value "${output}/app.secrets.env" "AGENTSMITH_LITE_MODEL_API_KEY_LOCAL")"
+  [[ "${api_key}" == "dev-provider-key-value" ]] || fail "self-hosted app overlay should reuse existing local provider API key"
+  set_env_value "${output}/app.secrets.env" "AGENTSMITH_LITE_MODEL_API_KEY_LOCAL" ""
+  "${ROOT_DIR}/scripts/install-online.sh" \
+    --cache "${cache}" \
+    --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+    --output "${output}" \
+    --dry-run \
+    --force \
+    >"${TMP_DIR}/self-hosted-app-overlay-empty-reuse.out" 2>&1
+  api_key="$(env_file_value "${output}/app.secrets.env" "AGENTSMITH_LITE_MODEL_API_KEY_LOCAL")"
+  [[ -n "${api_key}" ]] || fail "self-hosted app overlay should regenerate local provider API key when existing key is empty"
+  pass "self-hosted dry-run writes local OpenAI app overlay without leaking PEM"
 }
 
 test_juicefs_bucket_contract_rejects_s3_prefix_url() {
@@ -1155,6 +1215,8 @@ test_contract_cache_install_and_static_juicefs() {
   assert_contains "${cache}/manifest.yaml" "images/oci/keycloak.tar"
   assert_contains "${cache}/images/images.lock" "name: keycloak"
   assert_contains "${cache}/images/images.lock" "archive: images/oci/keycloak.tar"
+  assert_not_contains "${cache}/images/images.lock" "name: local-openai-provider"
+  assert_not_contains "${cache}/manifest.yaml" "images/oci/local-openai-provider.tar"
   test -f "${cache}/images/oci/keycloak.tar" || fail "expected contract cache to include images/oci/keycloak.tar"
 
   "${ROOT_DIR}/scripts/install-online.sh" \
@@ -1192,6 +1254,77 @@ test_contract_cache_install_and_static_juicefs() {
   assert_not_contains "${output}/substrate.secrets.env" "KEYCLOAK_ADMIN_PASSWORD=$"
   assert_contains "${juicefs_out}" "JuiceFS CSI contract validated"
   pass "contract-only cache, install-online dry-run, env, and static JuiceFS contracts pass"
+}
+
+test_p1_real_requires_local_openai_provider_image() {
+  local artifacts="${TMP_DIR}/local-openai-required-artifacts"
+  local lock="${TMP_DIR}/local-openai-required-artifacts.env"
+  local cache="${TMP_DIR}/local-openai-required-cache"
+  local out="${TMP_DIR}/local-openai-required-cache.out"
+
+  write_fake_p1_artifact_lock "${artifacts}" "${lock}" false
+  assert_command_fails_contains \
+    "${out}" \
+    "LOCAL_OPENAI_PROVIDER_IMAGE" \
+    "${ROOT_DIR}/scripts/download-online.sh" \
+    --artifacts "${lock}" \
+    --output "${cache}" \
+    --force
+
+  pass "p1-real artifact lock requires local OpenAI provider image"
+}
+
+test_self_hosted_local_openai_render_from_p1_cache() {
+  local artifacts="${TMP_DIR}/local-openai-render-artifacts"
+  local lock="${TMP_DIR}/local-openai-render-artifacts.env"
+  local cache="${TMP_DIR}/local-openai-render-cache"
+  local output="${TMP_DIR}/local-openai-render-out"
+  local out="${TMP_DIR}/local-openai-render-install.out"
+  local manifest="${output}/rendered/offline-install/local-openai.yaml"
+  local api_secret="${output}/rendered/offline-install/local-openai-secret.yaml"
+  local tls_secret="${output}/rendered/offline-install/local-openai-tls-secret.yaml"
+  local ca_config="${output}/rendered/offline-install/local-openai-ca.yaml"
+  local app_ca_name
+
+  write_fake_p1_artifact_lock "${artifacts}" "${lock}"
+
+  "${ROOT_DIR}/scripts/download-online.sh" --artifacts "${lock}" --output "${cache}" --force >"${TMP_DIR}/local-openai-render-cache.out" 2>&1
+  AGENTSMITH_LITE_MODEL_API_KEY_LOCAL="dev-provider-key-value" \
+    "${ROOT_DIR}/scripts/install-online.sh" \
+      --cache "${cache}" \
+      --config "${ROOT_DIR}/config/substrates.self-hosted.example.yaml" \
+      --output "${output}" \
+      --dry-run \
+      --force \
+      >"${out}" 2>&1
+
+  assert_contains "${cache}/images/images.lock" "name: local-openai-provider"
+  assert_contains "${cache}/images/images.lock" "archive: images/oci/local-openai-provider.tar"
+  assert_contains "${cache}/manifest.yaml" "images/oci/local-openai-provider.tar"
+  assert_contains "${manifest}" "kind: ConfigMap"
+  assert_contains "${manifest}" "name: agentsmith-lite-local-openai-script"
+  assert_contains "${manifest}" "kind: Service"
+  assert_contains "${manifest}" "name: agentsmith-lite-local-openai"
+  assert_contains "${manifest}" "port: 443"
+  assert_contains "${manifest}" "targetPort: https"
+  assert_contains "${manifest}" "kind: Deployment"
+  assert_contains "${manifest}" "image: docker.io/library/python:3.13-alpine@sha256:${FAKE_DIGEST}"
+  assert_contains "${manifest}" "secretName: agentsmith-lite-local-openai-tls"
+  assert_contains "${manifest}" "livenessProbe:"
+  assert_contains "${manifest}" "readinessProbe:"
+  assert_contains "${manifest}" "scheme: HTTPS"
+  assert_contains "${manifest}" "path: /healthz"
+  assert_not_contains "${manifest}" "tcpSocket:"
+  assert_contains "${api_secret}" "name: agentsmith-lite-local-openai-api-key"
+  assert_contains "${api_secret}" "apiKey: $(env_file_value_b64 "${output}/app.secrets.env" AGENTSMITH_LITE_MODEL_API_KEY_LOCAL)"
+  assert_contains "${tls_secret}" "tls.crt:"
+  assert_contains "${tls_secret}" "tls.key:"
+  assert_contains "${ca_config}" "name: agentsmith-lite-local-openai-ca"
+  assert_contains "${ca_config}" "ca.crt:"
+  assert_not_contains "${output}/app.env" "BEGIN CERTIFICATE"
+  app_ca_name="$(env_file_value "${output}/app.env" "AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP")"
+  [[ "${app_ca_name}" == "agentsmith-lite-local-openai-ca" ]] || fail "app overlay CA ConfigMap must match rendered local provider CA"
+  pass "self-hosted p1 dry-run renders local HTTPS OpenAI provider and matching app overlay"
 }
 
 test_self_hosted_keycloak_render_from_p1_cache() {
@@ -1293,6 +1426,30 @@ test_existing_cloud_dry_run_does_not_render_keycloak() {
   pass "existing-cloud dry-run skips self-hosted Keycloak render"
 }
 
+test_local_openai_provider_static_contract() {
+  local manifest="${ROOT_DIR}/manifests/local-openai/provider.yaml"
+  local script="${ROOT_DIR}/manifests/local-openai/provider.py"
+
+  assert_contains "${manifest}" "port: 443"
+  assert_contains "${manifest}" "secretKeyRef:"
+  assert_contains "${manifest}" "name: agentsmith-lite-local-openai-api-key"
+  assert_contains "${manifest}" "mountPath: /tls"
+  assert_contains "${manifest}" "livenessProbe:"
+  assert_contains "${manifest}" "readinessProbe:"
+  assert_contains "${manifest}" "scheme: HTTPS"
+  assert_contains "${manifest}" "path: /healthz"
+  assert_not_contains "${manifest}" "tcpSocket:"
+  assert_contains "${script}" "Authorization"
+  assert_contains "${script}" "Bearer "
+  assert_contains "${script}" "\"/v1/chat/completions\""
+  assert_contains "${script}" "\"tool_calls\""
+  assert_contains "${script}" "\"bash\""
+  assert_contains "${script}" "\"publish_file\""
+  assert_contains "${script}" "json.dumps({"
+  assert_contains "${script}" "ssl.SSLContext"
+  pass "local OpenAI provider manifest and script keep HTTPS/auth/tool-call contract"
+}
+
 test_doctor_dry_run_status_lines() {
   local cache="${TMP_DIR}/doctor-cache"
   local env_dir="${TMP_DIR}/doctor-env"
@@ -1376,6 +1533,7 @@ test_existing_cloud_rejects_postgresql_juicefs_meta_url
 test_self_hosted_default_kube_context_is_empty
 test_self_hosted_default_juicefs_bucket_is_http_bucket_url
 test_self_hosted_default_juicefs_meta_url_uses_postgres_scheme
+test_self_hosted_writes_local_openai_app_overlay
 test_juicefs_bucket_contract_rejects_s3_prefix_url
 test_juicefs_meta_url_contract_requires_postgres_scheme
 test_json_schemas_match_juicefs_contract
@@ -1392,8 +1550,11 @@ test_postgres_init_complete_does_not_require_log_sentinel
 test_postgres_init_wait_failure_keeps_job_and_collects_debug
 test_minio_bucket_init_failure_keeps_job_and_collects_debug
 test_contract_cache_install_and_static_juicefs
+test_p1_real_requires_local_openai_provider_image
+test_self_hosted_local_openai_render_from_p1_cache
 test_self_hosted_keycloak_render_from_p1_cache
 test_existing_cloud_dry_run_does_not_render_keycloak
+test_local_openai_provider_static_contract
 test_doctor_dry_run_status_lines
 test_live_juicefs_contract_mismatch
 test_live_pvc_bound_rwx_success

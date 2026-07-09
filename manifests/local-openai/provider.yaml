@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentsmith-lite-local-openai
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+  selector:
+    app.kubernetes.io/name: agentsmith-lite-local-openai
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentsmith-lite-local-openai
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentsmith-lite-local-openai
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentsmith-lite-local-openai
+    spec:
+      containers:
+        - name: local-openai
+          image: ${LOCAL_OPENAI_PROVIDER_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - /app/provider.py
+          ports:
+            - containerPort: 8443
+              name: https
+          env:
+            - name: PORT
+              value: "8443"
+            - name: TLS_CERT_FILE
+              value: /tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /tls/tls.key
+            - name: LOCAL_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-local-openai-api-key
+                  key: apiKey
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: https
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: https
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: provider-script
+              mountPath: /app/provider.py
+              subPath: provider.py
+              readOnly: true
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: provider-script
+          configMap:
+            name: agentsmith-lite-local-openai-script
+        - name: tls
+          secret:
+            secretName: agentsmith-lite-local-openai-tls

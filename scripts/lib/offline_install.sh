@@ -14,6 +14,8 @@ source "${SCRIPT_LIB_DIR}/minio.sh"
 source "${SCRIPT_LIB_DIR}/postgres.sh"
 # shellcheck source=keycloak.sh
 source "${SCRIPT_LIB_DIR}/keycloak.sh"
+# shellcheck source=local_openai.sh
+source "${SCRIPT_LIB_DIR}/local_openai.sh"
 
 offline_install_kubectl() {
   local cache_dir="$1"
@@ -278,7 +280,8 @@ offline_install_render_manifests() {
   local env_file="$2"
   local secrets_file="$3"
   local render_dir="$4"
-  local lock_file namespace postgres_image minio_image minio_client_image juicefs_csi_image keycloak_image auth_mode
+  local lock_file namespace postgres_image minio_image minio_client_image juicefs_csi_image keycloak_image auth_mode local_openai_image
+  local app_secrets_file
   local keycloak_user="" keycloak_password="" keycloak_database=""
 
   mkdir -p "${render_dir}"
@@ -293,8 +296,11 @@ offline_install_render_manifests() {
     || die "p1-real images.lock is missing dependency image entry: minio-client"
   juicefs_csi_image="$(images_lock_image_ref "${lock_file}" "juicefs-csi")" \
     || die "p1-real images.lock is missing dependency image entry: juicefs-csi"
+  local_openai_image="$(images_lock_image_ref "${lock_file}" "local-openai-provider")" \
+    || die "p1-real images.lock is missing dependency image entry: local-openai-provider"
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
   auth_mode="$(env_value_or_empty "${env_file}" AUTH_MODE)"
+  app_secrets_file="$(dirname "${secrets_file}")/app.secrets.env"
   if [[ "${auth_mode}" == "oidc" ]]; then
     keycloak_image="$(images_lock_image_ref "${lock_file}" "keycloak")" \
       || die "p1-real images.lock is missing dependency image entry: keycloak"
@@ -312,6 +318,7 @@ offline_install_render_manifests() {
   render_minio_bucket_init_job "${env_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-bucket-init-job.yaml" "${minio_client_image}"
   render_juicefs_format_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}/juicefs-format-job.yaml" "${juicefs_csi_image}"
   offline_install_render_juicefs_csi_helm_values "${env_file}" "${lock_file}" "${render_dir}/juicefs-csi-values.yaml"
+  render_local_openai_manifests "${env_file}" "${app_secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/local-openai" "${render_dir}" "${local_openai_image}"
   if [[ "${auth_mode}" == "oidc" ]]; then
     render_keycloak_secret_manifest "${render_dir}/keycloak-secret.yaml"
     render_keycloak_deployment_manifest "${OFFLINE_INSTALL_ROOT}/manifests/keycloak" "${render_dir}/keycloak.yaml" "${keycloak_image}"
@@ -327,9 +334,6 @@ offline_install_render_self_hosted_dry_run_manifests() {
   local render_dir="${output_dir}/rendered/offline-install"
 
   if [[ "$(offline_cache_mode "${cache_dir}")" != "p1-real" ]]; then
-    return 0
-  fi
-  if [[ "$(env_value_or_empty "${env_file}" AUTH_MODE)" != "oidc" ]]; then
     return 0
   fi
 
@@ -438,6 +442,15 @@ offline_install_wait_keycloak_ready() {
   namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
   info "install-offline: waiting for Keycloak Deployment readiness"
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status deployment/keycloak --timeout=240s
+}
+
+offline_install_wait_local_openai_ready() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local namespace
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  info "install-offline: waiting for local OpenAI provider Deployment readiness"
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status deployment/agentsmith-lite-local-openai --timeout=120s
 }
 
 offline_install_bootstrap_keycloak() {
@@ -598,6 +611,13 @@ run_p1_real_offline_install() {
   info "install-offline: applying rendered JuiceFS CSI contract"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
   offline_install_wait_juicefs_pvc_bound "${cache_dir}" "${env_file}"
+
+  info "install-offline: applying rendered local OpenAI provider"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/local-openai-secret.yaml"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/local-openai-tls-secret.yaml"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/local-openai-ca.yaml"
+  offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/local-openai.yaml"
+  offline_install_wait_local_openai_ready "${cache_dir}" "${env_file}"
 
   if [[ "$(env_value_or_empty "${env_file}" AUTH_MODE)" == "oidc" ]]; then
     info "install-offline: applying rendered Keycloak manifests"

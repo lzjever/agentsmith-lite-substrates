@@ -15,11 +15,13 @@ patterns=(
 
 tmp="$(mktemp)"
 app_tmp="$(mktemp)"
-trap 'rm -f "${tmp}" "${app_tmp}"' EXIT
+py_tmp="$(mktemp)"
+trap 'rm -f "${tmp}" "${app_tmp}" "${py_tmp}"' EXIT
 
 for pattern in "${patterns[@]}"; do
   if grep -RInF \
     --exclude-dir=.git \
+    --exclude='AGENTS.md' \
     --exclude='check-forbidden-copy.sh' \
     --exclude='test.sh' \
     -- "${pattern}" "${ROOT_DIR}" >>"${tmp}"; then
@@ -40,6 +42,7 @@ for pattern in "${app_owned_patterns[@]}"; do
     [[ -d "${scan_dir}" ]] || continue
     if grep -RInF \
       --exclude-dir=.git \
+      --exclude='AGENTS.md' \
       --exclude='check-forbidden-copy.sh' \
       --exclude='test.sh' \
       --exclude='common.sh' \
@@ -49,9 +52,20 @@ for pattern in "${app_owned_patterns[@]}"; do
   done
 done
 
+find "${ROOT_DIR}" \
+  \( -path "${ROOT_DIR}/.git" -o -path "${ROOT_DIR}/dist" -o -path "${ROOT_DIR}/target" \) -prune -o \
+  \( -type d -name '__pycache__' -o -type f -name '*.pyc' \) -print \
+  >"${py_tmp}"
+
 if [[ -s "${tmp}" ]]; then
   cat "${tmp}" >&2
   printf 'error: forbidden copied governance/reference surface found\n' >&2
+  exit 1
+fi
+
+if [[ -s "${py_tmp}" ]]; then
+  cat "${py_tmp}" >&2
+  printf 'error: Python bytecode/cache files must not be committed\n' >&2
   exit 1
 fi
 

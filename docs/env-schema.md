@@ -38,6 +38,9 @@ backchannel URL.
 `substrate.env` contains routing and resource names only: namespace,
 kubeconfig/context, S3 endpoint metadata, auth mode, JuiceFS StorageClass/PVC
 names, ingress settings, and optional registry coordinates.
+Self-hosted installs also write a separate `app.env` overlay containing the
+local OpenAI-compatible provider base URL and CA ConfigMap reference. App-only
+model keys are intentionally not accepted in `substrate.env`.
 
 `kubernetes.kubeconfigPath` in config is copied to `KUBECONFIG_PATH` as an
 existing kubeconfig. If it is empty, `kubernetes.kubeconfigOutput` is copied as
@@ -79,3 +82,8 @@ The validator rejects secret keys in `substrate.env`, rejects unknown keys in
 the secret file, rejects duplicate keys in both files, checks owner-only
 permissions, requires `APP_SESSION_SECRET` to be at least 32 characters, and
 prints fingerprints only.
+
+Self-hosted installs write a separate owner-only `app.secrets.env` overlay with
+`AGENTSMITH_LITE_MODEL_API_KEY_LOCAL` for the substrate-owned local provider.
+The key is generated or reused from an existing `app.secrets.env` when
+reinstalling with `--force`.

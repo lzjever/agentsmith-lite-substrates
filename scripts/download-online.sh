@@ -148,7 +148,7 @@ write_p1_real_cache() {
   local juicefs_image juicefs_url juicefs_sha
   local liveness_image liveness_url liveness_sha registrar_image registrar_url registrar_sha
   local provisioner_image provisioner_url provisioner_sha resizer_image resizer_url resizer_sha
-  local rwx_check_image rwx_check_url rwx_check_sha
+  local rwx_check_image rwx_check_url rwx_check_sha local_openai_image local_openai_url local_openai_sha
   k3s_url="$(artifact_lock_required_url "${lock_file}" "K3S_BINARY_URL")"
   k3s_sha="$(artifact_lock_required_sha256 "${lock_file}" "K3S_BINARY_SHA256")"
   install_url="$(artifact_lock_required_url "${lock_file}" "K3S_INSTALL_SCRIPT_URL")"
@@ -191,6 +191,9 @@ write_p1_real_cache() {
   rwx_check_image="$(artifact_lock_required_digest_image "${lock_file}" "RWX_CHECK_IMAGE")"
   rwx_check_url="$(artifact_lock_required_url "${lock_file}" "RWX_CHECK_ARCHIVE_URL")"
   rwx_check_sha="$(artifact_lock_required_sha256 "${lock_file}" "RWX_CHECK_ARCHIVE_SHA256")"
+  local_openai_image="$(artifact_lock_required_digest_image "${lock_file}" "LOCAL_OPENAI_PROVIDER_IMAGE")"
+  local_openai_url="$(artifact_lock_required_url "${lock_file}" "LOCAL_OPENAI_PROVIDER_ARCHIVE_URL")"
+  local_openai_sha="$(artifact_lock_required_sha256 "${lock_file}" "LOCAL_OPENAI_PROVIDER_ARCHIVE_SHA256")"
 
   prepare_output_dir "${dir}"
 
@@ -210,6 +213,7 @@ write_p1_real_cache() {
   download_verified_artifact "JUICEFS_CSI_PROVISIONER_ARCHIVE_URL" "${provisioner_url}" "${provisioner_sha}" "${dir}/images/oci/juicefs-csi-provisioner.tar"
   download_verified_artifact "JUICEFS_CSI_RESIZER_ARCHIVE_URL" "${resizer_url}" "${resizer_sha}" "${dir}/images/oci/juicefs-csi-resizer.tar"
   download_verified_artifact "RWX_CHECK_ARCHIVE_URL" "${rwx_check_url}" "${rwx_check_sha}" "${dir}/images/oci/rwx-check.tar"
+  download_verified_artifact "LOCAL_OPENAI_PROVIDER_ARCHIVE_URL" "${local_openai_url}" "${local_openai_sha}" "${dir}/images/oci/local-openai-provider.tar"
   chmod +x "${dir}/bin/k3s" "${dir}/scripts/install-k3s.sh" "${dir}/bin/kubectl" "${dir}/bin/helm"
 
   cat >"${dir}/scripts/import-images.sh" <<'EOF_IMPORT'
@@ -381,7 +385,7 @@ EOF_IMPORT
   cp "${ROOT_DIR}/manifests/namespace/namespace.yaml" "${dir}/manifests/namespace-bootstrap/namespace.yaml"
 
   local k3s_sum install_sum airgap_sum kubectl_sum helm_sum import_sum namespace_sum csi_chart_sum postgres_sum minio_sum minio_client_sum keycloak_sum juicefs_sum
-  local liveness_sum registrar_sum provisioner_sum resizer_sum rwx_check_sum lock_sum manifest_sum
+  local liveness_sum registrar_sum provisioner_sum resizer_sum rwx_check_sum local_openai_sum lock_sum manifest_sum
   k3s_sum="$(sha256_file "${dir}/bin/k3s")"
   install_sum="$(sha256_file "${dir}/scripts/install-k3s.sh")"
   airgap_sum="$(sha256_file "${dir}/images/k3s/k3s-airgap-images-amd64.tar.zst")"
@@ -400,6 +404,7 @@ EOF_IMPORT
   provisioner_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-provisioner.tar")"
   resizer_sum="$(sha256_file "${dir}/images/oci/juicefs-csi-resizer.tar")"
   rwx_check_sum="$(sha256_file "${dir}/images/oci/rwx-check.tar")"
+  local_openai_sum="$(sha256_file "${dir}/images/oci/local-openai-provider.tar")"
 
   cat >"${dir}/images/images.lock" <<EOF_LOCK
 schemaVersion: agentsmith-lite.substrate.images/v1
@@ -444,6 +449,10 @@ images:
     image: ${rwx_check_image}
     archive: images/oci/rwx-check.tar
     sha256: ${rwx_check_sum}
+  - name: local-openai-provider
+    image: ${local_openai_image}
+    archive: images/oci/local-openai-provider.tar
+    sha256: ${local_openai_sum}
 EOF_LOCK
   lock_sum="$(sha256_file "${dir}/images/images.lock")"
 
@@ -508,6 +517,9 @@ artifacts:
   - path: images/oci/rwx-check.tar
     sha256: ${rwx_check_sum}
     kind: oci-archive
+  - path: images/oci/local-openai-provider.tar
+    sha256: ${local_openai_sum}
+    kind: oci-archive
 EOF_MANIFEST
   manifest_sum="$(sha256_file "${dir}/manifest.yaml")"
 
@@ -532,6 +544,7 @@ ${registrar_sum}  images/oci/juicefs-csi-node-driver-registrar.tar
 ${provisioner_sum}  images/oci/juicefs-csi-provisioner.tar
 ${resizer_sum}  images/oci/juicefs-csi-resizer.tar
 ${rwx_check_sum}  images/oci/rwx-check.tar
+${local_openai_sum}  images/oci/local-openai-provider.tar
 EOF_SUMS
 
   validate_offline_cache "${dir}"

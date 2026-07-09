@@ -187,6 +187,37 @@ env_or_existing_nonempty_secret() {
   return 1
 }
 
+write_app_overlay_contract() {
+  local output_dir="$1"
+  local namespace="$2"
+  local existing_app_secrets_file="${3:-}"
+  local install_path="$4"
+  local app_env_file="${output_dir}/app.env"
+  local app_secrets_file="${output_dir}/app.secrets.env"
+  local local_provider_api_key old_umask
+
+  if ! local_provider_api_key="$(env_or_existing_nonempty_secret AGENTSMITH_LITE_MODEL_API_KEY_LOCAL "${existing_app_secrets_file}")"; then
+    local_provider_api_key="$(random_secret)"
+  fi
+
+  cat >"${app_env_file}" <<EOF_APP_ENV
+AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL=https://agentsmith-lite-local-openai.${namespace}.svc.cluster.local/v1
+AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP=agentsmith-lite-local-openai-ca
+AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY=ca.crt
+EOF_APP_ENV
+
+  old_umask="$(umask)"
+  umask 077
+  cat >"${app_secrets_file}" <<EOF_APP_SECRETS
+AGENTSMITH_LITE_MODEL_API_KEY_LOCAL=${local_provider_api_key}
+EOF_APP_SECRETS
+  umask "${old_umask}"
+  chmod 0600 "${app_secrets_file}"
+
+  info "${install_path}: wrote ${app_env_file}"
+  info "${install_path}: wrote ${app_secrets_file} with owner-only permissions"
+}
+
 write_env_contract_from_config() {
   local config_file="$1"
   local output_dir="$2"
@@ -199,21 +230,33 @@ write_env_contract_from_config() {
 
   local mode namespace kubeconfig_path kube_context kubeconfig_output skip_k3s
   mode="$(config_value "${config_file}" "mode" "self-hosted")"
-  local output_env_file output_secrets_file reuse_self_hosted_secrets_file
+  local output_env_file output_secrets_file output_app_env_file output_app_secrets_file
+  local reuse_self_hosted_secrets_file reuse_self_hosted_app_secrets_file
   output_env_file="${output_dir}/substrate.env"
   output_secrets_file="${output_dir}/substrate.secrets.env"
+  output_app_env_file="${output_dir}/app.env"
+  output_app_secrets_file="${output_dir}/app.secrets.env"
   reuse_self_hosted_secrets_file=""
+  reuse_self_hosted_app_secrets_file=""
 
-  if [[ "${mode}" == "self-hosted" && ( -e "${output_env_file}" || -e "${output_secrets_file}" ) ]]; then
-    [[ "${force}" == "true" ]] || die "output env files already exist; rerun with --force to overwrite"
-    if [[ ! -f "${output_env_file}" || ! -f "${output_secrets_file}" ]]; then
-      die "self-hosted output env files are incomplete; restore both substrate.env and substrate.secrets.env or clear local substrate state before reinstalling"
+  if [[ "${mode}" == "self-hosted" ]]; then
+    if [[ "${force}" != "true" && ( -e "${output_env_file}" || -e "${output_secrets_file}" || -e "${output_app_env_file}" || -e "${output_app_secrets_file}" ) ]]; then
+      die "output env files already exist; rerun with --force to overwrite"
     fi
-    local validation_output
-    if ! validation_output="$(validate_env_contract "${output_env_file}" "${output_secrets_file}" 2>&1)"; then
-      die "existing self-hosted output env files do not validate; restore the original output or clear local substrate state before reinstalling: ${validation_output}"
+    if [[ "${force}" == "true" && ( -e "${output_env_file}" || -e "${output_secrets_file}" ) ]]; then
+      if [[ ! -f "${output_env_file}" || ! -f "${output_secrets_file}" ]]; then
+        die "self-hosted output env files are incomplete; restore both substrate.env and substrate.secrets.env or clear local substrate state before reinstalling"
+      fi
+      local validation_output
+      if ! validation_output="$(validate_env_contract "${output_env_file}" "${output_secrets_file}" 2>&1)"; then
+        die "existing self-hosted output env files do not validate; restore the original output or clear local substrate state before reinstalling: ${validation_output}"
+      fi
+      reuse_self_hosted_secrets_file="${output_secrets_file}"
     fi
-    reuse_self_hosted_secrets_file="${output_secrets_file}"
+    if [[ "${force}" == "true" && -f "${output_app_secrets_file}" ]]; then
+      check_secret_file_mode "${output_app_secrets_file}"
+      reuse_self_hosted_app_secrets_file="${output_app_secrets_file}"
+    fi
   elif [[ "${force}" != "true" && ( -e "${output_env_file}" || -e "${output_secrets_file}" ) ]]; then
     die "output env files already exist; rerun with --force to overwrite"
   fi
@@ -403,6 +446,8 @@ REGISTRY_URL=${registry}
 IMAGE_PULL_SECRET_NAME=${image_pull_secret}
 EOF_ENV
 
+  local old_umask
+  old_umask="$(umask)"
   umask 077
   cat >"${output_secrets_file}" <<EOF_SECRETS
 SUBSTRATE_SCHEMA_VERSION=agentsmith-lite.substrate.env/v1
@@ -421,8 +466,12 @@ KEYCLOAK_DB_DATABASE=${keycloak_db_database}
 KEYCLOAK_ADMIN_USERNAME=${keycloak_admin_username}
 KEYCLOAK_ADMIN_PASSWORD=${keycloak_admin_password}
 EOF_SECRETS
+  umask "${old_umask}"
   chmod 0600 "${output_secrets_file}"
 
   info "${install_path}: wrote ${output_env_file}"
   info "${install_path}: wrote ${output_secrets_file} with owner-only permissions"
+  if [[ "${mode}" == "self-hosted" ]]; then
+    write_app_overlay_contract "${output_dir}" "${namespace}" "${reuse_self_hosted_app_secrets_file}" "${install_path}"
+  fi
 }

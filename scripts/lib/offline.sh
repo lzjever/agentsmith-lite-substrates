@@ -163,6 +163,7 @@ substrate_allowed_image_archive() {
     juicefs-csi-provisioner) printf '%s\n' "images/oci/juicefs-csi-provisioner.tar" ;;
     juicefs-csi-resizer) printf '%s\n' "images/oci/juicefs-csi-resizer.tar" ;;
     rwx-check) printf '%s\n' "images/oci/rwx-check.tar" ;;
+    local-openai-provider) printf '%s\n' "images/oci/local-openai-provider.tar" ;;
     *) return 1 ;;
   esac
 }
@@ -179,7 +180,8 @@ is_substrate_allowed_oci_archive() {
     images/oci/juicefs-csi-node-driver-registrar.tar|\
     images/oci/juicefs-csi-provisioner.tar|\
     images/oci/juicefs-csi-resizer.tar|\
-    images/oci/rwx-check.tar)
+    images/oci/rwx-check.tar|\
+    images/oci/local-openai-provider.tar)
       return 0
       ;;
   esac
@@ -504,6 +506,7 @@ validate_p1_real_cache() {
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-provisioner.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/juicefs-csi-resizer.tar"
   require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/rwx-check.tar"
+  require_manifest_artifact "${manifest_file}" "oci-archive" "images/oci/local-openai-provider.tar"
 
   require_executable_artifact "${cache_dir}" "bin/k3s"
   require_executable_artifact "${cache_dir}" "scripts/install-k3s.sh"
@@ -521,6 +524,12 @@ validate_p1_real_cache() {
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-provisioner" "images/oci/juicefs-csi-provisioner.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "juicefs-csi-resizer" "images/oci/juicefs-csi-resizer.tar"
   require_image_lock_archive "${cache_dir}" "${lock_file}" "rwx-check" "images/oci/rwx-check.tar"
+  require_image_lock_archive "${cache_dir}" "${lock_file}" "local-openai-provider" "images/oci/local-openai-provider.tar"
+
+  local local_openai_image
+  local_openai_image="$(images_lock_image_ref "${lock_file}" "local-openai-provider")" \
+    || die "p1-real images.lock is missing dependency image entry: local-openai-provider"
+  require_digest_pinned_image_ref "images.lock entry local-openai-provider" "${local_openai_image}"
 
   local helm_image_name helm_image
   for helm_image_name in \

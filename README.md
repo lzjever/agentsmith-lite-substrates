@@ -10,6 +10,9 @@ by the app repo.
 This first public-ready skeleton is validate-first:
 
 - writes and validates split `substrate.env` and `substrate.secrets.env`
+- writes self-hosted app overlay files `app.env` and `app.secrets.env` for the
+  local OpenAI-compatible provider without adding app-only keys to
+  `substrate.env`
 - validates secret redaction and owner-only secret file permissions
 - writes P0 offline-cache skeletons for contract-only dry-runs
 - produces `cacheMode: p1-real` offline caches from a non-secret artifact lock
@@ -35,6 +38,9 @@ This first public-ready skeleton is validate-first:
 - renders self-hosted Keycloak from the same OIDC env contract, uses the
   existing PostgreSQL service for the Keycloak DB, waits for `deployment/keycloak`,
   and bootstraps the realm/client with a one-shot cached Keycloak Job
+- renders a substrate-owned HTTPS OpenAI-compatible local provider, including
+  generated local CA/server TLS Secret, API key Secret, CA ConfigMap, Service
+  port 443, and Deployment
 - installs the cached JuiceFS CSI Helm chart with cached driver and sidecar
   images while leaving StorageClass/Secret/PVC ownership to the substrate
   contract
@@ -180,6 +186,12 @@ operator/local login credentials for self-hosted Keycloak and must not be
 projected into app runtime Secret/ConfigMap resources.
 Self-hosted Keycloak DB and bootstrap admin secrets are rendered only into
 substrate-owned Kubernetes Secrets and are not added to the app env contract.
+Self-hosted installs also write `app.env` with
+`AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL`,
+`AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP`, and
+`AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY`, plus owner-only `app.secrets.env` with
+`AGENTSMITH_LITE_MODEL_API_KEY_LOCAL`. These are app overlay files, not
+substrate env keys.
 
 ## Main Commands
 
