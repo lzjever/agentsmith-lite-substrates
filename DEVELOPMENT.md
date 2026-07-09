@@ -2,20 +2,27 @@
 
 ## Workflow
 
-Use small shell tests before changing behavior:
+For each change, choose only the narrow command that matches the touched
+install/config/runtime contract. These examples are developer-selected checks,
+not a default mainline pass/fail item:
 
 ```bash
-scripts/test.sh
+scripts/download-online.sh --contract-only --output dist/offline-cache --force
+scripts/install-online.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out --dry-run --force
+scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.secrets.env
+scripts/validate-juicefs-contract.sh --env out/substrate.env --secrets out/substrate.secrets.env
+python3 scripts/test-local-openai-provider-artifact-contract.py
 ```
 
-The current test slices are intentionally small:
+Keep the selected check tied to the behavior under edit:
 
 - env/secrets contract, redaction, and secret file mode
-- contract-only offline cache plus `install-online.sh --dry-run`
-- p1-real offline cache contract and self-hosted Keycloak render path
+- install dry-run and self-hosted Keycloak/OIDC render path
 - rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
 - self-hosted install apply, rollout, one-shot Job, and PVC `Bound` checks
   through a kubectl stub
+- local provider artifact prompt contract
+- core shell helper behavior when that helper is directly changed
 
 ## Shell Style
 

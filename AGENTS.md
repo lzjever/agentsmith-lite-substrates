@@ -29,18 +29,21 @@ Remove governance overhead aggressively:
 
 Install commands and narrow contract checks should fail fast, print concise
 stdout/stderr, and exit non-zero. Keep useful checks named after the concrete
-install/config contract they verify, such as `check-substrates-install`, never
-after broad readiness, acceptance, or all-clear concepts. Run them only when a developer
-chooses them for the current change. If something is wrong, fix the
+install/config/runtime contract they verify, such as `validate-env`,
+`validate-juicefs-contract`, or the local provider artifact contract, never
+after broad readiness, acceptance, or all-clear concepts. Run them only when a
+developer chooses them for the current change. If something is wrong, fix the
 install/config path in place.
 
 ## Testing
 
-- Keep `scripts/test.sh` focused on install inputs, env/secrets, Keycloak config, JuiceFS contract, and core shell behavior.
 - Add tests only when they protect a real install/runtime contract.
+- Keep concrete checks for install/config/runtime contracts only, such as
+  env/secrets, Keycloak/OIDC config, JuiceFS contract, local provider artifact
+  behavior, and core shell helper behavior when that helper is directly changed.
 - Do not add tests for diagnostic document formats or release workflows.
-- Choose the minimum install/config contract verification for the current change; do not run long, unrelated, or umbrella install checks by default, and do not add broad readiness or acceptance proofs.
-- Before delivery, keep at most a few quick checks tied to the local single-node K8s install path.
+- Choose precise, narrow install/config contract verification for the current change, selected deliberately by the developer; do not run long, unrelated, or umbrella install checks by default, and do not add broad readiness or acceptance proofs.
+- Keep only current-change checks tied to the local single-node K8s install path and run by developer choice; do not keep a default mainline pass/fail check under another name.
 
 ## Boundaries
 

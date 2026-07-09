@@ -16,8 +16,9 @@ cluster mutation is enabled:
 
 ## Targeted Bring-Up Commands
 
-Use these as developer-selected commands for the install/config path currently
-being changed. They are not a default release gate or broad all-clear proof.
+Use these as precise, narrow commands a developer selects for the install/config
+path currently being changed. They are not a default mainline pass/fail check,
+release gate, or broad all-clear proof.
 
 1. Choose a config example from `config/`.
 2. For a real offline cache, run `scripts/prepare-offline-cache.sh

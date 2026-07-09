@@ -50,19 +50,28 @@ This first public-ready skeleton is validate-first:
 
 ## Quick Start
 
-```bash
-scripts/test.sh
+Choose only the narrow checks that match the current change. These examples are
+developer-selected install/config/runtime contract checks, not a default
+mainline pass/fail item.
 
+```bash
 scripts/download-online.sh --contract-only --output dist/offline-cache --force
 scripts/install-online.sh \
   --cache dist/offline-cache \
   --config config/substrates.self-hosted.example.yaml \
   --output out \
-  --dry-run
+  --dry-run \
+  --force
 
 scripts/validate-env.sh \
   --env out/substrate.env \
   --secrets out/substrate.secrets.env
+
+scripts/validate-juicefs-contract.sh \
+  --env out/substrate.env \
+  --secrets out/substrate.secrets.env
+
+python3 scripts/test-local-openai-provider-artifact-contract.py
 ```
 
 Non-dry-run self-hosted install fails in place when cached k3s/image import,

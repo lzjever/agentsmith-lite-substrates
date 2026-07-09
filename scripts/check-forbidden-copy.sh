@@ -23,7 +23,6 @@ for pattern in "${patterns[@]}"; do
     --exclude-dir=.git \
     --exclude='AGENTS.md' \
     --exclude='check-forbidden-copy.sh' \
-    --exclude='test.sh' \
     -- "${pattern}" "${ROOT_DIR}" >>"${tmp}"; then
     :
   fi
@@ -44,7 +43,6 @@ for pattern in "${app_owned_patterns[@]}"; do
       --exclude-dir=.git \
       --exclude='AGENTS.md' \
       --exclude='check-forbidden-copy.sh' \
-      --exclude='test.sh' \
       --exclude='common.sh' \
       -- "${pattern}" "${scan_dir}" >>"${app_tmp}"; then
       :
