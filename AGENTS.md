@@ -22,18 +22,20 @@ Remove governance overhead aggressively:
 - generated diagnostic documents;
 - output-only flags and output-shape tests;
 - umbrella validation commands detached from core install paths;
+- one-size-fits-all install proof labels detached from install/config contracts;
 - tests of the test harness;
 - broad fake test sets that do not protect core install/runtime behavior.
 
-Install and validation commands should fail fast, print concise stdout/stderr,
-and exit non-zero. If something is wrong, fix the install/config path in place.
+Install commands and narrow contract checks should fail fast, print concise
+stdout/stderr, and exit non-zero. If something is wrong, fix the install/config
+path in place.
 
 ## Testing
 
 - Keep `scripts/test.sh` focused on install inputs, env/secrets, Keycloak config, JuiceFS contract, and core shell behavior.
 - Add tests only when they protect a real install/runtime contract.
 - Do not add tests for diagnostic document formats or release workflows.
-- Do not run long or unrelated checks as default validation.
+- Choose the minimum install/config contract verification for the current change; do not run long, unrelated, or umbrella install checks by default.
 
 ## Boundaries
 
