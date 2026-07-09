@@ -14,7 +14,10 @@ cluster mutation is enabled:
 | Object storage | S3-compatible endpoint; MinIO for self-hosted dev |
 | Auth | Keycloak for self-hosted OIDC; external OIDC for existing-cloud |
 
-## Bring-Up
+## Targeted Bring-Up Commands
+
+Use these as developer-selected commands for the install/config path currently
+being changed. They are not a default release gate or broad all-clear proof.
 
 1. Choose a config example from `config/`.
 2. For a real offline cache, run `scripts/prepare-offline-cache.sh
@@ -24,7 +27,8 @@ cluster mutation is enabled:
 3. Run an installer in validate-first mode.
 4. Run `validate-env.sh`.
 5. Run `validate-juicefs-contract.sh`.
-6. Run `doctor.sh --dry-run` for static substrate checks.
+6. Run `doctor.sh --dry-run` for static substrate contract checks when that is
+   the relevant path.
 7. When the cluster is reachable, rerun doctor without `--dry-run` and provide
    either `--offline-cache` with `name: postgres`, `name: minio-client`, and
    `name: rwx-check` in `images.lock`, or explicit `--postgres-probe-image`,
@@ -41,8 +45,8 @@ cluster mutation is enabled:
 - JuiceFS metadata URL, CSI driver, StorageClass, PVC, and RWX write/read check
 - offline cache completeness when `--offline-cache` is supplied
 
-App images, app API health, sandbox behavior, and task runtime checks belong to
-the app repo.
+App images, app API readiness, sandbox behavior, and task runtime checks belong
+to the app repo.
 
 Current behavior is intentionally layered:
 
