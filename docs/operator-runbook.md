@@ -17,8 +17,7 @@ cluster mutation is enabled:
 ## Targeted Bring-Up Commands
 
 Use these as precise, narrow commands a developer selects for the install/config
-path currently being changed. They are not a default mainline pass/fail check,
-release gate, or broad all-clear proof.
+path currently being changed. They are not a default product-wide check.
 
 1. Choose a config example from `config/`.
 2. For a real offline cache, run `scripts/prepare-offline-cache.sh
@@ -33,7 +32,7 @@ release gate, or broad all-clear proof.
    import, Helm install, kubectl apply, rollout, one-shot Job, or PVC wait
    failures.
 
-App images, app API readiness, sandbox behavior, and task runtime checks belong
+App images, app API availability, sandbox behavior, and task runtime checks belong
 to the app repo.
 
 ## Secret Handling
