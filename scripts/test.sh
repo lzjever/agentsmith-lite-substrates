@@ -1327,6 +1327,123 @@ test_self_hosted_local_openai_render_from_p1_cache() {
   pass "self-hosted p1 dry-run renders local HTTPS OpenAI provider and matching app overlay"
 }
 
+test_local_openai_tls_missing_openssl_error_is_clear() {
+  local bin="${TMP_DIR}/local-openai-no-openssl-bin"
+  local out="${TMP_DIR}/local-openai-no-openssl.out"
+  local status=0
+
+  mkdir -p "${bin}"
+  ln -s "$(command -v dirname)" "${bin}/dirname"
+
+  set +e
+  PATH="${bin}" "${BASH}" -c 'source "$1"; local_openai_generate_tls "$2" agentsmith-lite-e2e' \
+    _ \
+    "${ROOT_DIR}/scripts/lib/local_openai.sh" \
+    "${TMP_DIR}/local-openai-no-openssl-certs" \
+    >"${out}" 2>&1
+  status=$?
+  set -e
+
+  [[ "${status}" -ne 0 ]] || fail "local OpenAI TLS generation should fail without openssl"
+  assert_contains "${out}" "openssl is required to generate local OpenAI provider TLS certificates"
+  pass "local OpenAI TLS generation reports missing openssl"
+}
+
+test_local_openai_tls_openssl_stderr_is_preserved() {
+  local bin="${TMP_DIR}/local-openai-failing-openssl-bin"
+  local out="${TMP_DIR}/local-openai-failing-openssl.out"
+  local status=0
+
+  mkdir -p "${bin}"
+  ln -s "$(command -v dirname)" "${bin}/dirname"
+  ln -s "$(command -v mkdir)" "${bin}/mkdir"
+  {
+    printf '#!/bin/sh\n'
+    printf "printf 'stub openssl failure detail\\\\n' >&2\n"
+    printf 'exit 42\n'
+  } >"${bin}/openssl"
+  chmod +x "${bin}/openssl"
+
+  set +e
+  PATH="${bin}" "${BASH}" -c 'source "$1"; local_openai_generate_tls "$2" agentsmith-lite-e2e' \
+    _ \
+    "${ROOT_DIR}/scripts/lib/local_openai.sh" \
+    "${TMP_DIR}/local-openai-failing-openssl-certs" \
+    >"${out}" 2>&1
+  status=$?
+  set -e
+
+  [[ "${status}" -ne 0 ]] || fail "local OpenAI TLS generation should fail when openssl fails"
+  assert_contains "${out}" "openssl failed to generate local OpenAI provider CA key"
+  assert_contains "${out}" "stub openssl failure detail"
+  pass "local OpenAI TLS generation preserves openssl stderr"
+}
+
+test_local_openai_tls_and_render_support_hyphen_namespace() {
+  local namespace="agentsmith-lite-e2e"
+  local cert_dir="${TMP_DIR}/local-openai-hyphen-certs"
+  local cert_out="${TMP_DIR}/local-openai-hyphen-certs.out"
+  local san_out="${TMP_DIR}/local-openai-hyphen-san.out"
+  local render_dir="${TMP_DIR}/local-openai-hyphen-render"
+  local env_file="${TMP_DIR}/local-openai-hyphen-substrate.env"
+  local app_secrets_file="${TMP_DIR}/local-openai-hyphen-app.secrets.env"
+  local render_out="${TMP_DIR}/local-openai-hyphen-render.out"
+  local rendered_cert="${TMP_DIR}/local-openai-hyphen-rendered.crt"
+  local rendered_san_out="${TMP_DIR}/local-openai-hyphen-rendered-san.out"
+  local status=0
+
+  set +e
+  "${BASH}" -c 'source "$1"; local_openai_generate_tls "$2" "$3"' \
+    _ \
+    "${ROOT_DIR}/scripts/lib/local_openai.sh" \
+    "${cert_dir}" \
+    "${namespace}" \
+    >"${cert_out}" 2>&1
+  status=$?
+  set -e
+  if [[ "${status}" -ne 0 ]]; then
+    printf 'local_openai_generate_tls output:\n' >&2
+    sed -n '1,80p' "${cert_out}" >&2
+    fail "local OpenAI TLS generation should support hyphenated namespaces"
+  fi
+
+  openssl x509 -in "${cert_dir}/tls.crt" -noout -ext subjectAltName >"${san_out}" 2>&1 \
+    || fail "local OpenAI TLS certificate should be readable"
+  assert_contains "${san_out}" "DNS:agentsmith-lite-local-openai.${namespace}.svc.cluster.local"
+
+  mkdir -p "${render_dir}"
+  printf 'KUBE_NAMESPACE=%s\n' "${namespace}" >"${env_file}"
+  printf 'AGENTSMITH_LITE_MODEL_API_KEY_LOCAL=dev-provider-key-value\n' >"${app_secrets_file}"
+
+  set +e
+  "${BASH}" -c 'source "$1"; render_local_openai_manifests "$2" "$3" "$4" "$5" "$6"' \
+    _ \
+    "${ROOT_DIR}/scripts/lib/local_openai.sh" \
+    "${env_file}" \
+    "${app_secrets_file}" \
+    "${ROOT_DIR}/manifests/local-openai" \
+    "${render_dir}" \
+    "docker.io/library/python:3.13-alpine@sha256:${FAKE_DIGEST}" \
+    >"${render_out}" 2>&1
+  status=$?
+  set -e
+  if [[ "${status}" -ne 0 ]]; then
+    printf 'render_local_openai_manifests output:\n' >&2
+    sed -n '1,80p' "${render_out}" >&2
+    fail "local OpenAI manifest render should support hyphenated namespaces"
+  fi
+
+  assert_contains "${render_dir}/local-openai.yaml" "namespace: ${namespace}"
+  awk '$1 == "tls.crt:" { print $2; found=1 } END { if (!found) exit 1 }' \
+    "${render_dir}/local-openai-tls-secret.yaml" \
+    | base64 -d >"${rendered_cert}" \
+    || fail "rendered local OpenAI TLS Secret should contain tls.crt"
+  openssl x509 -in "${rendered_cert}" -noout -ext subjectAltName >"${rendered_san_out}" 2>&1 \
+    || fail "rendered local OpenAI TLS certificate should be readable"
+  assert_contains "${rendered_san_out}" "DNS:agentsmith-lite-local-openai.${namespace}.svc.cluster.local"
+  pass "local OpenAI TLS generation and render support hyphenated namespaces"
+}
+
 test_self_hosted_keycloak_render_from_p1_cache() {
   local artifacts="${TMP_DIR}/keycloak-render-artifacts"
   local lock="${TMP_DIR}/keycloak-render-artifacts.env"
@@ -1552,6 +1669,9 @@ test_minio_bucket_init_failure_keeps_job_and_collects_debug
 test_contract_cache_install_and_static_juicefs
 test_p1_real_requires_local_openai_provider_image
 test_self_hosted_local_openai_render_from_p1_cache
+test_local_openai_tls_missing_openssl_error_is_clear
+test_local_openai_tls_openssl_stderr_is_preserved
+test_local_openai_tls_and_render_support_hyphen_namespace
 test_self_hosted_keycloak_render_from_p1_cache
 test_existing_cloud_dry_run_does_not_render_keycloak
 test_local_openai_provider_static_contract

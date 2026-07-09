@@ -37,18 +37,36 @@ local_openai_render_template() {
   printf '%s\n' "${content}" >"${output}"
 }
 
+local_openai_run_openssl() {
+  local message="$1"
+  shift
+  local stderr_output
+
+  if stderr_output="$(openssl "$@" 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  if [[ -n "${stderr_output}" ]]; then
+    die "${message}; openssl stderr:
+${stderr_output}"
+  fi
+  die "${message}; openssl produced no stderr"
+}
+
 local_openai_generate_tls() {
   local cert_dir="$1"
   local namespace="$2"
-  local cn="${LOCAL_OPENAI_SERVICE_NAME}.${namespace}.svc.cluster.local"
+  local cn="${LOCAL_OPENAI_SERVICE_NAME}"
 
   command -v openssl >/dev/null 2>&1 \
     || die "openssl is required to generate local OpenAI provider TLS certificates"
 
   mkdir -p "${cert_dir}"
-  openssl genrsa -out "${cert_dir}/ca.key" 2048 >/dev/null 2>&1 \
-    || die "openssl failed to generate local OpenAI provider CA key"
-  openssl req \
+  local_openai_run_openssl "openssl failed to generate local OpenAI provider CA key" \
+    genrsa \
+    -out "${cert_dir}/ca.key" \
+    2048
+  local_openai_run_openssl "openssl failed to generate local OpenAI provider CA certificate" \
+    req \
     -x509 \
     -new \
     -nodes \
@@ -56,10 +74,11 @@ local_openai_generate_tls() {
     -sha256 \
     -days 3650 \
     -subj "/CN=${LOCAL_OPENAI_CA_CONFIG_MAP}" \
-    -out "${cert_dir}/ca.crt" >/dev/null 2>&1 \
-    || die "openssl failed to generate local OpenAI provider CA certificate"
-  openssl genrsa -out "${cert_dir}/tls.key" 2048 >/dev/null 2>&1 \
-    || die "openssl failed to generate local OpenAI provider server key"
+    -out "${cert_dir}/ca.crt"
+  local_openai_run_openssl "openssl failed to generate local OpenAI provider server key" \
+    genrsa \
+    -out "${cert_dir}/tls.key" \
+    2048
   cat >"${cert_dir}/server.cnf" <<EOF_CONF
 [req]
 distinguished_name=req_distinguished_name
@@ -78,13 +97,14 @@ DNS.2=${LOCAL_OPENAI_SERVICE_NAME}.${namespace}
 DNS.3=${LOCAL_OPENAI_SERVICE_NAME}.${namespace}.svc
 DNS.4=${LOCAL_OPENAI_SERVICE_NAME}.${namespace}.svc.cluster.local
 EOF_CONF
-  openssl req \
+  local_openai_run_openssl "openssl failed to generate local OpenAI provider server CSR" \
+    req \
     -new \
     -key "${cert_dir}/tls.key" \
     -out "${cert_dir}/tls.csr" \
-    -config "${cert_dir}/server.cnf" >/dev/null 2>&1 \
-    || die "openssl failed to generate local OpenAI provider server CSR"
-  openssl x509 \
+    -config "${cert_dir}/server.cnf"
+  local_openai_run_openssl "openssl failed to sign local OpenAI provider server certificate" \
+    x509 \
     -req \
     -in "${cert_dir}/tls.csr" \
     -CA "${cert_dir}/ca.crt" \
@@ -94,8 +114,7 @@ EOF_CONF
     -days 3650 \
     -sha256 \
     -extensions v3_req \
-    -extfile "${cert_dir}/server.cnf" >/dev/null 2>&1 \
-    || die "openssl failed to sign local OpenAI provider server certificate"
+    -extfile "${cert_dir}/server.cnf"
 }
 
 render_local_openai_api_key_secret() {
