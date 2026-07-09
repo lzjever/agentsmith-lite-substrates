@@ -367,46 +367,6 @@ offline_install_install_juicefs_csi_chart() {
     -f "${values}"
 }
 
-offline_install_run_doctor() {
-  local cache_dir="$1"
-  local env_file="$2"
-  local secrets_file="$3"
-  local require_passed="${4:-allow-partial}"
-  local require_passed_context="${5:-existing-cloud live validation}"
-  local kubectl_bin status
-  kubectl_bin="$(cache_relative_path "${cache_dir}" "bin/kubectl" "kubectl binary")"
-
-  set +e
-  KUBECTL_BIN="${kubectl_bin}" \
-    PATH="$(dirname "${kubectl_bin}"):${PATH}" \
-    "${OFFLINE_INSTALL_ROOT}/scripts/doctor.sh" \
-    --env "${env_file}" \
-    --secrets "${secrets_file}" \
-    --offline-cache "${cache_dir}"
-  status=$?
-  set -e
-
-  case "${status}" in
-    0)
-      info "install-offline: doctor passed"
-      ;;
-    2)
-      if [[ "${require_passed}" == "require-passed" ]]; then
-        die "${require_passed_context} requires passed doctor; doctor returned partial; see doctor stdout/stderr above"
-      else
-        warn "install-offline: doctor returned partial; see doctor stdout/stderr above for live checks that remain unverified"
-      fi
-      ;;
-    *)
-      if [[ "${require_passed}" == "require-passed" ]]; then
-        die "${require_passed_context} requires passed doctor; doctor failed; see doctor stdout/stderr above"
-      else
-        die "doctor failed after offline install; see doctor stdout/stderr above"
-      fi
-      ;;
-  esac
-}
-
 offline_install_wait_postgres_ready() {
   local cache_dir="$1"
   local env_file="$2"
@@ -557,13 +517,8 @@ offline_install_init_postgres_databases() {
     "Postgres init Job failed; refusing to continue"
 }
 
-run_p1_real_existing_cloud_validation() {
-  local cache_dir="$1"
-  local env_file="$2"
-  local secrets_file="$3"
-
+run_p1_real_existing_cloud_install() {
   info "install-offline: existing-cloud mode; skipping self-hosted PostgreSQL, MinIO, and k3s mutation"
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "require-passed" "existing-cloud live validation"
 }
 
 run_p1_real_offline_install() {
@@ -626,6 +581,4 @@ run_p1_real_offline_install() {
     offline_install_wait_keycloak_ready "${cache_dir}" "${env_file}"
     offline_install_bootstrap_keycloak "${cache_dir}" "${env_file}" "${render_dir}"
   fi
-
-  offline_install_run_doctor "${cache_dir}" "${env_file}" "${secrets_file}" "require-passed" "self-hosted live install"
 }

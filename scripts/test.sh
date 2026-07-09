@@ -8,9 +8,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 # shellcheck source=lib/s3_probe.sh
 source "${ROOT_DIR}/scripts/lib/s3_probe.sh"
 
-POSTGRES_PROBE_IMAGE="docker.io/library/postgres:16@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 S3_PROBE_IMAGE="quay.io/minio/mc:RELEASE.2024-01-01T00-00-00Z@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-RWX_CHECK_IMAGE="docker.io/library/busybox:1.36.1@sha256:3333333333333333333333333333333333333333333333333333333333333333"
 FAKE_DIGEST="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 pass_count=0
@@ -291,56 +289,7 @@ if [[ "${KUBECTL_FAIL_POSTGRES_INIT_WAIT:-}" == "true" && "$*" == *"-n agentsmit
   exit 1
 fi
 
-juicefs_b64() {
-  printf '%s' "$1" | base64 | tr -d '\n'
-}
-
 case "$*" in
-  *"get storageclass agentsmith-lite-juicefs-rwx -o jsonpath={.provisioner}"*)
-    printf '%s' "${JUICEFS_FAKE_SC_PROVISIONER:-csi.juicefs.com}"
-    ;;
-  *"get storageclass agentsmith-lite-juicefs-rwx -o jsonpath="*"provisioner-secret-namespace"*)
-    printf '%s' "${JUICEFS_FAKE_SC_PROVISIONER_SECRET_NAMESPACE:-agentsmith}"
-    ;;
-  *"get storageclass agentsmith-lite-juicefs-rwx -o jsonpath="*"provisioner-secret-name"*)
-    printf '%s' "${JUICEFS_FAKE_SC_PROVISIONER_SECRET_NAME:-agentsmith-lite-juicefs}"
-    ;;
-  *"get storageclass agentsmith-lite-juicefs-rwx -o jsonpath="*"node-publish-secret-namespace"*)
-    printf '%s' "${JUICEFS_FAKE_SC_NODE_SECRET_NAMESPACE:-agentsmith}"
-    ;;
-  *"get storageclass agentsmith-lite-juicefs-rwx -o jsonpath="*"node-publish-secret-name"*)
-    printf '%s' "${JUICEFS_FAKE_SC_NODE_SECRET_NAME:-agentsmith-lite-juicefs}"
-    ;;
-  *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"name"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_NAME_VALUE:-agentsmith-lite-files}"
-    ;;
-  *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"metaurl"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_METAURL:-postgres://juicefs:juicefs-secret-value@postgres.agentsmith.svc.cluster.local:5432/juicefs_meta}"
-    ;;
-  *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"storage"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_STORAGE:-s3}"
-    ;;
-  *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"bucket"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_BUCKET:-http://minio.agentsmith.svc.cluster.local:9000/agentsmith-lite-files}"
-    ;;
-  *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"access-key"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_ACCESS_KEY:-minio-access-key}"
-    ;;
-  *"-n agentsmith get secret agentsmith-lite-juicefs -o jsonpath="*"secret-key"*)
-    juicefs_b64 "${JUICEFS_FAKE_SECRET_SECRET_KEY:-minio-secret-value}"
-    ;;
-  *"-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.spec.storageClassName}"*)
-    printf '%s' "${JUICEFS_FAKE_PVC_STORAGE_CLASS:-agentsmith-lite-juicefs-rwx}"
-    ;;
-  *"-n agentsmith get pvc agentsmith-lite-files -o jsonpath="*"accessModes"*)
-    printf '%s' "${JUICEFS_FAKE_PVC_ACCESS_MODES:-ReadWriteMany}"
-    ;;
-  *"-n agentsmith get pvc agentsmith-lite-files -o jsonpath={.status.phase}"*)
-    printf '%s' "${JUICEFS_FAKE_PVC_PHASE:-Bound}"
-    ;;
-  *" logs job/asl-pg-probe-"*)
-    printf 'agentsmith-lite-postgres-probe passed\n'
-    ;;
   *" logs job/agentsmith-lite-postgres-init"*)
     printf '%s\n' "${KUBECTL_POSTGRES_INIT_LOGS:-postgres init ready}"
     ;;
@@ -362,12 +311,6 @@ case "$*" in
   *" logs job/agentsmith-lite-juicefs-format"*)
     printf 'agentsmith-lite-juicefs-format: ok\n'
     ;;
-  *" logs job/agentsmith-lite-s3-probe-"*)
-    printf 'agentsmith-lite-s3-probe passed\n'
-    ;;
-  *" logs job/agentsmith-lite-rwx-check-"*)
-    printf 'agentsmith-lite-rwx-check passed\n'
-    ;;
 esac
 exit 0
 EOF_KUBECTL
@@ -385,27 +328,6 @@ printf 'helm %s\n' "$*" >>"${HELM_LOG}"
 exit 0
 EOF_HELM
   chmod +x "${file}"
-}
-
-run_live_doctor() {
-  local env_dir="$1"
-  local kubectl="$2"
-  local kubectl_log="$3"
-  local out="$4"
-  shift 4
-
-  KUBECTL_BIN="${kubectl}" \
-    KUBECTL_LOG="${kubectl_log}" \
-    POSTGRES_PROBE_RUN_ID="pgprobe" \
-    S3_PROBE_RUN_ID="s3probe" \
-    RWX_CHECK_RUN_ID="rwxprobe" \
-    "${ROOT_DIR}/scripts/doctor.sh" \
-    --env "${env_dir}/substrate.env" \
-    --secrets "${env_dir}/substrate.secrets.env" \
-    --postgres-probe-image "${POSTGRES_PROBE_IMAGE}" \
-    --s3-probe-image "${S3_PROBE_IMAGE}" \
-    --rwx-check-image "${RWX_CHECK_IMAGE}" \
-    >"${out}" 2>&1
 }
 
 test_env_secrets_contract() {
@@ -990,9 +912,6 @@ EOF_CONFIG
     S3_ACCESS_KEY="minio-access-key" \
     S3_SECRET_KEY="minio-secret-value" \
     JUICEFS_META_PASSWORD="juicefs-secret-value" \
-    POSTGRES_PROBE_RUN_ID="pgprobe" \
-    S3_PROBE_RUN_ID="s3probe" \
-    RWX_CHECK_RUN_ID="rwxprobe" \
     "${ROOT_DIR}/scripts/install-online.sh" \
       --cache "${cache}" \
       --config "${config}" \
@@ -1013,11 +932,14 @@ EOF_CONFIG
   assert_contains "${output}/substrate.env" "KUBE_CONTEXT=kind-agentsmith"
   assert_contains "${kubectl_log}" "--kubeconfig ${kubeconfig} --context kind-agentsmith apply -f ${output}/rendered/offline-install/namespace.yaml"
   assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/postgres.yaml"
+  assert_contains "${kubectl_log}" "rollout status statefulset/postgres"
   assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/minio.yaml"
+  assert_contains "${kubectl_log}" "rollout status statefulset/minio"
   assert_contains "${kubectl_log}" "apply -f ${output}/rendered/offline-install/juicefs-storageclass-pvc.yaml"
+  assert_contains "${kubectl_log}" "wait --for=jsonpath={.status.phase}=Bound pvc/agentsmith-lite-files"
+  assert_contains "${kubectl_log}" "rollout status deployment/agentsmith-lite-local-openai"
   assert_contains "${helm_log}" "--kubeconfig ${kubeconfig} --kube-context kind-agentsmith upgrade --install juicefs-csi-driver"
   assert_not_contains "${helm_log}" "--context kind-agentsmith"
-  assert_contains "${out}" "doctor passed"
   pass "self-hosted skipK3s live install skips k3s/import and runs service chain"
 }
 
@@ -1567,80 +1489,6 @@ test_local_openai_provider_static_contract() {
   pass "local OpenAI provider manifest and script keep HTTPS/auth/tool-call contract"
 }
 
-test_doctor_dry_run_status_lines() {
-  local cache="${TMP_DIR}/doctor-cache"
-  local env_dir="${TMP_DIR}/doctor-env"
-  local out="${TMP_DIR}/doctor-dry-run.out"
-
-  write_valid_env_pair "${env_dir}"
-  "${ROOT_DIR}/scripts/download-online.sh" --contract-only --output "${cache}" --force >"${TMP_DIR}/doctor-cache.out" 2>&1
-  "${ROOT_DIR}/scripts/doctor.sh" \
-    --env "${env_dir}/substrate.env" \
-    --secrets "${env_dir}/substrate.secrets.env" \
-    --offline-cache "${cache}" \
-    --dry-run \
-    >"${out}" 2>&1
-
-  assert_contains "${out}" "env/secrets: passed - split substrate env contract is valid"
-  assert_contains "${out}" "juicefs-csi: passed - dry-run static: rendered JuiceFS Secret, StorageClass, and PVC contract is valid"
-  assert_contains "${out}" "offline-cache: passed - P0 static cache skeleton is valid"
-  assert_contains "${out}" "doctor passed"
-  pass "doctor dry-run prints status lines"
-}
-
-test_live_juicefs_contract_mismatch() {
-  local env_dir="${TMP_DIR}/live-mismatch-env"
-  local kubectl="${TMP_DIR}/live-mismatch-bin/kubectl"
-  local kubectl_log="${TMP_DIR}/live-mismatch-kubectl.log"
-  local out="${TMP_DIR}/live-mismatch.out"
-  local status=0
-
-  write_valid_env_pair "${env_dir}"
-  write_live_kubectl_stub "${kubectl}"
-
-  set +e
-  export JUICEFS_FAKE_SC_PROVISIONER_SECRET_NAME="wrong-secret"
-  run_live_doctor "${env_dir}" "${kubectl}" "${kubectl_log}" "${out}"
-  status=$?
-  unset JUICEFS_FAKE_SC_PROVISIONER_SECRET_NAME
-  set -e
-
-  [[ "${status}" -eq 1 ]] || fail "doctor live mismatch should exit 1, got ${status}"
-  assert_contains "${out}" "juicefs-csi: failed - live JuiceFS StorageClass provisioner secret name does not match substrate contract"
-  assert_contains "${out}" "doctor failed"
-  assert_contains "${kubectl_log}" "jsonpath={.parameters.csi\\.storage\\.k8s\\.io/provisioner-secret-name}"
-  pass "live JuiceFS StorageClass contract mismatch fails"
-}
-
-test_live_pvc_bound_rwx_success() {
-  local env_dir="${TMP_DIR}/live-success-env"
-  local kubectl="${TMP_DIR}/live-success-bin/kubectl"
-  local kubectl_log="${TMP_DIR}/live-success-kubectl.log"
-  local out="${TMP_DIR}/live-success.out"
-  local status=0
-
-  write_valid_env_pair "${env_dir}"
-  write_live_kubectl_stub "${kubectl}"
-  set +e
-  run_live_doctor "${env_dir}" "${kubectl}" "${kubectl_log}" "${out}"
-  status=$?
-  set -e
-  if [[ "${status}" -ne 0 ]]; then
-    printf 'doctor live success output:\n' >&2
-    sed -n '1,220p' "${out}" >&2
-    fail "doctor live success should exit 0, got ${status}"
-  fi
-
-  assert_contains "${out}" "k8s: passed - namespace agentsmith is reachable"
-  assert_contains "${out}" "postgres-app: passed - app database accepted a simple query"
-  assert_contains "${out}" "s3: passed - live S3 read/write/delete probe passed"
-  assert_contains "${out}" "juicefs-csi: passed - live JuiceFS PVC phase is Bound and StorageClass, Secret, and PVC contract matches"
-  assert_contains "${out}" "rwx-check: passed - live two-Job ReadWriteMany write/read check passed against PVC agentsmith-lite-files"
-  assert_contains "${out}" "doctor passed"
-  assert_contains "${kubectl_log}" "jsonpath={.parameters.csi\\.storage\\.k8s\\.io/node-publish-secret-name}"
-  pass "live PVC Bound and RWX write/read check success path passes"
-}
-
 test_env_secrets_contract
 test_oidc_env_contract
 test_oidc_env_contract_rejects_missing_required_values
@@ -1675,8 +1523,5 @@ test_local_openai_tls_and_render_support_hyphen_namespace
 test_self_hosted_keycloak_render_from_p1_cache
 test_existing_cloud_dry_run_does_not_render_keycloak
 test_local_openai_provider_static_contract
-test_doctor_dry_run_status_lines
-test_live_juicefs_contract_mismatch
-test_live_pvc_bound_rwx_success
 
 printf '1..%d\n' "${pass_count}"

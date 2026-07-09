@@ -21,6 +21,7 @@ Remove governance overhead aggressively:
 - process bureaucracy unrelated to install/runtime behavior;
 - generated diagnostic documents;
 - output-only flags and output-shape tests;
+- generic test/script/stage/document concepts detached from concrete install paths;
 - umbrella validation/check names detached from core install paths;
 - one-size-fits-all install proof labels detached from install/config contracts;
 - tests of the test harness;
@@ -28,9 +29,10 @@ Remove governance overhead aggressively:
 
 Install commands and narrow contract checks should fail fast, print concise
 stdout/stderr, and exit non-zero. Keep useful checks named after the concrete
-install/config contract they verify, and run them only when a developer chooses
-them for the current change. If something is wrong, fix the install/config path
-in place.
+install/config contract they verify, such as `check-substrates-install`, never
+after broad readiness, acceptance, or all-clear concepts. Run them only when a developer
+chooses them for the current change. If something is wrong, fix the
+install/config path in place.
 
 ## Testing
 
@@ -38,6 +40,7 @@ in place.
 - Add tests only when they protect a real install/runtime contract.
 - Do not add tests for diagnostic document formats or release workflows.
 - Choose the minimum install/config contract verification for the current change; do not run long, unrelated, or umbrella install checks by default, and do not add broad readiness or acceptance proofs.
+- Before delivery, keep at most a few quick checks tied to the local single-node K8s install path.
 
 ## Boundaries
 

@@ -45,9 +45,8 @@ This first public-ready skeleton is validate-first:
   images while leaving StorageClass/Secret/PVC ownership to the substrate
   contract
 - validates the rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
-- runs a substrate-only doctor for static dry-run checks and live K8s,
-  PostgreSQL, S3 object read/write/delete, JuiceFS PVC, and two-Job RWX
-  write/read checks
+- uses installer-local apply, rollout, Job, and PVC wait checks for the
+  self-hosted Kubernetes path
 
 ## Quick Start
 
@@ -64,22 +63,11 @@ scripts/install-online.sh \
 scripts/validate-env.sh \
   --env out/substrate.env \
   --secrets out/substrate.secrets.env
-
-scripts/doctor.sh \
-  --env out/substrate.env \
-  --secrets out/substrate.secrets.env \
-  --offline-cache dist/offline-cache \
-  --dry-run
 ```
 
-Live doctor runs Postgres, S3, and RWX checks from the cluster network. It
-reads digest-pinned `name: postgres`, `name: minio-client`, and
-`name: rwx-check` images from `--offline-cache images/images.lock`, or accepts
-explicit `--postgres-probe-image`, `--s3-probe-image`, and
-`--rwx-check-image` `image@sha256:<digest>` refs. The Postgres probes run
-read-only `select 1` checks for both `POSTGRES_APP_URL` and
-`JUICEFS_META_URL`; the RWX write/read check runs only after the configured
-JuiceFS PVC is `Bound`.
+Non-dry-run self-hosted install fails in place when cached k3s/image import,
+Helm install, kubectl apply, rollout status, one-shot bootstrap Jobs, or the
+configured JuiceFS PVC `Bound` wait fails.
 
 For an offline contract skeleton dry-run:
 
@@ -131,8 +119,8 @@ scripts/install-online.sh \
 `--offline-cache` is accepted as an alias for `--cache`. Dry-run validates the
 env contract and cache only. Non-dry-run requires `cacheMode: p1-real`; a
 `p0-contract` cache fails instead of pretending to install. In `existing-cloud`
-mode, non-dry-run writes the same env files and runs doctor/live validation
-without rendering or installing self-hosted PostgreSQL, MinIO, or k3s.
+mode, non-dry-run writes the same env files without rendering or installing
+self-hosted PostgreSQL, MinIO, or k3s.
 
 ## Config Boundaries
 
@@ -178,9 +166,9 @@ The product-secret subset is `POSTGRES_APP_URL`, `APP_SESSION_SECRET`, and the
 selected auth secret: `OIDC_CLIENT_SECRET` for OIDC or
 `BUILTIN_ADMIN_INITIAL_PASSWORD` for builtin admin.
 `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and `JUICEFS_META_URL` are substrate/CSI scoped
-only. They are used by substrate setup and doctor checks to create or validate
-the JuiceFS CSI Secret, metadata database, and one-shot format Job; they must
-not be projected into app workload env.
+only. They are used by substrate setup to create the JuiceFS CSI Secret,
+metadata database, and one-shot format Job; they must not be projected into app
+workload env.
 `OIDC_BOOTSTRAP_USERNAME` and `OIDC_BOOTSTRAP_PASSWORD` are substrate-only
 operator/local login credentials for self-hosted Keycloak and must not be
 projected into app runtime Secret/ConfigMap resources.
@@ -203,6 +191,5 @@ scripts/install-online.sh --cache dist/offline-cache --config config/substrates.
 scripts/install-offline.sh --cache dist/offline-cache --config config/substrates.self-hosted.example.yaml --output out/ --dry-run
 scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.secrets.env
 scripts/validate-juicefs-contract.sh --env out/substrate.env --secrets out/substrate.secrets.env
-scripts/doctor.sh --env out/substrate.env --secrets out/substrate.secrets.env --offline-cache dist/offline-cache --dry-run
 scripts/reset-dev.sh --config config/substrates.self-hosted.example.yaml --destroy-data
 ```

@@ -14,9 +14,8 @@ The current test slices are intentionally small:
 - contract-only offline cache plus `install-online.sh --dry-run`
 - p1-real offline cache contract and self-hosted Keycloak render path
 - rendered JuiceFS CSI Secret, StorageClass, and RWX PVC contract
-- `doctor.sh --dry-run` status lines and exit code, without generated files
-- live JuiceFS StorageClass/Secret/PVC contract mismatch and PVC
-  `Bound`/two-Job RWX write/read success paths through a kubectl stub
+- self-hosted install apply, rollout, one-shot Job, and PVC `Bound` checks
+  through a kubectl stub
 
 ## Shell Style
 
@@ -33,9 +32,8 @@ The current test slices are intentionally small:
 - P0 skeletons remain dry-run/contract-only. p1-real offline install performs
   the minimum cached k3s/import/kubectl apply chain, self-hosted PostgreSQL and
   MinIO bootstrap, cached JuiceFS CSI Helm chart install, idempotent JuiceFS
-  format, and self-hosted Keycloak bootstrap. Live doctor then runs the Postgres probe from cached `postgres`, the
-  S3 probe from cached `minio-client`, and the RWX write/read check from cached
-  `rwx-check` after the JuiceFS PVC is `Bound`.
+  format, PVC `Bound` wait, local provider readiness, and self-hosted Keycloak
+  bootstrap.
 - The default `download-online.sh` output is still a P0 static contract
   skeleton. It is useful for contract generation and dry-run validation only.
 - A p1-real offline cache must be supplied with all required artifacts and

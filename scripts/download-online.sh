@@ -549,7 +549,7 @@ EOF_SUMS
 
   validate_offline_cache "${dir}"
   info "wrote p1-real offline cache: ${dir}"
-  info "note: install-offline.sh can run the cached p1-real chain through JuiceFS CSI Helm install, format bootstrap, PVC Bound wait, and doctor RWX write/read check"
+  info "note: install-offline.sh can run the cached p1-real chain through JuiceFS CSI Helm install, format bootstrap, PVC Bound wait, and local provider readiness"
 }
 
 if [[ -n "${artifact_lock}" ]]; then

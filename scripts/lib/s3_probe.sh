@@ -34,7 +34,7 @@ metadata:
   name: ${secret_name}
   namespace: ${namespace}
   labels:
-    app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+    app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
     agentsmith-lite/check: s3-probe
     agentsmith-lite/run-id: ${run_id}
 type: Opaque
@@ -63,7 +63,7 @@ metadata:
   name: ${job_name}
   namespace: ${namespace}
   labels:
-    app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+    app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
     agentsmith-lite/check: s3-probe
     agentsmith-lite/run-id: ${run_id}
 spec:
@@ -72,7 +72,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+        app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
         agentsmith-lite/check: s3-probe
         agentsmith-lite/run-id: ${run_id}
     spec:
@@ -120,8 +120,8 @@ spec:
             - -ceu
             - |
               set +x
-              alias_name="agentsmith-lite-doctor"
-              object_key="agentsmith-lite-doctor/s3-probe/\${S3_PROBE_RUN_ID}"
+              alias_name="agentsmith-lite-probe"
+              object_key="agentsmith-lite-probe/s3-probe/\${S3_PROBE_RUN_ID}"
               object_uri="\${alias_name}/\${S3_BUCKET}/\${object_key}"
               payload="agentsmith-lite-s3-probe:\${S3_PROBE_RUN_ID}"
               MC_CONFIG_DIR="/tmp/agentsmith-lite-s3-probe-\${S3_PROBE_RUN_ID}"

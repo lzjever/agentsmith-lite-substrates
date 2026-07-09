@@ -164,9 +164,8 @@ scripts/install-online.sh \
 Dry-run validates env/cache and skips cluster mutation. Without `--dry-run`, a
 `p0-contract` cache fails immediately. For `mode: self-hosted`, a p1-real cache
 runs the cached k3s/import/kubectl/Helm chain. For `mode: existing-cloud`, it
-writes `substrate.env` and `substrate.secrets.env`, then runs doctor/live
-validation only; it does not render or install self-hosted PostgreSQL, MinIO, or
-k3s.
+writes `substrate.env` and `substrate.secrets.env`; it does not render or
+install self-hosted PostgreSQL, MinIO, or k3s.
 
 ## p1-real Cache
 
@@ -222,18 +221,12 @@ runs an idempotent JuiceFS format Job with the cached digest-pinned JuiceFS CSI
 image, applies the StorageClass/PVC contract only after the format Job confirms a
 matching volume, waits for the configured JuiceFS PVC to reach `Bound`, and
 applies Keycloak, waits for `deployment/keycloak`, bootstraps the OIDC
-realm/client, and finally runs `scripts/doctor.sh --offline-cache ...`. Live doctor reads the
-digest-pinned `name: postgres` image from that cache for read-only `select 1`
-probes against both Postgres URLs, reads `name: minio-client` for an S3 object
-read/write/delete probe, then reads `name: rwx-check` and runs writer/reader
-Jobs against the same PVC. Live self-hosted install now requires doctor
-exit code 0. Doctor exit code 2 (`partial`), including checks that cannot be
-verified because kubectl or the namespace is unavailable, fails closed just like
-exit code 1 (`failed`).
+realm/client. Each apply, rollout wait, one-shot Job, log check, and PVC
+`Bound` wait fails in place with stderr and a non-zero exit.
 
 For an existing local kubeconfig, including kind, use `mode: self-hosted` with
 `kubernetes.skipK3s: true`, a readable `kubernetes.kubeconfigPath`, and
 optionally `kubernetes.context`. That skips the k3s installer and k3s-specific
 image import, then reuses the same namespace, Helm, kubectl apply, wait, and
-doctor chain. The existing cluster must already be able to pull or have the
-dependency images listed in the p1-real cache.
+one-shot Job chain. The existing cluster must already be able to pull or have
+the dependency images listed in the p1-real cache.

@@ -34,7 +34,7 @@ metadata:
   name: ${secret_name}
   namespace: ${namespace}
   labels:
-    app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+    app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
     agentsmith-lite/check: postgres-probe
     agentsmith-lite/postgres-check: ${probe_label}
     agentsmith-lite/run-id: ${run_id}
@@ -64,7 +64,7 @@ metadata:
   name: ${job_name}
   namespace: ${namespace}
   labels:
-    app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+    app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
     agentsmith-lite/check: postgres-probe
     agentsmith-lite/postgres-check: ${probe_label}
     agentsmith-lite/run-id: ${run_id}
@@ -74,7 +74,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+        app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
         agentsmith-lite/check: postgres-probe
         agentsmith-lite/postgres-check: ${probe_label}
         agentsmith-lite/run-id: ${run_id}

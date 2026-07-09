@@ -33,7 +33,7 @@ metadata:
   name: ${job_name}
   namespace: ${namespace}
   labels:
-    app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+    app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
     agentsmith-lite/check: rwx-check
     agentsmith-lite/run-id: ${run_id}
     agentsmith-lite/role: ${role}
@@ -43,7 +43,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/managed-by: agentsmith-lite-substrate-doctor
+        app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
         agentsmith-lite/check: rwx-check
         agentsmith-lite/run-id: ${run_id}
         agentsmith-lite/role: ${role}
