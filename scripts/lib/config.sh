@@ -238,6 +238,7 @@ write_app_overlay_contract() {
 AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL=https://agentsmith-lite-local-openai.${namespace}.svc.cluster.local/v1
 AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP=agentsmith-lite-local-openai-ca
 AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY=ca.crt
+AGENTSMITH_LITE_SANDBOX_MODE=live
 EOF_APP_ENV
 
   old_umask="$(umask)"

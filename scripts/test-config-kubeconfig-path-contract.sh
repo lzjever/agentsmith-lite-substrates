@@ -45,6 +45,8 @@ write_config "${path_config}" true state/../state/existing.kubeconfig generated/
 write_env_contract_from_config "${path_config}" "${tmp_dir}/path-output" test true
 grep -Fx "KUBECONFIG_PATH=${config_dir}/state/existing.kubeconfig" "${tmp_dir}/path-output/substrate.env" >/dev/null \
   || { printf 'expected kubeconfigPath to be absolute relative to config file\n' >&2; exit 1; }
+grep -Fx 'AGENTSMITH_LITE_SANDBOX_MODE=live' "${tmp_dir}/path-output/app.env" >/dev/null \
+  || { printf 'expected self-hosted app.env to enable live sandbox mode\n' >&2; exit 1; }
 
 output_config="${config_dir}/output.yaml"
 write_config "${output_config}" false '' generated/../generated/kubeconfig
