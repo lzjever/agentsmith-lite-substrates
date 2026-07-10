@@ -224,6 +224,17 @@ applies Keycloak, waits for `deployment/keycloak`, bootstraps the OIDC
 realm/client. Each apply, rollout wait, one-shot Job, log check, and PVC
 `Bound` wait fails in place with stderr and a non-zero exit.
 
+Before that installer starts, a host with nft-default `iptables` and a legacy
+`FORWARD DROP` policy gets a k3s-only legacy xtables PATH drop-in. It resolves
+both `iptables-save-legacy` and `iptables-legacy-save` naming, including IPv6
+variants. It does not change global iptables alternatives or Docker rules. The
+fixed k3s-owned wrapper directory and marker-owned drop-in are removed only when
+their targets/marker match; each change reloads and restarts an active k3s
+service. After cached images import, the installer uses the cached `rwx-check`
+BusyBox image for a bounded `kubernetes.default.svc.cluster.local` lookup before
+it applies PostgreSQL manifests. The probe pod has an active deadline and its
+signal-safe cleanup selects only the matching substrate-owned pod.
+
 For an existing local kubeconfig, including kind, use `mode: self-hosted` with
 `kubernetes.skipK3s: true`, a readable `kubernetes.kubeconfigPath`, and
 optionally `kubernetes.context`. That skips the k3s installer and k3s-specific

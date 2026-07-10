@@ -18,6 +18,8 @@ source "${SCRIPT_LIB_DIR}/postgres.sh"
 source "${SCRIPT_LIB_DIR}/keycloak.sh"
 # shellcheck source=local_openai.sh
 source "${SCRIPT_LIB_DIR}/local_openai.sh"
+# shellcheck source=k3s_host_firewall.sh
+source "${SCRIPT_LIB_DIR}/k3s_host_firewall.sh"
 
 offline_install_kubectl() {
   local cache_dir="$1"
@@ -116,6 +118,7 @@ offline_install_run_k3s_installer() {
   [[ -n "${kubeconfig_path}" ]] || die "KUBECONFIG_PATH must be set for p1-real offline install; configure kubernetes.kubeconfigOutput or kubernetes.kubeconfigPath"
   install_exec="${INSTALL_K3S_EXEC:-server --write-kubeconfig ${kubeconfig_path} --write-kubeconfig-mode 600}"
 
+  k3s_host_firewall_prepare
   mkdir -p "${airgap_dir}"
   mkdir -p "$(dirname "${kubeconfig_path}")"
   cp -- "${airgap_images}" "${airgap_dir}/$(basename "${airgap_images}")"
@@ -129,6 +132,73 @@ offline_install_run_k3s_installer() {
     INSTALL_K3S_EXEC="${install_exec}" \
     "${install_script}"
 }
+
+offline_install_delete_coredns_service_lookup_pod() {
+  local cache_dir="$1"
+  local env_file="$2"
+
+  offline_install_kubectl "${cache_dir}" "${env_file}" -n kube-system --request-timeout=20s delete pod \
+    -l "app.kubernetes.io/managed-by=agentsmith-lite-substrate-probe,agentsmith-lite/check=coredns-service-lookup" \
+    --field-selector "metadata.name=agentsmith-lite-coredns-lookup" \
+    --ignore-not-found=true \
+    --wait=false >/dev/null 2>&1 || true
+}
+
+offline_install_run_coredns_service_lookup() (
+  local cache_dir="$1"
+  local env_file="$2"
+  local lock_file image_ref pod_name manifest tmp_dir status
+
+  lock_file="$(cache_relative_path "${cache_dir}" "images/images.lock" "images lock file")"
+  image_ref="$(images_lock_image_ref "${lock_file}" "rwx-check")" \
+    || die "p1-real images.lock is missing dependency image entry: rwx-check"
+  require_digest_pinned_image_ref "images.lock entry rwx-check" "${image_ref}"
+  pod_name="agentsmith-lite-coredns-lookup"
+  tmp_dir="$(mktemp -d)"
+  manifest="${tmp_dir}/coredns-lookup-pod.yaml"
+  cleanup() {
+    offline_install_delete_coredns_service_lookup_pod "${cache_dir}" "${env_file}"
+    rm -rf "${tmp_dir}"
+  }
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  offline_install_delete_coredns_service_lookup_pod "${cache_dir}" "${env_file}"
+  cat >"${manifest}" <<EOF_POD
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod_name}
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/managed-by: agentsmith-lite-substrate-probe
+    agentsmith-lite/check: coredns-service-lookup
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 120
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: lookup
+      image: ${image_ref}
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "sleep 180"]
+EOF_POD
+
+  info "install-offline: checking CoreDNS service lookup"
+  status=0
+  if ! offline_install_kubectl "${cache_dir}" "${env_file}" --request-timeout=20s apply -f "${manifest}"; then
+    status=1
+  elif ! offline_install_kubectl "${cache_dir}" "${env_file}" -n kube-system --request-timeout=20s wait --for=condition=Ready "pod/${pod_name}" --timeout=90s; then
+    status=1
+  elif ! offline_install_kubectl "${cache_dir}" "${env_file}" -n kube-system --request-timeout=20s exec "${pod_name}" -- nslookup kubernetes.default.svc.cluster.local; then
+    status=1
+  fi
+  if [[ "${status}" -ne 0 ]]; then
+    offline_install_kubectl "${cache_dir}" "${env_file}" -n kube-system --request-timeout=20s logs "${pod_name}" >&2 || true
+    die "CoreDNS service lookup failed after k3s start; refusing to create workload manifests"
+  fi
+)
 
 offline_install_render_juicefs_csi_helm_values() {
   local env_file="$1"
@@ -569,6 +639,7 @@ run_p1_real_offline_install() {
   else
     offline_install_run_k3s_installer "${cache_dir}" "${env_file}" "${output_dir}"
     offline_install_import_images "${cache_dir}"
+    offline_install_run_coredns_service_lookup "${cache_dir}" "${env_file}"
   fi
 
   offline_install_render_namespace_manifest "${namespace_manifest}" "${rendered_namespace_manifest}" "${env_file}"
