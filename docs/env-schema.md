@@ -46,9 +46,10 @@ model keys are intentionally not accepted in `substrate.env`.
 to the config file and written to `KUBECONFIG_PATH` as an existing kubeconfig.
 If it is empty, `kubernetes.kubeconfigOutput` is normalized the same way and
 written as the self-hosted k3s output path. If both are empty,
-`KUBECONFIG_PATH` stays empty. `KUBE_CONTEXT` is written only from explicit `kubernetes.context`; the
-self-hosted default is empty because the k3s kubeconfig context name is not part
-of this contract. `kubernetes.skipK3s: true` writes
+`KUBECONFIG_PATH` stays empty. A generated self-hosted k3s kubeconfig writes
+`KUBE_CONTEXT=default` unless `kubernetes.context` is explicitly configured.
+Existing-cloud and `kubernetes.skipK3s: true` configs write `KUBE_CONTEXT` only
+from explicit `kubernetes.context`. `kubernetes.skipK3s: true` writes
 `KUBERNETES_SKIP_K3S=true` and requires a readable
 `kubernetes.kubeconfigPath`. Ingress config is only an app-facing env contract:
 `APP_PUBLIC_BASE_URL`, `APP_INGRESS_CLASS`, and `APP_TLS_SECRET_NAME`;

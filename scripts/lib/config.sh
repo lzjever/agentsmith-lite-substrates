@@ -307,6 +307,9 @@ write_env_contract_from_config() {
   if [[ -z "${kubeconfig_path}" && -n "${kubeconfig_output}" ]]; then
     kubeconfig_path="${kubeconfig_output}"
   fi
+  if [[ -z "${kube_context}" && "${mode}" == "self-hosted" && "${skip_k3s}" == "false" ]]; then
+    kube_context="default"
+  fi
   local provider endpoint region bucket force_path_style
   provider="$(config_value "${config_file}" "objectStorage.provider" "minio")"
   endpoint="$(config_value "${config_file}" "objectStorage.endpoint" "")"
