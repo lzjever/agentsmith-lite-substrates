@@ -71,12 +71,14 @@ scripts/validate-juicefs-contract.sh \
   --env out/substrate.env \
   --secrets out/substrate.secrets.env
 
+scripts/check-juicefs-rwx-write-read.sh --cache dist/offline-cache --env out/substrate.env
+
 python3 scripts/test-local-openai-provider-artifact-contract.py
 ```
 
 Non-dry-run self-hosted install fails in place when cached k3s/image import,
-Helm install, kubectl apply, rollout status, one-shot bootstrap Jobs, or the
-configured JuiceFS PVC `Bound` wait fails.
+Helm install, kubectl apply, rollout status, one-shot bootstrap Jobs, the
+configured JuiceFS PVC `Bound` wait, or the JuiceFS RWX write/read check fails.
 
 For an offline contract skeleton dry-run:
 

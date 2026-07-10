@@ -8,6 +8,8 @@ source "${SCRIPT_LIB_DIR}/env.sh"
 source "${SCRIPT_LIB_DIR}/offline.sh"
 # shellcheck source=juicefs.sh
 source "${SCRIPT_LIB_DIR}/juicefs.sh"
+# shellcheck source=rwx_write_read_check.sh
+source "${SCRIPT_LIB_DIR}/rwx_write_read_check.sh"
 # shellcheck source=minio.sh
 source "${SCRIPT_LIB_DIR}/minio.sh"
 # shellcheck source=postgres.sh
@@ -395,6 +397,32 @@ offline_install_wait_juicefs_pvc_bound() {
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" wait --for=jsonpath={.status.phase}=Bound "pvc/${pvc_name}" --timeout=180s
 }
 
+offline_install_check_juicefs_rwx_write_read() {
+  local cache_dir="$1"
+  local env_file="$2"
+  local lock_file namespace pvc_name image_ref kubectl_bin kubeconfig_path kube_context
+  local kubectl_args=()
+
+  lock_file="$(cache_relative_path "${cache_dir}" "images/images.lock" "images lock file")"
+  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  pvc_name="$(env_value_or_empty "${env_file}" JUICEFS_PVC_NAME)"
+  image_ref="$(images_lock_image_ref "${lock_file}" "rwx-check")" \
+    || die "p1-real images.lock is missing dependency image entry: rwx-check"
+  kubectl_bin="$(cache_relative_path "${cache_dir}" "bin/kubectl" "kubectl binary")"
+  kubeconfig_path="$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
+  kube_context="$(env_value_or_empty "${env_file}" KUBE_CONTEXT)"
+
+  [[ -n "${namespace}" ]] || die "KUBE_NAMESPACE must be set before running JuiceFS RWX write/read check"
+  [[ -n "${pvc_name}" ]] || die "JUICEFS_PVC_NAME must be set before running JuiceFS RWX write/read check"
+  [[ -x "${kubectl_bin}" ]] || die "kubectl binary is not executable for JuiceFS RWX write/read check"
+  require_digest_pinned_image_ref "images.lock entry rwx-check" "${image_ref}"
+  [[ -n "${kubeconfig_path}" ]] && kubectl_args+=(--kubeconfig "${kubeconfig_path}")
+  [[ -n "${kube_context}" ]] && kubectl_args+=(--context "${kube_context}")
+
+  info "juicefs-rwx-check: checking JuiceFS RWX write/read behavior"
+  rwx_write_read_check_run "${namespace}" "${pvc_name}" "${image_ref}" "${kubectl_bin}" "${kubectl_args[@]}"
+}
+
 offline_install_wait_keycloak_ready() {
   local cache_dir="$1"
   local env_file="$2"
@@ -566,6 +594,7 @@ run_p1_real_offline_install() {
   info "install-offline: applying rendered JuiceFS CSI contract"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/juicefs-storageclass-pvc.yaml"
   offline_install_wait_juicefs_pvc_bound "${cache_dir}" "${env_file}"
+  offline_install_check_juicefs_rwx_write_read "${cache_dir}" "${env_file}"
 
   info "install-offline: applying rendered local OpenAI provider"
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/local-openai-secret.yaml"
