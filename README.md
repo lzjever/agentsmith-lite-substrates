@@ -140,8 +140,10 @@ operator, most commonly in `existing-cloud` mode. `kubernetes.kubeconfigOutput`
 means the path where a self-hosted k3s install should write its generated
 kubeconfig. Both paths are normalized to absolute paths relative to the config
 file when written to `KUBECONFIG_PATH`. If both are set, `kubeconfigPath` wins; if neither is set,
-`KUBECONFIG_PATH` is empty in `substrate.env`. `KUBE_CONTEXT` is emitted only
-when `kubernetes.context` is explicitly configured.
+`KUBECONFIG_PATH` is empty in `substrate.env`. A generated self-hosted k3s
+kubeconfig emits `KUBE_CONTEXT=default` unless `kubernetes.context` is
+explicitly configured. Existing-cloud and `skipK3s` configs emit a context only
+when the operator explicitly configures one.
 
 Substrates do not install an app ingress or reference app Services. The ingress
 block only writes the app-facing env contract: `APP_PUBLIC_BASE_URL`,
