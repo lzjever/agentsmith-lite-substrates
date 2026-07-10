@@ -3,6 +3,7 @@ kubernetes:
   distribution: k3s
   namespace: agentsmith
   skipK3s: false
+  # Relative kubeconfig paths are resolved from this config file.
   kubeconfigOutput: out/kubeconfig
 postgres:
   storageClass: local-path

@@ -138,7 +138,8 @@ self-hosted PostgreSQL, MinIO, or k3s.
 `kubernetes.kubeconfigPath` means an existing kubeconfig path owned by the
 operator, most commonly in `existing-cloud` mode. `kubernetes.kubeconfigOutput`
 means the path where a self-hosted k3s install should write its generated
-kubeconfig. If both are set, `kubeconfigPath` wins; if neither is set,
+kubeconfig. Both paths are normalized to absolute paths relative to the config
+file when written to `KUBECONFIG_PATH`. If both are set, `kubeconfigPath` wins; if neither is set,
 `KUBECONFIG_PATH` is empty in `substrate.env`. `KUBE_CONTEXT` is emitted only
 when `kubernetes.context` is explicitly configured.
 

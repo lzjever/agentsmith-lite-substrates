@@ -27,6 +27,8 @@ scripts/install-online.sh \
 Set `kubernetes.kubeconfigPath` to the existing kubeconfig the operator wants
 app and substrate commands to use. `kubernetes.kubeconfigOutput` is for
 self-hosted k3s output paths and is not needed for existing-cloud configs.
+Relative kubeconfig paths are resolved from the config file's directory before
+they are written to `KUBECONFIG_PATH`.
 
 OIDC is the production auth path. `auth.mode: oidc` reads
 `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` by default; set

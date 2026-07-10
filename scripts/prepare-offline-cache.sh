@@ -28,7 +28,7 @@ Common overrides:
   KEYCLOAK_SOURCE=quay.io/keycloak/keycloak:26.0.7
   JUICEFS_CSI_SOURCE=docker.io/juicedata/juicefs-csi-driver:v0.31.10
   RWX_CHECK_SOURCE=docker.io/library/busybox:1.36.1
-  LOCAL_OPENAI_PROVIDER_SOURCE=docker.io/library/python:3.13-alpine
+  LOCAL_OPENAI_PROVIDER_SOURCE=docker.io/library/python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0
 EOF_USAGE
 }
 
@@ -92,10 +92,14 @@ require_tagged_image_source() {
 resolve_image_digest() {
   local label="$1"
   local source="$2"
-  local digest repo_tag
+  local digest inspect_source repo_tag
   require_tagged_image_source "${label}" "${source}"
-  repo_tag="${source%@sha256:*}"
-  if ! digest="$(skopeo inspect --override-os linux --override-arch amd64 --format '{{.Digest}}' "docker://${repo_tag}")"; then
+  inspect_source="${source}"
+  if [[ "${source}" == *@sha256:* ]]; then
+    repo_tag="${source%@sha256:*}"
+    inspect_source="${repo_tag%:*}@${source##*@}"
+  fi
+  if ! digest="$(skopeo inspect --override-os linux --override-arch amd64 --format '{{.Digest}}' "docker://${inspect_source}")"; then
     die "failed to resolve digest for ${label}"
   fi
   [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] \
@@ -231,6 +235,7 @@ LOCAL_OPENAI_PROVIDER_ARCHIVE_SHA256=${local_openai_sha}
 EOF_LOCK
 }
 
+main() {
 artifacts_dir="${OFFLINE_ARTIFACTS_DIR:-${ARTIFACTS_DIR:-out/artifacts}}"
 output_dir="${OFFLINE_CACHE_OUTPUT:-${OUTPUT_DIR:-dist/offline-cache}}"
 force_value="${PREPARE_OFFLINE_CACHE_FORCE:-${FORCE:-false}}"
@@ -292,7 +297,7 @@ JUICEFS_CSI_NODE_DRIVER_REGISTRAR_SOURCE="${JUICEFS_CSI_NODE_DRIVER_REGISTRAR_SO
 JUICEFS_CSI_PROVISIONER_SOURCE="${JUICEFS_CSI_PROVISIONER_SOURCE:-registry.k8s.io/sig-storage/csi-provisioner:v2.2.2}"
 JUICEFS_CSI_RESIZER_SOURCE="${JUICEFS_CSI_RESIZER_SOURCE:-registry.k8s.io/sig-storage/csi-resizer:v1.9.0}"
 RWX_CHECK_SOURCE="${RWX_CHECK_SOURCE:-docker.io/library/busybox:1.36.1}"
-LOCAL_OPENAI_PROVIDER_SOURCE="${LOCAL_OPENAI_PROVIDER_SOURCE:-docker.io/library/python:3.13-alpine}"
+LOCAL_OPENAI_PROVIDER_SOURCE="${LOCAL_OPENAI_PROVIDER_SOURCE:-docker.io/library/python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0}"
 
 require_command curl
 require_command tar
@@ -354,3 +359,8 @@ if [[ "${force}" == "true" ]]; then
   download_args+=(--force)
 fi
 "${ROOT_DIR}/scripts/download-online.sh" "${download_args[@]}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

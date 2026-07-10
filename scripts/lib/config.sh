@@ -70,6 +70,39 @@ config_required_value() {
   printf '%s' "${value}"
 }
 
+config_absolute_path() {
+  local config_file="$1"
+  local path="$2"
+  local config_dir component normalized_path
+  local -a path_parts normalized_parts
+
+  [[ -n "${path}" ]] || return 0
+  if [[ "${path}" != /* ]]; then
+    config_dir="$(cd "$(dirname "${config_file}")" && pwd -P)"
+    path="${config_dir}/${path}"
+  fi
+
+  IFS=/ read -r -a path_parts <<<"${path}"
+  for component in "${path_parts[@]}"; do
+    case "${component}" in
+      ''|.) ;;
+      ..)
+        if [[ ${#normalized_parts[@]} -gt 0 ]]; then
+          unset 'normalized_parts[${#normalized_parts[@]} - 1]'
+        fi
+        ;;
+      *) normalized_parts+=("${component}") ;;
+    esac
+  done
+
+  if [[ ${#normalized_parts[@]} -eq 0 ]]; then
+    printf '/'
+  else
+    normalized_path="$(IFS=/; printf '%s' "${normalized_parts[*]}")"
+    printf '/%s' "${normalized_path}"
+  fi
+}
+
 validate_config_contract() {
   local config_file="$1"
   need_file "${config_file}"
@@ -92,6 +125,7 @@ validate_config_contract() {
   esac
   if [[ "${mode}" == "self-hosted" && "${skip_k3s}" == "true" ]]; then
     kubeconfig_path="$(config_required_value "${config_file}" "kubernetes.kubeconfigPath")"
+    kubeconfig_path="$(config_absolute_path "${config_file}" "${kubeconfig_path}")"
     [[ -r "${kubeconfig_path}" ]] || die "config contract kubernetes.kubeconfigPath must be readable when kubernetes.skipK3s=true"
   fi
 
@@ -266,6 +300,9 @@ write_env_contract_from_config() {
   kube_context="$(config_value "${config_file}" "kubernetes.context" "")"
   kubeconfig_output="$(config_value "${config_file}" "kubernetes.kubeconfigOutput" "")"
   skip_k3s="$(config_value "${config_file}" "kubernetes.skipK3s" "false")"
+
+  kubeconfig_path="$(config_absolute_path "${config_file}" "${kubeconfig_path}")"
+  kubeconfig_output="$(config_absolute_path "${config_file}" "${kubeconfig_output}")"
 
   if [[ -z "${kubeconfig_path}" && -n "${kubeconfig_output}" ]]; then
     kubeconfig_path="${kubeconfig_output}"
