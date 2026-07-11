@@ -27,10 +27,10 @@ auth:
   realm: agentsmith
   clientId: agentsmith-lite
   keycloak:
-    publicBaseUrl: http://keycloak.agentsmith.localhost
+    publicBaseUrl: https://keycloak.agentsmith.localhost
 ingress:
-  publicBaseUrl: http://localhost:3000
-  ingressClass: ""
-  tlsSecretName: ""
+  publicBaseUrl: https://agentsmith.localhost
+  ingressClass: traefik
+  tlsSecretName: agentsmith-lite-local-ingress-tls
 offline:
   registry: registry.local:5000

@@ -38,6 +38,9 @@ This first public-ready skeleton is validate-first:
 - renders self-hosted Keycloak from the same OIDC env contract, uses the
   existing PostgreSQL service for the Keycloak DB, waits for `deployment/keycloak`,
   and bootstraps the realm/client with a one-shot cached Keycloak Job
+- generates or reuses one local CA and a two-host TLS certificate for the app
+  and Keycloak ingress, installs that CA into the supported host trust store,
+  and writes only its marked `/etc/hosts` entries
 - renders a substrate-owned HTTPS OpenAI-compatible local provider, including
   generated local CA/server TLS Secret, API key Secret, CA ConfigMap, Service
   port 443, and Deployment
@@ -156,6 +159,11 @@ Self-hosted config derives the issuer from
 `auth.keycloak.publicBaseUrl` + `auth.realm`; existing-cloud config reads the
 same OIDC values from env by default. `AUTH_MODE=builtin_admin` remains for
 local or transitional use and requires empty OIDC fields.
+Self-hosted OIDC requires HTTPS app and Keycloak public URLs, a non-empty
+IngressClass, and one `ingress.tlsSecretName`. The installer renders that Secret
+in both namespaces because Kubernetes Secrets are namespace-scoped. Its local
+CA and key material remain owner-only installation output; the CA is installed
+in the host trust store so real browser OIDC uses trusted HTTPS.
 In self-hosted OIDC mode, substrates install Keycloak as the auth provider.
 They also emit `OIDC_BACKCHANNEL_BASE_URL` as
 `http://keycloak.<namespace>.svc.cluster.local:8080/realms/<realm>` and create

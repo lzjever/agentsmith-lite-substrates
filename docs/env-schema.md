@@ -64,6 +64,11 @@ OIDC is the production auth path. `AUTH_MODE=oidc` requires non-empty
 `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET`; the issuer must
 be an http(s) URL without query or fragment. `OIDC_BACKCHANNEL_BASE_URL` is
 optional for existing-cloud and non-empty for self-hosted OIDC.
+Self-hosted OIDC additionally requires HTTPS for both public URLs plus a
+non-empty `APP_INGRESS_CLASS` and `APP_TLS_SECRET_NAME`. The self-hosted
+installer generates/reuses a local CA and a shared two-host certificate, then
+renders the configured TLS Secret separately in the app and substrate
+namespaces. Existing-cloud keeps its operator-provided ingress and TLS setup.
 `AUTH_MODE=builtin_admin` remains for local or transitional use and requires
 `BUILTIN_ADMIN_INITIAL_PASSWORD`; the OIDC fields must be empty in that mode.
 

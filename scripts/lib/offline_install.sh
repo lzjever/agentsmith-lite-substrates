@@ -18,6 +18,8 @@ source "${SCRIPT_LIB_DIR}/postgres.sh"
 source "${SCRIPT_LIB_DIR}/keycloak.sh"
 # shellcheck source=local_openai.sh
 source "${SCRIPT_LIB_DIR}/local_openai.sh"
+# shellcheck source=local_ingress_tls.sh
+source "${SCRIPT_LIB_DIR}/local_ingress_tls.sh"
 # shellcheck source=k3s_host_firewall.sh
 source "${SCRIPT_LIB_DIR}/k3s_host_firewall.sh"
 
@@ -358,6 +360,20 @@ offline_install_render_manifests() {
   offline_install_render_juicefs_csi_helm_values "${env_file}" "${lock_file}" "${render_dir}/juicefs-csi-values.yaml"
   render_local_openai_manifests "${env_file}" "${app_secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/local-openai" "${render_dir}" "${local_openai_image}"
   if [[ "${auth_mode}" == "oidc" ]]; then
+    local_ingress_tls_ensure \
+      "$(dirname "${env_file}")/local-ingress-tls" \
+      "$(env_value_or_empty "${env_file}" APP_PUBLIC_BASE_URL)" \
+      "${keycloak_public_base_url}"
+    render_local_ingress_tls_secret \
+      "${render_dir}/app-ingress-tls-secret.yaml" \
+      "$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)" \
+      "$(env_value_or_empty "${env_file}" APP_TLS_SECRET_NAME)" \
+      "$(dirname "${env_file}")/local-ingress-tls"
+    render_local_ingress_tls_secret \
+      "${render_dir}/keycloak-ingress-tls-secret.yaml" \
+      "${substrate_namespace}" \
+      "$(env_value_or_empty "${env_file}" APP_TLS_SECRET_NAME)" \
+      "$(dirname "${env_file}")/local-ingress-tls"
     render_keycloak_secret_manifest "${render_dir}/keycloak-secret.yaml"
     render_keycloak_deployment_manifest "${OFFLINE_INSTALL_ROOT}/manifests/keycloak" "${render_dir}/keycloak.yaml" "${keycloak_image}"
     render_keycloak_bootstrap_job "${OFFLINE_INSTALL_ROOT}/manifests/keycloak" "${render_dir}/keycloak-bootstrap-job.yaml" "${keycloak_image}"
@@ -613,6 +629,15 @@ run_p1_real_offline_install() {
   offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${rendered_namespace_manifest}"
 
   offline_install_render_manifests "${cache_dir}" "${env_file}" "${secrets_file}" "${render_dir}"
+
+  if [[ "$(env_value_or_empty "${env_file}" AUTH_MODE)" == "oidc" ]]; then
+    local_ingress_tls_trust_ca "$(dirname "${env_file}")/local-ingress-tls"
+    local_ingress_tls_ensure_hosts \
+      "$(env_value_or_empty "${env_file}" APP_PUBLIC_BASE_URL)" \
+      "${keycloak_public_base_url}"
+    offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/app-ingress-tls-secret.yaml"
+    offline_install_kubectl "${cache_dir}" "${env_file}" apply -f "${render_dir}/keycloak-ingress-tls-secret.yaml"
+  fi
 
   offline_install_install_juicefs_csi_chart "${cache_dir}" "${env_file}" "${render_dir}"
 

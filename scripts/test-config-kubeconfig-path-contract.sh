@@ -40,9 +40,11 @@ auth:
   clientId: agentsmith-lite
   bootstrapEmail: local-admin@example.test
   keycloak:
-    publicBaseUrl: http://keycloak.agentsmith.localhost
+    publicBaseUrl: https://keycloak.agentsmith.localhost
 ingress:
-  publicBaseUrl: http://localhost:3000
+  publicBaseUrl: https://agentsmith.localhost
+  ingressClass: traefik
+  tlsSecretName: agentsmith-lite-local-ingress-tls
 EOF_CONFIG
 }
 

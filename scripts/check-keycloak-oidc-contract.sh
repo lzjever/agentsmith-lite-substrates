@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/config.sh"
 # shellcheck source=lib/keycloak.sh
 source "${ROOT_DIR}/scripts/lib/keycloak.sh"
+# shellcheck source=lib/local_ingress_tls.sh
+source "${ROOT_DIR}/scripts/lib/local_ingress_tls.sh"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
@@ -56,6 +58,8 @@ auth:
     publicBaseUrl: https://keycloak.agentsmith.example.test
 ingress:
   publicBaseUrl: ${public_base_url}
+  ingressClass: traefik
+  tlsSecretName: agentsmith-lite-local-ingress-tls
 EOF_CONFIG
 }
 
@@ -86,6 +90,9 @@ check_rejected_app_public_base_url() {
 config_file="${tmp_dir}/substrates.yaml"
 output_dir="${tmp_dir}/out"
 secret_rendered="${tmp_dir}/keycloak-secret.yaml"
+app_tls_rendered="${tmp_dir}/app-ingress-tls-secret.yaml"
+keycloak_tls_rendered="${tmp_dir}/keycloak-ingress-tls-secret.yaml"
+cert_dir="${tmp_dir}/local-ingress-tls"
 drift_env_file="${tmp_dir}/substrate-drift.env"
 drift_secret_rendered="${tmp_dir}/keycloak-secret-drift.yaml"
 expected_app_public_base_url="https://agentsmith.example.test/app"
@@ -98,10 +105,30 @@ require_env_value "${output_dir}/substrate.env" APP_PUBLIC_BASE_URL "${expected_
 require_env_value "${output_dir}/substrate.env" KUBE_NAMESPACE "agentsmith-app"
 require_env_value "${output_dir}/substrate.env" SUBSTRATE_NAMESPACE "agentsmith-substrate"
 require_env_value "${output_dir}/substrate.env" OIDC_BACKCHANNEL_BASE_URL "http://keycloak.agentsmith-substrate.svc.cluster.local:8080/realms/agentsmith"
+require_env_value "${output_dir}/substrate.env" APP_INGRESS_CLASS "traefik"
+require_env_value "${output_dir}/substrate.env" APP_TLS_SECRET_NAME "agentsmith-lite-local-ingress-tls"
 validate_env_contract "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" >/dev/null
 
 keycloak_prepare_self_hosted_context "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env"
+local_ingress_tls_ensure "${cert_dir}" "${expected_app_public_base_url}" "${keycloak_public_base_url}"
+tls_fingerprint_before="$(sha256sum "${cert_dir}/tls.crt" | awk '{print $1}')"
+local_ingress_tls_ensure "${cert_dir}" "${expected_app_public_base_url}" "${keycloak_public_base_url}"
+[[ "$(sha256sum "${cert_dir}/tls.crt" | awk '{print $1}')" == "${tls_fingerprint_before}" ]] \
+  || die "local ingress TLS must reuse a certificate when its two hosts are unchanged"
+render_local_ingress_tls_secret "${app_tls_rendered}" "agentsmith-app" "agentsmith-lite-local-ingress-tls" "${cert_dir}"
+render_local_ingress_tls_secret "${keycloak_tls_rendered}" "agentsmith-substrate" "agentsmith-lite-local-ingress-tls" "${cert_dir}"
 render_keycloak_secret_manifest "${secret_rendered}"
+
+openssl x509 -in "${cert_dir}/tls.crt" -noout -ext subjectAltName | grep -F "DNS:agentsmith.example.test" >/dev/null \
+  || die "local ingress certificate must include the app host SAN"
+openssl x509 -in "${cert_dir}/tls.crt" -noout -ext subjectAltName | grep -F "DNS:keycloak.agentsmith.example.test" >/dev/null \
+  || die "local ingress certificate must include the Keycloak host SAN"
+grep -Fx '  namespace: agentsmith-app' "${app_tls_rendered}" >/dev/null \
+  || die "app ingress TLS Secret must render in KUBE_NAMESPACE"
+grep -Fx '  namespace: agentsmith-substrate' "${keycloak_tls_rendered}" >/dev/null \
+  || die "Keycloak ingress TLS Secret must render in SUBSTRATE_NAMESPACE"
+grep -Fx '  name: agentsmith-lite-local-ingress-tls' "${app_tls_rendered}" "${keycloak_tls_rendered}" >/dev/null \
+  || die "both ingress TLS Secrets must use APP_TLS_SECRET_NAME"
 
 app_public_base_url="$(secret_data_value "${secret_rendered}" appPublicBaseUrl)"
 [[ "${app_public_base_url}" == "${expected_app_public_base_url}" ]] \
@@ -142,5 +169,17 @@ check_rejected_app_public_base_url "https://agentsmith.example.test:bad/app" "in
 check_rejected_app_public_base_url "https://agentsmith.example.test:65536/app" "port-65536"
 check_rejected_app_public_base_url "https://[::1]:99999/app" "ipv6-port-99999"
 check_rejected_app_public_base_url "https://[::1/app" "malformed-bracket-authority"
+
+if (write_config "${tmp_dir}/http-app.yaml" "http://agentsmith.example.test" && write_env_contract_from_config "${tmp_dir}/http-app.yaml" "${tmp_dir}/http-app-out" test false) >/dev/null 2>&1; then
+  die "self-hosted OIDC must reject an HTTP app public URL"
+fi
+sed '/  ingressClass: traefik/d' "${config_file}" >"${tmp_dir}/no-ingress-class.yaml"
+if write_env_contract_from_config "${tmp_dir}/no-ingress-class.yaml" "${tmp_dir}/no-ingress-class-out" test false >/dev/null 2>&1; then
+  die "self-hosted OIDC must require an ingress class"
+fi
+sed '/  tlsSecretName: agentsmith-lite-local-ingress-tls/d' "${config_file}" >"${tmp_dir}/no-tls-secret.yaml"
+if write_env_contract_from_config "${tmp_dir}/no-tls-secret.yaml" "${tmp_dir}/no-tls-secret-out" test false >/dev/null 2>&1; then
+  die "self-hosted OIDC must require a TLS Secret name"
+fi
 
 info "Keycloak/OIDC public base URL contract validated: ${expected_app_public_base_url}"
