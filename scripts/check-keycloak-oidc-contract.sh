@@ -118,6 +118,10 @@ local_ingress_tls_ensure "${cert_dir}" "${expected_app_public_base_url}" "${keyc
 render_local_ingress_tls_secret "${app_tls_rendered}" "agentsmith-app" "agentsmith-lite-local-ingress-tls" "${cert_dir}"
 render_local_ingress_tls_secret "${keycloak_tls_rendered}" "agentsmith-substrate" "agentsmith-lite-local-ingress-tls" "${cert_dir}"
 render_keycloak_secret_manifest "${secret_rendered}"
+render_keycloak_deployment_manifest "${ROOT_DIR}/manifests/keycloak" "${tmp_dir}/keycloak.yaml" "quay.io/keycloak/keycloak@sha256:$(printf 'a%.0s' {1..64})"
+
+grep -A1 -F 'name: KC_HOSTNAME_STRICT' "${tmp_dir}/keycloak.yaml" | grep -Fx '              value: "true"' >/dev/null \
+  || die "Keycloak must fix its configured HTTPS public hostname behind Traefik"
 
 openssl x509 -in "${cert_dir}/tls.crt" -noout -ext subjectAltName | grep -F "DNS:agentsmith.example.test" >/dev/null \
   || die "local ingress certificate must include the app host SAN"
