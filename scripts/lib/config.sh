@@ -365,7 +365,7 @@ write_env_contract_from_config() {
   juicefs_pvc="$(config_value "${config_file}" "juicefs.pvcName" "agentsmith-lite-files")"
   juicefs_mount="$(config_value "${config_file}" "juicefs.mountRoot" "/agentsmith-lite")"
 
-  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret oidc_bootstrap_username oidc_bootstrap_email oidc_bootstrap_password
+  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret oidc_bootstrap_username oidc_bootstrap_email oidc_bootstrap_password traefik_entrypoints
   local keycloak_db_user keycloak_db_password keycloak_db_database keycloak_admin_username keycloak_admin_password
   oidc_secret=""
   oidc_bootstrap_username=""
@@ -376,6 +376,7 @@ write_env_contract_from_config() {
   keycloak_db_database=""
   keycloak_admin_username=""
   keycloak_admin_password=""
+  traefik_entrypoints=""
   if [[ "${mode}" == "existing-cloud" ]]; then
     local app_url_env meta_url_env access_env secret_env oidc_issuer_env oidc_client_id_env oidc_client_secret_env oidc_backchannel_env
     app_url_env="$(config_value "${config_file}" "postgres.appUrlFromEnv" "POSTGRES_APP_URL")"
@@ -473,6 +474,9 @@ write_env_contract_from_config() {
   if ! app_session_secret="$(env_or_existing_secret APP_SESSION_SECRET "${reuse_self_hosted_secrets_file}")"; then
     app_session_secret="$(random_secret)"
   fi
+  if [[ "${mode}" == "self-hosted" && "${auth_mode}" == "oidc" && "${ingress_class}" == "traefik" ]]; then
+    traefik_entrypoints="websecure"
+  fi
 
   cat >"${output_env_file}" <<EOF_ENV
 SUBSTRATE_SCHEMA_VERSION=agentsmith-lite.substrate.env/v1
@@ -499,6 +503,7 @@ JUICEFS_PVC_NAME=${juicefs_pvc}
 JUICEFS_MOUNT_ROOT=${juicefs_mount}
 APP_PUBLIC_BASE_URL=${public_base_url}
 APP_INGRESS_CLASS=${ingress_class}
+APP_INGRESS_TRAEFIK_ENTRYPOINTS=${traefik_entrypoints}
 APP_TLS_SECRET_NAME=${tls_secret}
 REGISTRY_URL=${registry}
 IMAGE_PULL_SECRET_NAME=${image_pull_secret}

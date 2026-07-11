@@ -60,6 +60,7 @@ keycloak_should_render_ingress() {
 keycloak_ingress_manifest_block() {
   local ingress_class="$1"
   local tls_secret="$2"
+  local traefik_entrypoints="$3"
 
   if ! keycloak_should_render_ingress; then
     return 0
@@ -72,6 +73,14 @@ kind: Ingress
 metadata:
   name: keycloak
   namespace: ${keycloak_namespace}
+EOF_INGRESS
+  if [[ "${ingress_class}" == "traefik" && "${traefik_entrypoints}" == "websecure" ]]; then
+    cat <<EOF_INGRESS_ANNOTATIONS
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+EOF_INGRESS_ANNOTATIONS
+  fi
+  cat <<EOF_INGRESS
 spec:
 EOF_INGRESS
   if [[ -n "${ingress_class}" ]]; then
@@ -127,6 +136,7 @@ keycloak_prepare_self_hosted_context() {
     return 1
   fi
   keycloak_ingress_class="$(env_value_or_empty "${env_file}" APP_INGRESS_CLASS)"
+  keycloak_traefik_entrypoints="$(env_value_or_empty "${env_file}" APP_INGRESS_TRAEFIK_ENTRYPOINTS)"
   keycloak_tls_secret_name="$(env_value_or_empty "${env_file}" APP_TLS_SECRET_NAME)"
   keycloak_db_user="$(env_value_or_empty "${secrets_file}" KEYCLOAK_DB_USER)"
   keycloak_db_password="$(env_value_or_empty "${secrets_file}" KEYCLOAK_DB_PASSWORD)"
@@ -199,7 +209,7 @@ render_keycloak_deployment_manifest() {
   require_digest_pinned_image_ref "keycloak image" "${keycloak_image}"
   : "${keycloak_namespace:?keycloak_prepare_self_hosted_context must be called first}"
 
-  ingress_block="$(keycloak_ingress_manifest_block "${keycloak_ingress_class}" "${keycloak_tls_secret_name}")"
+  ingress_block="$(keycloak_ingress_manifest_block "${keycloak_ingress_class}" "${keycloak_tls_secret_name}" "${keycloak_traefik_entrypoints}")"
   content="$(<"${manifest_dir}/keycloak.yaml")"
   content="${content//\$\{SUBSTRATE_NAMESPACE\}/${keycloak_namespace}}"
   content="${content//\$\{KEYCLOAK_IMAGE\}/${keycloak_image}}"

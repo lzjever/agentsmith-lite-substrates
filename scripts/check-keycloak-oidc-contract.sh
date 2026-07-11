@@ -106,6 +106,7 @@ require_env_value "${output_dir}/substrate.env" KUBE_NAMESPACE "agentsmith-app"
 require_env_value "${output_dir}/substrate.env" SUBSTRATE_NAMESPACE "agentsmith-substrate"
 require_env_value "${output_dir}/substrate.env" OIDC_BACKCHANNEL_BASE_URL "http://keycloak.agentsmith-substrate.svc.cluster.local:8080/realms/agentsmith"
 require_env_value "${output_dir}/substrate.env" APP_INGRESS_CLASS "traefik"
+require_env_value "${output_dir}/substrate.env" APP_INGRESS_TRAEFIK_ENTRYPOINTS "websecure"
 require_env_value "${output_dir}/substrate.env" APP_TLS_SECRET_NAME "agentsmith-lite-local-ingress-tls"
 validate_env_contract "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" >/dev/null
 
@@ -119,6 +120,9 @@ render_local_ingress_tls_secret "${app_tls_rendered}" "agentsmith-app" "agentsmi
 render_local_ingress_tls_secret "${keycloak_tls_rendered}" "agentsmith-substrate" "agentsmith-lite-local-ingress-tls" "${cert_dir}"
 render_keycloak_secret_manifest "${secret_rendered}"
 render_keycloak_deployment_manifest "${ROOT_DIR}/manifests/keycloak" "${tmp_dir}/keycloak.yaml" "quay.io/keycloak/keycloak@sha256:$(printf 'a%.0s' {1..64})"
+
+grep -Fx '    traefik.ingress.kubernetes.io/router.entrypoints: websecure' "${tmp_dir}/keycloak.yaml" >/dev/null \
+  || die "self-hosted Keycloak Traefik ingress must only bind websecure"
 
 grep -A1 -F 'name: KC_HOSTNAME_STRICT' "${tmp_dir}/keycloak.yaml" | grep -Fx '              value: "true"' >/dev/null \
   || die "Keycloak must fix its configured HTTPS public hostname behind Traefik"
