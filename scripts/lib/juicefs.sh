@@ -13,6 +13,7 @@ render_env_template() {
   content="$(<"${input}")"
   for key in \
     KUBE_NAMESPACE \
+    SUBSTRATE_NAMESPACE \
     JUICEFS_VOLUME_NAME \
     JUICEFS_BUCKET \
     JUICEFS_SECRET_NAME \
@@ -63,13 +64,13 @@ render_juicefs_format_job() {
   [[ "${juicefs_csi_image}" =~ @sha256:[0-9a-f]{64}$ ]] \
     || die "juicefs-csi image must be digest-pinned before rendering format Job"
 
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   secret_name="$(env_value_or_empty "${env_file}" JUICEFS_SECRET_NAME)"
-  [[ -n "${namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering JuiceFS format Job"
+  [[ -n "${namespace}" ]] || die "SUBSTRATE_NAMESPACE must be set before rendering JuiceFS format Job"
   [[ -n "${secret_name}" ]] || die "JUICEFS_SECRET_NAME must be set before rendering JuiceFS format Job"
 
   content="$(<"${manifest_dir}/format-job.yaml")"
-  content="${content//\$\{KUBE_NAMESPACE\}/${namespace}}"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${namespace}}"
   content="${content//\$\{JUICEFS_SECRET_NAME\}/${secret_name}}"
   content="${content//\$\{JUICEFS_CSI_IMAGE\}/${juicefs_csi_image}}"
   if grep -Eq '\$\{[A-Z0-9_]+\}' <<<"${content}"; then

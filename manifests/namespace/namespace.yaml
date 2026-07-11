@@ -1,7 +1,15 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: agentsmith
+  name: ${KUBE_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: agentsmith-lite
+    app.kubernetes.io/part-of: agentsmith-lite
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${SUBSTRATE_NAMESPACE}
   labels:
     app.kubernetes.io/name: agentsmith-lite
     app.kubernetes.io/part-of: agentsmith-lite-substrate

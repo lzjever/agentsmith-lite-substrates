@@ -8,9 +8,9 @@ volumeBindingMode: Immediate
 allowVolumeExpansion: true
 parameters:
   csi.storage.k8s.io/provisioner-secret-name: ${JUICEFS_SECRET_NAME}
-  csi.storage.k8s.io/provisioner-secret-namespace: ${KUBE_NAMESPACE}
+  csi.storage.k8s.io/provisioner-secret-namespace: ${SUBSTRATE_NAMESPACE}
   csi.storage.k8s.io/node-publish-secret-name: ${JUICEFS_SECRET_NAME}
-  csi.storage.k8s.io/node-publish-secret-namespace: ${KUBE_NAMESPACE}
+  csi.storage.k8s.io/node-publish-secret-namespace: ${SUBSTRATE_NAMESPACE}
 mountOptions:
   - cache-size=1024
 ---

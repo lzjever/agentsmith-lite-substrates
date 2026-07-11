@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: agentsmith-lite-postgres-init
-  namespace: ${KUBE_NAMESPACE}
+  namespace: ${SUBSTRATE_NAMESPACE}
 spec:
   backoffLimit: 1
   ttlSecondsAfterFinished: 300

@@ -1,7 +1,8 @@
 mode: self-hosted
 kubernetes:
   distribution: k3s
-  namespace: agentsmith
+  appNamespace: agentsmith
+  substrateNamespace: agentsmith-substrate
   skipK3s: false
   # Relative kubeconfig paths are resolved from this config file.
   kubeconfigOutput: out/kubeconfig
@@ -11,7 +12,7 @@ postgres:
   juicefsDatabase: juicefs_meta
 objectStorage:
   provider: minio
-  endpoint: http://minio.agentsmith.svc.cluster.local:9000
+  endpoint: http://minio.agentsmith-substrate.svc.cluster.local:9000
   region: us-east-1
   bucket: agentsmith-lite-files
 juicefs:

@@ -1,6 +1,7 @@
 mode: existing-cloud
 kubernetes:
-  namespace: agentsmith
+  appNamespace: agentsmith
+  substrateNamespace: agentsmith-substrate
   kubeconfigPath: /secure/path/kubeconfig
   context: production
 postgres:

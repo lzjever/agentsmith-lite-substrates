@@ -69,12 +69,12 @@ render_minio_secret_manifest() {
 
   need_file "${manifest_dir}/secret.example.yaml"
   minio_validate_self_hosted_env "${env_file}" "${secrets_file}"
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   access_key="$(env_value_or_empty "${secrets_file}" S3_ACCESS_KEY)"
   secret_key="$(env_value_or_empty "${secrets_file}" S3_SECRET_KEY)"
 
   content="$(<"${manifest_dir}/secret.example.yaml")"
-  content="${content//\$\{KUBE_NAMESPACE\}/${namespace}}"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${namespace}}"
   content="${content//\$\{S3_ACCESS_KEY_B64\}/$(minio_base64 "${access_key}")}"
   content="${content//\$\{S3_SECRET_KEY_B64\}/$(minio_base64 "${secret_key}")}"
 
@@ -93,7 +93,7 @@ render_minio_bucket_init_job() {
   local namespace endpoint bucket content
 
   need_file "${manifest_dir}/bucket-init-job.yaml"
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   endpoint="$(env_value_or_empty "${env_file}" S3_ENDPOINT)"
   bucket="$(env_value_or_empty "${env_file}" S3_BUCKET)"
   minio_validate_bucket_name "${bucket}"
@@ -102,7 +102,7 @@ render_minio_bucket_init_job() {
     || die "minio-client image must be digest-pinned before rendering bucket init Job"
 
   content="$(<"${manifest_dir}/bucket-init-job.yaml")"
-  content="${content//\$\{KUBE_NAMESPACE\}/${namespace}}"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${namespace}}"
   content="${content//\$\{MINIO_CLIENT_IMAGE\}/${minio_client_image}}"
   content="${content//\$\{S3_ENDPOINT\}/${endpoint}}"
   content="${content//\$\{S3_BUCKET\}/${bucket}}"

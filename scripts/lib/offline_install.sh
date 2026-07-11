@@ -275,76 +275,42 @@ offline_install_render_workload_manifest() {
   local namespace="$3"
   local image_ref="$4"
 
-  awk -v ns="${namespace}" -v image_ref="${image_ref}" '
-    /^[[:space:]]*namespace:[[:space:]]*agentsmith[[:space:]]*$/ {
-      sub(/agentsmith[[:space:]]*$/, ns)
-      print
-      next
-    }
+  local content
+  content="$(<"${input}")"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${namespace}}"
+  content="$(awk -v image_ref="${image_ref}" '
     /^[[:space:]]*image:[[:space:]]*/ {
       match($0, /^[[:space:]]*/)
       print substr($0, RSTART, RLENGTH) "image: " image_ref
       next
     }
     { print }
-  ' "${input}" >"${output}"
+  ' <<<"${content}")"
+  if grep -Eq '\$\{[A-Z0-9_]+\}' <<<"${content}"; then
+    die "workload manifest template has unresolved placeholders after rendering: ${input}"
+  fi
+  printf '%s\n' "${content}" >"${output}"
 }
 
 offline_install_render_namespace_manifest() {
   local input="$1"
   local output="$2"
   local env_file="$3"
-  local namespace tmp
+  local app_namespace substrate_namespace content
 
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
-  [[ -n "${namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering namespace bootstrap"
+  app_namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  substrate_namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
+  [[ -n "${app_namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering namespace bootstrap"
+  [[ -n "${substrate_namespace}" ]] || die "SUBSTRATE_NAMESPACE must be set before rendering namespace bootstrap"
   need_file "${input}"
   mkdir -p "$(dirname "${output}")"
-  tmp="${output}.tmp"
-
-  if ! awk -v ns="${namespace}" '
-    BEGIN {
-      kind_seen=0
-      in_metadata=0
-      rendered_name=0
-      metadata_indent=0
-    }
-    /^[[:space:]]*kind:[[:space:]]*Namespace[[:space:]]*$/ {
-      kind_seen=1
-      print
-      next
-    }
-    kind_seen && /^[[:space:]]*metadata:[[:space:]]*$/ {
-      match($0, /^[[:space:]]*/)
-      metadata_indent=RLENGTH
-      in_metadata=1
-      print
-      next
-    }
-    in_metadata {
-      match($0, /^[[:space:]]*/)
-      indent=RLENGTH
-      if (indent <= metadata_indent && $0 !~ /^[[:space:]]*$/) {
-        in_metadata=0
-      } else if (indent == metadata_indent + 2 && $0 ~ /^[[:space:]]*name:[[:space:]]*/) {
-        print substr($0, 1, indent) "name: " ns
-        rendered_name=1
-        in_metadata=0
-        next
-      }
-    }
-    { print }
-    END {
-      if (!kind_seen || !rendered_name) {
-        exit 1
-      }
-    }
-  ' "${input}" >"${tmp}"; then
-    rm -f "${tmp}"
-    die "namespace bootstrap manifest must be a Namespace with metadata.name"
+  content="$(<"${input}")"
+  content="${content//\$\{KUBE_NAMESPACE\}/${app_namespace}}"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${substrate_namespace}}"
+  if grep -Eq '\$\{[A-Z0-9_]+\}' <<<"${content}"; then
+    die "namespace bootstrap manifest has unresolved placeholders after rendering"
   fi
-
-  mv "${tmp}" "${output}"
+  printf '%s\n' "${content}" >"${output}"
 }
 
 offline_install_render_manifests() {
@@ -352,7 +318,7 @@ offline_install_render_manifests() {
   local env_file="$2"
   local secrets_file="$3"
   local render_dir="$4"
-  local lock_file namespace postgres_image minio_image minio_client_image juicefs_csi_image keycloak_image auth_mode local_openai_image
+  local lock_file substrate_namespace postgres_image minio_image minio_client_image juicefs_csi_image keycloak_image auth_mode local_openai_image
   local app_secrets_file
   local keycloak_user="" keycloak_password="" keycloak_database=""
 
@@ -370,7 +336,7 @@ offline_install_render_manifests() {
     || die "p1-real images.lock is missing dependency image entry: juicefs-csi"
   local_openai_image="$(images_lock_image_ref "${lock_file}" "local-openai-provider")" \
     || die "p1-real images.lock is missing dependency image entry: local-openai-provider"
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  substrate_namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   auth_mode="$(env_value_or_empty "${env_file}" AUTH_MODE)"
   app_secrets_file="$(dirname "${secrets_file}")/app.secrets.env"
   if [[ "${auth_mode}" == "oidc" ]]; then
@@ -384,9 +350,9 @@ offline_install_render_manifests() {
 
   render_postgres_secret_manifest "${env_file}" "${secrets_file}" "${render_dir}/postgres-secret.yaml" "${keycloak_user}" "${keycloak_password}" "${keycloak_database}"
   render_minio_secret_manifest "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-secret.yaml"
-  offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/postgres/postgres.yaml" "${render_dir}/postgres.yaml" "${namespace}" "${postgres_image}"
+  offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/postgres/postgres.yaml" "${render_dir}/postgres.yaml" "${substrate_namespace}" "${postgres_image}"
   render_postgres_init_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/postgres" "${render_dir}/postgres-init-job.yaml" "${postgres_image}" "${keycloak_user}" "${keycloak_password}" "${keycloak_database}"
-  offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/minio/minio.yaml" "${render_dir}/minio.yaml" "${namespace}" "${minio_image}"
+  offline_install_render_workload_manifest "${OFFLINE_INSTALL_ROOT}/manifests/minio/minio.yaml" "${render_dir}/minio.yaml" "${substrate_namespace}" "${minio_image}"
   render_minio_bucket_init_job "${env_file}" "${OFFLINE_INSTALL_ROOT}/manifests/minio" "${render_dir}/minio-bucket-init-job.yaml" "${minio_client_image}"
   render_juicefs_format_job "${env_file}" "${secrets_file}" "${OFFLINE_INSTALL_ROOT}/manifests/juicefs-csi" "${render_dir}/juicefs-format-job.yaml" "${juicefs_csi_image}"
   offline_install_render_juicefs_csi_helm_values "${env_file}" "${lock_file}" "${render_dir}/juicefs-csi-values.yaml"
@@ -443,7 +409,7 @@ offline_install_wait_postgres_ready() {
   local cache_dir="$1"
   local env_file="$2"
   local namespace
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   info "install-offline: waiting for PostgreSQL StatefulSet readiness"
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status statefulset/postgres --timeout=180s
 }
@@ -452,7 +418,7 @@ offline_install_wait_minio_ready() {
   local cache_dir="$1"
   local env_file="$2"
   local namespace
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   info "install-offline: waiting for MinIO StatefulSet readiness"
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status statefulset/minio --timeout=180s
 }
@@ -497,7 +463,7 @@ offline_install_wait_keycloak_ready() {
   local cache_dir="$1"
   local env_file="$2"
   local namespace
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   info "install-offline: waiting for Keycloak Deployment readiness"
   offline_install_kubectl "${cache_dir}" "${env_file}" -n "${namespace}" rollout status deployment/keycloak --timeout=240s
 }
@@ -516,7 +482,7 @@ offline_install_bootstrap_keycloak() {
   local env_file="$2"
   local render_dir="$3"
   local namespace job_name
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   job_name="agentsmith-lite-keycloak-bootstrap"
 
   info "install-offline: bootstrapping Keycloak realm and client"
@@ -536,7 +502,7 @@ offline_install_init_minio_bucket() {
   local env_file="$2"
   local render_dir="$3"
   local namespace bucket job_name logs apply_status wait_status logs_status
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   bucket="$(env_value_or_empty "${env_file}" S3_BUCKET)"
   job_name="agentsmith-lite-minio-bucket-init"
   minio_validate_bucket_name "${bucket}"
@@ -580,7 +546,7 @@ offline_install_format_juicefs() {
   local env_file="$2"
   local render_dir="$3"
   local namespace job_name
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   job_name="agentsmith-lite-juicefs-format"
 
   info "install-offline: formatting JuiceFS volume"
@@ -601,7 +567,7 @@ offline_install_init_postgres_databases() {
   local env_file="$2"
   local render_dir="$3"
   local namespace job_name
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   info "install-offline: initializing PostgreSQL app and JuiceFS metadata databases"
   job_name="agentsmith-lite-postgres-init"
   offline_install_run_once_job \

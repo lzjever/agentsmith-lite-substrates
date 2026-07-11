@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: agentsmith-lite-keycloak-bootstrap
-  namespace: ${KUBE_NAMESPACE}
+  namespace: ${SUBSTRATE_NAMESPACE}
 spec:
   activeDeadlineSeconds: 900
   backoffLimit: 1

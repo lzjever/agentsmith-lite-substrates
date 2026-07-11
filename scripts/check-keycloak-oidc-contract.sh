@@ -37,11 +37,12 @@ write_config() {
 mode: self-hosted
 kubernetes:
   distribution: k3s
-  namespace: agentsmith
+  appNamespace: agentsmith-app
+  substrateNamespace: agentsmith-substrate
   skipK3s: false
 objectStorage:
   provider: minio
-  endpoint: http://minio.agentsmith.svc.cluster.local:9000
+  endpoint: http://minio.agentsmith-substrate.svc.cluster.local:9000
   region: us-east-1
   bucket: agentsmith-lite-files
 juicefs:
@@ -94,6 +95,9 @@ write_config "${config_file}" "https://agentsmith.example.test/app//"
 write_env_contract_from_config "${config_file}" "${output_dir}" "check-keycloak-oidc-contract" false >/dev/null
 
 require_env_value "${output_dir}/substrate.env" APP_PUBLIC_BASE_URL "${expected_app_public_base_url}"
+require_env_value "${output_dir}/substrate.env" KUBE_NAMESPACE "agentsmith-app"
+require_env_value "${output_dir}/substrate.env" SUBSTRATE_NAMESPACE "agentsmith-substrate"
+require_env_value "${output_dir}/substrate.env" OIDC_BACKCHANNEL_BASE_URL "http://keycloak.agentsmith-substrate.svc.cluster.local:8080/realms/agentsmith"
 validate_env_contract "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env" >/dev/null
 
 keycloak_prepare_self_hosted_context "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env"
@@ -102,6 +106,9 @@ render_keycloak_secret_manifest "${secret_rendered}"
 app_public_base_url="$(secret_data_value "${secret_rendered}" appPublicBaseUrl)"
 [[ "${app_public_base_url}" == "${expected_app_public_base_url}" ]] \
   || die "Keycloak appPublicBaseUrl expected ${expected_app_public_base_url}, got ${app_public_base_url}"
+keycloak_jdbc_url="$(secret_data_value "${secret_rendered}" dbJdbcUrl)"
+[[ "${keycloak_jdbc_url}" == "jdbc:postgresql://postgres.agentsmith-substrate.svc.cluster.local:5432/keycloak" ]] \
+  || die "Keycloak dbJdbcUrl must target Postgres in SUBSTRATE_NAMESPACE"
 
 if grep -R "https://agentsmith.example.test/app//" "${output_dir}" "${secret_rendered}" >/dev/null; then
   die "Keycloak/OIDC rendered output must not contain an unnormalized /app// public base URL"

@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: agentsmith-lite-minio-bucket-init
-  namespace: ${KUBE_NAMESPACE}
+  namespace: ${SUBSTRATE_NAMESPACE}
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 300

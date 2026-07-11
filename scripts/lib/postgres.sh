@@ -117,7 +117,7 @@ postgres_validate_self_hosted_urls() {
   local env_file="$1"
   local secrets_file="$2"
   local namespace app_url meta_url
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   app_url="$(env_value_or_empty "${secrets_file}" POSTGRES_APP_URL)"
   meta_url="$(env_value_or_empty "${secrets_file}" JUICEFS_META_URL)"
 
@@ -157,7 +157,7 @@ render_postgres_secret_manifest() {
   local keycloak_database="${6:-}"
   local namespace tmp
 
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   postgres_validate_self_hosted_urls "${env_file}" "${secrets_file}"
   tmp="${output}.tmp"
   umask 077
@@ -213,8 +213,8 @@ render_postgres_init_job() {
     || die "postgres image must be digest-pinned before rendering init Job"
 
   postgres_validate_self_hosted_urls "${env_file}" "${secrets_file}"
-  namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
-  [[ -n "${namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering Postgres init Job"
+  namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
+  [[ -n "${namespace}" ]] || die "SUBSTRATE_NAMESPACE must be set before rendering Postgres init Job"
 
   keycloak_env_block=""
   keycloak_required_env_block=""
@@ -261,7 +261,7 @@ render_postgres_init_job() {
   fi
 
   content="$(<"${manifest_dir}/postgres-init-job.yaml")"
-  content="${content//\$\{KUBE_NAMESPACE\}/${namespace}}"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${namespace}}"
   content="${content//\$\{POSTGRES_IMAGE\}/${postgres_image}}"
   content="${content//\$\{POSTGRES_HOST\}/${postgres_app_HOST}}"
   content="${content//\$\{POSTGRES_PORT\}/${postgres_app_PORT}}"

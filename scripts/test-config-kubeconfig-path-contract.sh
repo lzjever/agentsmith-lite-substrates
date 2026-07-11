@@ -22,7 +22,8 @@ write_config() {
 mode: self-hosted
 kubernetes:
   distribution: k3s
-  namespace: agentsmith
+  appNamespace: agentsmith-app
+  substrateNamespace: agentsmith-substrate
   skipK3s: ${skip_k3s}
   kubeconfigPath: ${kubeconfig_path}
   kubeconfigOutput: ${kubeconfig_output}
@@ -45,6 +46,12 @@ write_config "${path_config}" true state/../state/existing.kubeconfig generated/
 write_env_contract_from_config "${path_config}" "${tmp_dir}/path-output" test true
 grep -Fx "KUBECONFIG_PATH=${config_dir}/state/existing.kubeconfig" "${tmp_dir}/path-output/substrate.env" >/dev/null \
   || { printf 'expected kubeconfigPath to be absolute relative to config file\n' >&2; exit 1; }
+grep -Fx 'KUBE_NAMESPACE=agentsmith-app' "${tmp_dir}/path-output/substrate.env" >/dev/null \
+  || { printf 'expected KUBE_NAMESPACE to identify the app namespace\n' >&2; exit 1; }
+grep -Fx 'SUBSTRATE_NAMESPACE=agentsmith-substrate' "${tmp_dir}/path-output/substrate.env" >/dev/null \
+  || { printf 'expected SUBSTRATE_NAMESPACE to identify installer metadata\n' >&2; exit 1; }
+grep -Fx 'S3_ENDPOINT=http://minio.agentsmith-substrate.svc.cluster.local:9000' "${tmp_dir}/path-output/substrate.env" >/dev/null \
+  || { printf 'expected self-hosted MinIO endpoint to target the substrate namespace\n' >&2; exit 1; }
 grep -Fx 'AGENTSMITH_LITE_SANDBOX_MODE=live' "${tmp_dir}/path-output/app.env" >/dev/null \
   || { printf 'expected self-hosted app.env to enable live sandbox mode\n' >&2; exit 1; }
 
@@ -72,7 +79,8 @@ cloud_context_config="${config_dir}/cloud-context.yaml"
 cat >"${cloud_context_config}" <<EOF_CONFIG
 mode: existing-cloud
 kubernetes:
-  namespace: agentsmith
+  appNamespace: agentsmith-app
+  substrateNamespace: agentsmith-substrate
   kubeconfigPath: state/existing.kubeconfig
   context: production-admin
 postgres:
@@ -98,5 +106,14 @@ S3_SECRET_KEY='secret-key' \
 write_env_contract_from_config "${cloud_context_config}" "${tmp_dir}/cloud-context-output" test true
 grep -Fx 'KUBE_CONTEXT=production-admin' "${tmp_dir}/cloud-context-output/substrate.env" >/dev/null \
   || { printf 'expected explicit existing-cloud kubeconfig context to be preserved\n' >&2; exit 1; }
+
+same_namespace_config="${config_dir}/same-namespace.yaml"
+sed 's/substrateNamespace: agentsmith-substrate/substrateNamespace: agentsmith-app/' "${path_config}" >"${same_namespace_config}"
+if (write_env_contract_from_config "${same_namespace_config}" "${tmp_dir}/same-namespace-output" test true) >/dev/null 2>&1; then
+  printf 'expected identical app and substrate namespaces to be rejected\n' >&2
+  exit 1
+else
+  :
+fi
 
 printf 'config kubeconfig path contract passed\n'

@@ -9,6 +9,7 @@ SUBSTRATE_ENV_SCHEMA_VERSION="agentsmith-lite.substrate.env/v1"
 NON_SECRET_REQUIRED_KEYS=(
   SUBSTRATE_SCHEMA_VERSION
   KUBE_NAMESPACE
+  SUBSTRATE_NAMESPACE
   S3_ENDPOINT
   S3_REGION
   S3_BUCKET
@@ -401,6 +402,7 @@ validate_env_contract() {
   require_value_regex "$(env_value_or_empty "${env_file}" "APP_PUBLIC_BASE_URL")" '^https?://' "APP_PUBLIC_BASE_URL must start with http:// or https://"
   [[ "$(env_value_or_empty "${env_file}" "JUICEFS_CSI_DRIVER")" == "csi.juicefs.com" ]] || die "JUICEFS_CSI_DRIVER must be csi.juicefs.com"
   require_env_value_rule "${env_file}" "KUBE_NAMESPACE" "a Kubernetes RFC1123 DNS label" is_kubernetes_rfc1123_label
+  require_env_value_rule "${env_file}" "SUBSTRATE_NAMESPACE" "a Kubernetes RFC1123 DNS label" is_kubernetes_rfc1123_label
   require_env_value_rule "${env_file}" "JUICEFS_SECRET_NAME" "a Kubernetes RFC1123 DNS label" is_kubernetes_rfc1123_label
   require_env_value_rule "${env_file}" "JUICEFS_PVC_NAME" "a Kubernetes RFC1123 DNS label" is_kubernetes_rfc1123_label
   require_env_value_rule "${env_file}" "JUICEFS_STORAGE_CLASS" "a Kubernetes DNS subdomain name" is_kubernetes_dns_subdomain_name

@@ -131,7 +131,8 @@ validate_config_contract() {
 
   local required_key
   for required_key in \
-    kubernetes.namespace \
+    kubernetes.appNamespace \
+    kubernetes.substrateNamespace \
     objectStorage.provider \
     objectStorage.bucket \
     juicefs.storageClass \
@@ -263,7 +264,7 @@ write_env_contract_from_config() {
   validate_config_contract "${config_file}"
   mkdir -p "${output_dir}"
 
-  local mode namespace kubeconfig_path kube_context kubeconfig_output skip_k3s
+  local mode app_namespace substrate_namespace kubeconfig_path kube_context kubeconfig_output skip_k3s
   mode="$(config_value "${config_file}" "mode" "self-hosted")"
   local output_env_file output_secrets_file output_app_env_file output_app_secrets_file
   local reuse_self_hosted_secrets_file reuse_self_hosted_app_secrets_file
@@ -296,7 +297,10 @@ write_env_contract_from_config() {
     die "output env files already exist; rerun with --force to overwrite"
   fi
 
-  namespace="$(config_value "${config_file}" "kubernetes.namespace" "agentsmith")"
+  app_namespace="$(config_required_value "${config_file}" "kubernetes.appNamespace")"
+  substrate_namespace="$(config_required_value "${config_file}" "kubernetes.substrateNamespace")"
+  [[ "${app_namespace}" != "${substrate_namespace}" ]] \
+    || die "config contract kubernetes.appNamespace and kubernetes.substrateNamespace must differ"
   kubeconfig_path="$(config_value "${config_file}" "kubernetes.kubeconfigPath" "")"
   kube_context="$(config_value "${config_file}" "kubernetes.context" "")"
   kubeconfig_output="$(config_value "${config_file}" "kubernetes.kubeconfigOutput" "")"
@@ -318,7 +322,7 @@ write_env_contract_from_config() {
   bucket="$(config_value "${config_file}" "objectStorage.bucket" "agentsmith-lite-files")"
   if [[ -z "${endpoint}" ]]; then
     if [[ "${provider}" == "minio" ]]; then
-      endpoint="http://minio.${namespace}.svc.cluster.local:9000"
+      endpoint="http://minio.${substrate_namespace}.svc.cluster.local:9000"
     else
       endpoint="https://s3.${region}.amazonaws.com"
     fi
@@ -402,11 +406,11 @@ write_env_contract_from_config() {
     local postgres_password juicefs_password
     if ! postgres_app_url="$(env_or_existing_secret POSTGRES_APP_URL "${reuse_self_hosted_secrets_file}")"; then
       postgres_password="$(env_or_generated_secret POSTGRES_PASSWORD)"
-      postgres_app_url="postgresql://agentsmith:${postgres_password}@postgres.${namespace}.svc.cluster.local:5432/agentsmith_lite"
+      postgres_app_url="postgresql://agentsmith:${postgres_password}@postgres.${substrate_namespace}.svc.cluster.local:5432/agentsmith_lite"
     fi
     if ! juicefs_meta_url="$(env_or_existing_secret JUICEFS_META_URL "${reuse_self_hosted_secrets_file}")"; then
       juicefs_password="$(env_or_generated_secret JUICEFS_META_PASSWORD)"
-      juicefs_meta_url="postgres://juicefs:${juicefs_password}@postgres.${namespace}.svc.cluster.local:5432/juicefs_meta"
+      juicefs_meta_url="postgres://juicefs:${juicefs_password}@postgres.${substrate_namespace}.svc.cluster.local:5432/juicefs_meta"
     fi
     if ! s3_access="$(env_or_existing_secret S3_ACCESS_KEY "${reuse_self_hosted_secrets_file}")"; then
       s3_access="minio$(random_secret | cut -c1-12)"
@@ -422,7 +426,7 @@ write_env_contract_from_config() {
       keycloak_public_base="${keycloak_public_base%/}"
       oidc_issuer="${keycloak_public_base}/realms/${auth_realm}"
       oidc_client_id="${auth_client_id}"
-      oidc_backchannel_base_url="http://keycloak.${namespace}.svc.cluster.local:8080/realms/${auth_realm}"
+      oidc_backchannel_base_url="http://keycloak.${substrate_namespace}.svc.cluster.local:8080/realms/${auth_realm}"
       if ! oidc_secret="$(env_or_existing_secret OIDC_CLIENT_SECRET "${reuse_self_hosted_secrets_file}")"; then
         oidc_secret="$(random_secret)"
       fi
@@ -467,7 +471,8 @@ SUBSTRATE_SCHEMA_VERSION=agentsmith-lite.substrate.env/v1
 KUBECONFIG_PATH=${kubeconfig_path}
 KUBE_CONTEXT=${kube_context}
 KUBERNETES_SKIP_K3S=${skip_k3s}
-KUBE_NAMESPACE=${namespace}
+KUBE_NAMESPACE=${app_namespace}
+SUBSTRATE_NAMESPACE=${substrate_namespace}
 S3_ENDPOINT=${endpoint}
 S3_REGION=${region}
 S3_BUCKET=${bucket}
@@ -516,6 +521,6 @@ EOF_SECRETS
   info "${install_path}: wrote ${output_env_file}"
   info "${install_path}: wrote ${output_secrets_file} with owner-only permissions"
   if [[ "${mode}" == "self-hosted" ]]; then
-    write_app_overlay_contract "${output_dir}" "${namespace}" "${reuse_self_hosted_app_secrets_file}" "${install_path}"
+    write_app_overlay_contract "${output_dir}" "${app_namespace}" "${reuse_self_hosted_app_secrets_file}" "${install_path}"
   fi
 }

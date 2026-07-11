@@ -115,7 +115,7 @@ keycloak_prepare_self_hosted_context() {
     *) die "OIDC_ISSUER_URL must end in /realms/<realm> for self-hosted Keycloak render" ;;
   esac
 
-  keycloak_namespace="$(env_value_or_empty "${env_file}" KUBE_NAMESPACE)"
+  keycloak_namespace="$(env_value_or_empty "${env_file}" SUBSTRATE_NAMESPACE)"
   keycloak_public_base_url="${issuer%%/realms/*}"
   keycloak_realm="${issuer##*/realms/}"
   keycloak_client_id="$(env_value_or_empty "${env_file}" OIDC_CLIENT_ID)"
@@ -133,7 +133,7 @@ keycloak_prepare_self_hosted_context() {
   keycloak_admin_username="$(env_value_or_empty "${secrets_file}" KEYCLOAK_ADMIN_USERNAME)"
   keycloak_admin_password="$(env_value_or_empty "${secrets_file}" KEYCLOAK_ADMIN_PASSWORD)"
 
-  [[ -n "${keycloak_namespace}" ]] || die "KUBE_NAMESPACE must be set before rendering Keycloak"
+  [[ -n "${keycloak_namespace}" ]] || die "SUBSTRATE_NAMESPACE must be set before rendering Keycloak"
   [[ -n "${keycloak_public_base_url}" ]] || die "OIDC_ISSUER_URL must include a public base URL"
   [[ -n "${keycloak_realm}" ]] || die "OIDC_ISSUER_URL must include a realm"
   [[ "${keycloak_realm}" != */* ]] || die "OIDC_ISSUER_URL realm must not contain /"
@@ -194,7 +194,7 @@ render_keycloak_deployment_manifest() {
 
   ingress_block="$(keycloak_ingress_manifest_block "${keycloak_ingress_class}" "${keycloak_tls_secret_name}")"
   content="$(<"${manifest_dir}/keycloak.yaml")"
-  content="${content//\$\{KUBE_NAMESPACE\}/${keycloak_namespace}}"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${keycloak_namespace}}"
   content="${content//\$\{KEYCLOAK_IMAGE\}/${keycloak_image}}"
   content="${content//\$\{KEYCLOAK_INGRESS_BLOCK\}/${ingress_block}}"
   keycloak_render_template "${manifest_dir}/keycloak.yaml" "${output}" "${content}"
@@ -211,7 +211,7 @@ render_keycloak_bootstrap_job() {
   : "${keycloak_namespace:?keycloak_prepare_self_hosted_context must be called first}"
 
   content="$(<"${manifest_dir}/bootstrap-job.yaml")"
-  content="${content//\$\{KUBE_NAMESPACE\}/${keycloak_namespace}}"
+  content="${content//\$\{SUBSTRATE_NAMESPACE\}/${keycloak_namespace}}"
   content="${content//\$\{KEYCLOAK_IMAGE\}/${keycloak_image}}"
   keycloak_render_template "${manifest_dir}/bootstrap-job.yaml" "${output}" "${content}"
 }

@@ -77,10 +77,11 @@
     "mode": { "enum": ["self-hosted", "existing-cloud"] },
     "kubernetes": {
       "type": "object",
-      "required": ["namespace"],
+      "required": ["appNamespace", "substrateNamespace"],
       "properties": {
         "distribution": { "const": "k3s" },
-        "namespace": { "type": "string", "minLength": 1 },
+        "appNamespace": { "type": "string", "minLength": 1 },
+        "substrateNamespace": { "type": "string", "minLength": 1 },
         "skipK3s": { "type": "boolean" },
         "kubeconfigOutput": { "type": "string" },
         "kubeconfigPath": { "type": "string" },
