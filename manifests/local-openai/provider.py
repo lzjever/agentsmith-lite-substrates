@@ -5,6 +5,7 @@ import re
 import shlex
 import ssl
 import time
+import unicodedata
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -13,7 +14,6 @@ BASH_CALL_ID = "agentsmith_lite_local_bash"
 PUBLISH_CALL_ID = "agentsmith_lite_local_publish_file"
 ARTIFACT_FILENAME = "artifact.txt"
 ARTIFACT_CONTENT = "AgentSmith Lite local OpenAI provider artifact"
-SAFE_ARTIFACT_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def tool_names(body):
@@ -62,14 +62,31 @@ def artifact_contract(messages):
     }
 
 
+def normalize_artifact_filename(filename):
+    if not isinstance(filename, str):
+        return None
+    filename = unicodedata.normalize("NFC", filename)
+    if (
+        not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or not filename.isprintable()
+        or len(filename.encode("utf-8")) > 128
+    ):
+        return None
+    return filename
+
+
 def prompt_artifact_filename(text):
     for pattern in (r"\bfilename\s+([^\s]+)", r"\bcreate\s+([^\s]+)"):
         match = re.search(pattern, text)
         if not match:
             continue
         candidate = match.group(1).strip("`'\"").rstrip(".,;:")
-        if SAFE_ARTIFACT_FILENAME.match(candidate):
-            return candidate
+        filename = normalize_artifact_filename(candidate)
+        if filename:
+            return filename
     return None
 
 

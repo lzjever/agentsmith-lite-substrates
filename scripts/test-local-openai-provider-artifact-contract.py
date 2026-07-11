@@ -42,6 +42,28 @@ def only_tool_call(response, name):
 
 def main():
     provider = load_provider()
+
+    assert provider.normalize_artifact_filename("artifact.txt") == "artifact.txt"
+    assert provider.normalize_artifact_filename("resume-\u00e9.txt") == "resume-\u00e9.txt"
+    assert provider.normalize_artifact_filename("resume-e\u0301.txt") == "resume-\u00e9.txt"
+    assert provider.normalize_artifact_filename("a" * 124 + ".txt") == "a" * 124 + ".txt"
+
+    for invalid_name in (
+        "",
+        ".",
+        "..",
+        "nested/artifact.txt",
+        "nested\\artifact.txt",
+        "artifact\n.txt",
+        "artifact\t.txt",
+        "artifact\x00.txt",
+        "a" * 125 + ".txt",
+    ):
+        assert provider.normalize_artifact_filename(invalid_name) is None, invalid_name
+
+    assert provider.prompt_artifact_filename("create resume-e\u0301.txt,") == "resume-\u00e9.txt"
+    assert provider.prompt_artifact_filename("create artifact file.txt") == "artifact"
+
     artifact_name = "agentsmith-lite-task-workflow-deadbeef.txt"
     marker = "AGENTSMITH_LITE_TASK_WORKFLOW_MARKER"
     prompt = "\n".join([
