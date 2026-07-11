@@ -82,7 +82,7 @@ check_rejected_app_public_base_url() {
   local output_dir="${tmp_dir}/${name}-out"
 
   write_config "${config_file}" "${public_base_url}"
-  if write_env_contract_from_config "${config_file}" "${output_dir}" "check-keycloak-oidc-contract" false >/dev/null 2>&1; then
+  if (write_env_contract_from_config "${config_file}" "${output_dir}" "check-keycloak-oidc-contract" false) >/dev/null 2>&1; then
     die "expected ingress.publicBaseUrl to be rejected: ${public_base_url}"
   fi
 }
@@ -178,11 +178,11 @@ if (write_config "${tmp_dir}/http-app.yaml" "http://agentsmith.example.test" && 
   die "self-hosted OIDC must reject an HTTP app public URL"
 fi
 sed '/  ingressClass: traefik/d' "${config_file}" >"${tmp_dir}/no-ingress-class.yaml"
-if write_env_contract_from_config "${tmp_dir}/no-ingress-class.yaml" "${tmp_dir}/no-ingress-class-out" test false >/dev/null 2>&1; then
+if (write_env_contract_from_config "${tmp_dir}/no-ingress-class.yaml" "${tmp_dir}/no-ingress-class-out" test false) >/dev/null 2>&1; then
   die "self-hosted OIDC must require an ingress class"
 fi
 sed '/  tlsSecretName: agentsmith-lite-local-ingress-tls/d' "${config_file}" >"${tmp_dir}/no-tls-secret.yaml"
-if write_env_contract_from_config "${tmp_dir}/no-tls-secret.yaml" "${tmp_dir}/no-tls-secret-out" test false >/dev/null 2>&1; then
+if (write_env_contract_from_config "${tmp_dir}/no-tls-secret.yaml" "${tmp_dir}/no-tls-secret-out" test false) >/dev/null 2>&1; then
   die "self-hosted OIDC must require a TLS Secret name"
 fi
 
