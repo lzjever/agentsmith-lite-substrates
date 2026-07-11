@@ -121,6 +121,7 @@ keycloak_prepare_self_hosted_context() {
   keycloak_client_id="$(env_value_or_empty "${env_file}" OIDC_CLIENT_ID)"
   keycloak_client_secret="$(env_value_or_empty "${secrets_file}" OIDC_CLIENT_SECRET)"
   keycloak_bootstrap_username="$(env_value_or_empty "${secrets_file}" OIDC_BOOTSTRAP_USERNAME)"
+  keycloak_bootstrap_email="$(env_value_or_empty "${env_file}" OIDC_BOOTSTRAP_EMAIL)"
   keycloak_bootstrap_password="$(env_value_or_empty "${secrets_file}" OIDC_BOOTSTRAP_PASSWORD)"
   if ! keycloak_app_public_base_url="$(normalize_public_base_url "$(env_value_or_empty "${env_file}" APP_PUBLIC_BASE_URL)")"; then
     return 1
@@ -140,6 +141,7 @@ keycloak_prepare_self_hosted_context() {
   [[ -n "${keycloak_client_id}" ]] || die "OIDC_CLIENT_ID must be set before rendering Keycloak"
   [[ -n "${keycloak_client_secret}" ]] || die "OIDC_CLIENT_SECRET must be set before rendering Keycloak"
   [[ -n "${keycloak_bootstrap_username}" ]] || die "OIDC_BOOTSTRAP_USERNAME must be set before rendering Keycloak"
+  [[ -n "${keycloak_bootstrap_email}" ]] || die "OIDC_BOOTSTRAP_EMAIL must be set before rendering Keycloak"
   [[ -n "${keycloak_bootstrap_password}" ]] || die "OIDC_BOOTSTRAP_PASSWORD must be set before rendering Keycloak"
   [[ -n "${keycloak_app_public_base_url}" ]] || die "APP_PUBLIC_BASE_URL must be set before rendering Keycloak"
   [[ -n "${keycloak_db_user}" ]] || die "KEYCLOAK_DB_USER must be set before rendering Keycloak"
@@ -174,6 +176,7 @@ render_keycloak_secret_manifest() {
     printf '  oidcClientId: %s\n' "$(keycloak_b64 "${keycloak_client_id}")"
     printf '  oidcClientSecret: %s\n' "$(keycloak_b64 "${keycloak_client_secret}")"
     printf '  oidcBootstrapUsername: %s\n' "$(keycloak_b64 "${keycloak_bootstrap_username}")"
+    printf '  oidcBootstrapEmail: %s\n' "$(keycloak_b64 "${keycloak_bootstrap_email}")"
     printf '  oidcBootstrapPassword: %s\n' "$(keycloak_b64 "${keycloak_bootstrap_password}")"
     printf '  publicBaseUrl: %s\n' "$(keycloak_b64 "${keycloak_public_base_url}")"
     printf '  appPublicBaseUrl: %s\n' "$(keycloak_b64 "${keycloak_app_public_base_url}")"

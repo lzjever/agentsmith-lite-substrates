@@ -33,6 +33,7 @@ NON_SECRET_ALLOWED_KEYS=(
   OIDC_ISSUER_URL
   OIDC_CLIENT_ID
   OIDC_BACKCHANNEL_BASE_URL
+  OIDC_BOOTSTRAP_EMAIL
   APP_INGRESS_CLASS
   APP_TLS_SECRET_NAME
   REGISTRY_URL
@@ -368,6 +369,8 @@ validate_env_contract() {
         || die "OIDC_CLIENT_ID must be empty when AUTH_MODE=builtin_admin"
       [[ -z "$(env_value_or_empty "${env_file}" "OIDC_BACKCHANNEL_BASE_URL")" ]] \
         || die "OIDC_BACKCHANNEL_BASE_URL must be empty when AUTH_MODE=builtin_admin"
+      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_BOOTSTRAP_EMAIL")" ]] \
+        || die "OIDC_BOOTSTRAP_EMAIL must be empty when AUTH_MODE=builtin_admin"
       oidc_secret="$(env_value_or_empty "${secrets_file}" "OIDC_CLIENT_SECRET")"
       [[ -z "${oidc_secret}" ]] || die "OIDC_CLIENT_SECRET must be empty when AUTH_MODE=builtin_admin"
       [[ -z "$(env_value_or_empty "${secrets_file}" "OIDC_BOOTSTRAP_USERNAME")" ]] \

@@ -48,6 +48,11 @@ spec:
                 secretKeyRef:
                   name: agentsmith-lite-keycloak
                   key: oidcBootstrapUsername
+            - name: OIDC_BOOTSTRAP_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: agentsmith-lite-keycloak
+                  key: oidcBootstrapEmail
             - name: OIDC_BOOTSTRAP_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -68,6 +73,7 @@ spec:
               : "${OIDC_CLIENT_ID:?}"
               : "${OIDC_CLIENT_SECRET:?}"
               : "${OIDC_BOOTSTRAP_USERNAME:?}"
+              : "${OIDC_BOOTSTRAP_EMAIL:?}"
               : "${OIDC_BOOTSTRAP_PASSWORD:?}"
               : "${APP_PUBLIC_BASE_URL:?}"
 
@@ -117,7 +123,7 @@ spec:
               )"
               redirect_uri="${APP_PUBLIC_BASE_URL%/}/*"
               web_origin="${APP_PUBLIC_BASE_URL%/}"
-              bootstrap_email="bootstrap@agentsmith.localhost"
+              bootstrap_email="$OIDC_BOOTSTRAP_EMAIL"
               bootstrap_first_name="Agentsmith"
               bootstrap_last_name="Local"
               if [ -z "$client_uuid" ]; then

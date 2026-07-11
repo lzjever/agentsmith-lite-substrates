@@ -227,6 +227,7 @@ write_app_overlay_contract() {
   local namespace="$2"
   local existing_app_secrets_file="${3:-}"
   local install_path="$4"
+  local oidc_bootstrap_email="${5:-}"
   local app_env_file="${output_dir}/app.env"
   local app_secrets_file="${output_dir}/app.secrets.env"
   local local_provider_api_key old_umask
@@ -240,6 +241,7 @@ AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL=https://agentsmith-lite-local-openai.${name
 AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP=agentsmith-lite-local-openai-ca
 AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY=ca.crt
 AGENTSMITH_LITE_SANDBOX_MODE=live
+OIDC_ADMIN_EMAILS=${oidc_bootstrap_email}
 EOF_APP_ENV
 
   old_umask="$(umask)"
@@ -363,10 +365,11 @@ write_env_contract_from_config() {
   juicefs_pvc="$(config_value "${config_file}" "juicefs.pvcName" "agentsmith-lite-files")"
   juicefs_mount="$(config_value "${config_file}" "juicefs.mountRoot" "/agentsmith-lite")"
 
-  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret oidc_bootstrap_username oidc_bootstrap_password
+  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret oidc_bootstrap_username oidc_bootstrap_email oidc_bootstrap_password
   local keycloak_db_user keycloak_db_password keycloak_db_database keycloak_admin_username keycloak_admin_password
   oidc_secret=""
   oidc_bootstrap_username=""
+  oidc_bootstrap_email=""
   oidc_bootstrap_password=""
   keycloak_db_user=""
   keycloak_db_password=""
@@ -433,6 +436,7 @@ write_env_contract_from_config() {
       if ! oidc_bootstrap_username="$(env_or_existing_secret OIDC_BOOTSTRAP_USERNAME "${reuse_self_hosted_secrets_file}")"; then
         oidc_bootstrap_username="$(config_value "${config_file}" "auth.bootstrapUsername" "agentsmith-local")"
       fi
+      oidc_bootstrap_email="$(config_value "${config_file}" "auth.bootstrapEmail" "bootstrap@agentsmith.localhost")"
       if ! oidc_bootstrap_password="$(env_or_existing_secret OIDC_BOOTSTRAP_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
         oidc_bootstrap_password="$(random_secret)"
       fi
@@ -481,6 +485,7 @@ AUTH_MODE=${auth_mode}
 OIDC_ISSUER_URL=${oidc_issuer}
 OIDC_CLIENT_ID=${oidc_client_id}
 OIDC_BACKCHANNEL_BASE_URL=${oidc_backchannel_base_url}
+OIDC_BOOTSTRAP_EMAIL=${oidc_bootstrap_email}
 JUICEFS_VOLUME_NAME=${juicefs_volume}
 JUICEFS_BUCKET=${juicefs_bucket}
 JUICEFS_SECRET_NAME=${juicefs_secret}
@@ -521,6 +526,6 @@ EOF_SECRETS
   info "${install_path}: wrote ${output_env_file}"
   info "${install_path}: wrote ${output_secrets_file} with owner-only permissions"
   if [[ "${mode}" == "self-hosted" ]]; then
-    write_app_overlay_contract "${output_dir}" "${app_namespace}" "${reuse_self_hosted_app_secrets_file}" "${install_path}"
+    write_app_overlay_contract "${output_dir}" "${app_namespace}" "${reuse_self_hosted_app_secrets_file}" "${install_path}" "${oidc_bootstrap_email}"
   fi
 }

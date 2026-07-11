@@ -35,7 +35,12 @@ juicefs:
   storageClass: agentsmith-lite-juicefs-rwx
   pvcName: agentsmith-lite-files
 auth:
-  mode: builtin_admin
+  mode: oidc
+  realm: agentsmith
+  clientId: agentsmith-lite
+  bootstrapEmail: local-admin@example.test
+  keycloak:
+    publicBaseUrl: http://keycloak.agentsmith.localhost
 ingress:
   publicBaseUrl: http://localhost:3000
 EOF_CONFIG
@@ -52,8 +57,12 @@ grep -Fx 'SUBSTRATE_NAMESPACE=agentsmith-substrate' "${tmp_dir}/path-output/subs
   || { printf 'expected SUBSTRATE_NAMESPACE to identify installer metadata\n' >&2; exit 1; }
 grep -Fx 'S3_ENDPOINT=http://minio.agentsmith-substrate.svc.cluster.local:9000' "${tmp_dir}/path-output/substrate.env" >/dev/null \
   || { printf 'expected self-hosted MinIO endpoint to target the substrate namespace\n' >&2; exit 1; }
+grep -Fx 'OIDC_BOOTSTRAP_EMAIL=local-admin@example.test' "${tmp_dir}/path-output/substrate.env" >/dev/null \
+  || { printf 'expected self-hosted bootstrap email to come from config\n' >&2; exit 1; }
 grep -Fx 'AGENTSMITH_LITE_SANDBOX_MODE=live' "${tmp_dir}/path-output/app.env" >/dev/null \
   || { printf 'expected self-hosted app.env to enable live sandbox mode\n' >&2; exit 1; }
+grep -Fx 'OIDC_ADMIN_EMAILS=local-admin@example.test' "${tmp_dir}/path-output/app.env" >/dev/null \
+  || { printf 'expected self-hosted app.env to allow the Keycloak bootstrap admin\n' >&2; exit 1; }
 
 output_config="${config_dir}/output.yaml"
 write_config "${output_config}" false '' generated/../generated/kubeconfig
