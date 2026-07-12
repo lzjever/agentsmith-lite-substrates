@@ -199,12 +199,10 @@ substrate-owned Kubernetes Secrets and are not added to the app env contract.
 Self-hosted installs also write `app.env` with
 `AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL`,
 `AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP`, and
-`AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY`, and
-`OIDC_ADMIN_EMAILS=<auth.bootstrapEmail>`, plus owner-only `app.secrets.env`
-with `AGENTSMITH_LITE_MODEL_API_KEY_LOCAL`. The generated admin allowlist lets
-the Keycloak bootstrap user act as the initial product admin. These are app
-overlay files, not substrate env keys. `OIDC_BOOTSTRAP_EMAIL` remains
-substrate-only and is never passed to the app runtime.
+`AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY`, plus owner-only `app.secrets.env` with
+`AGENTSMITH_LITE_MODEL_API_KEY_LOCAL`. These are app overlay files, not
+substrate env keys. `OIDC_BOOTSTRAP_EMAIL` remains substrate-only and is never
+passed to the app runtime.
 
 ## Main Commands
 

@@ -179,6 +179,16 @@ validate_config_contract() {
       config_required_value "${config_file}" "${required_key}" >/dev/null
     done
   fi
+
+  local model_slug model_base_url_env model_api_key_env
+  model_slug="$(config_value "${config_file}" "modelProvider.endpointSlug" "")"
+  model_base_url_env="$(config_value "${config_file}" "modelProvider.baseUrlFromEnv" "")"
+  model_api_key_env="$(config_value "${config_file}" "modelProvider.apiKeyFromEnv" "")"
+  if [[ -n "${model_slug}${model_base_url_env}${model_api_key_env}" ]]; then
+    [[ "${model_slug}" =~ ^[a-z][a-z0-9-]*$ ]] || die "config contract modelProvider.endpointSlug must be a lowercase endpoint slug"
+    [[ "${model_base_url_env}" =~ ^[A-Z_][A-Z0-9_]*$ ]] || die "config contract modelProvider.baseUrlFromEnv must be an environment variable name"
+    [[ "${model_api_key_env}" =~ ^[A-Z_][A-Z0-9_]*$ ]] || die "config contract modelProvider.apiKeyFromEnv must be an environment variable name"
+  fi
 }
 
 env_or_generated_secret() {
@@ -222,18 +232,52 @@ env_or_existing_nonempty_secret() {
   return 1
 }
 
+env_or_existing_nonempty_value() {
+  local env_name="$1"
+  local existing_file="${2:-}"
+  local existing_name="${3:-${env_name}}"
+  local value
+  if [[ -n "${!env_name:-}" ]]; then
+    printf '%s' "${!env_name}"
+    return 0
+  fi
+  if [[ -n "${existing_file}" ]] && env_has_key "${existing_file}" "${existing_name}"; then
+    value="$(env_value_or_empty "${existing_file}" "${existing_name}")"
+    if [[ -n "${value}" ]]; then
+      printf '%s' "${value}"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 write_app_overlay_contract() {
   local output_dir="$1"
   local namespace="$2"
   local existing_app_secrets_file="${3:-}"
-  local install_path="$4"
-  local oidc_bootstrap_email="${5:-}"
+  local existing_app_env_file="${4:-}"
+  local config_file="$5"
+  local install_path="$6"
   local app_env_file="${output_dir}/app.env"
   local app_secrets_file="${output_dir}/app.secrets.env"
-  local local_provider_api_key old_umask
+  local local_provider_api_key model_slug model_suffix model_base_url_env model_api_key_env model_base_url model_api_key old_umask
 
   if ! local_provider_api_key="$(env_or_existing_nonempty_secret AGENTSMITH_LITE_MODEL_API_KEY_LOCAL "${existing_app_secrets_file}")"; then
     local_provider_api_key="$(random_secret)"
+  fi
+
+  model_slug="$(config_value "${config_file}" "modelProvider.endpointSlug" "")"
+  model_base_url_env="$(config_value "${config_file}" "modelProvider.baseUrlFromEnv" "")"
+  model_api_key_env="$(config_value "${config_file}" "modelProvider.apiKeyFromEnv" "")"
+  if [[ -n "${model_slug}" ]]; then
+    model_suffix="${model_slug^^}"
+    model_suffix="${model_suffix//-/_}"
+    if ! model_base_url="$(env_or_existing_nonempty_value "${model_base_url_env}" "${existing_app_env_file}" "AGENTSMITH_LITE_MODEL_BASE_URL_${model_suffix}")"; then
+      die "config contract modelProvider.baseUrlFromEnv must resolve to a non-empty environment value"
+    fi
+    if ! model_api_key="$(env_or_existing_nonempty_secret "${model_api_key_env}" "${existing_app_secrets_file}")"; then
+      die "config contract modelProvider.apiKeyFromEnv must resolve to a non-empty environment value"
+    fi
   fi
 
   cat >"${app_env_file}" <<EOF_APP_ENV
@@ -241,14 +285,19 @@ AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL=https://agentsmith-lite-local-openai.${name
 AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP=agentsmith-lite-local-openai-ca
 AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY=ca.crt
 AGENTSMITH_LITE_SANDBOX_MODE=live
-OIDC_ADMIN_EMAILS=${oidc_bootstrap_email}
 EOF_APP_ENV
+  if [[ -n "${model_slug}" ]]; then
+    printf 'AGENTSMITH_LITE_MODEL_BASE_URL_%s=%s\n' "${model_suffix}" "${model_base_url}" >>"${app_env_file}"
+  fi
 
   old_umask="$(umask)"
   umask 077
   cat >"${app_secrets_file}" <<EOF_APP_SECRETS
 AGENTSMITH_LITE_MODEL_API_KEY_LOCAL=${local_provider_api_key}
 EOF_APP_SECRETS
+  if [[ -n "${model_slug}" ]]; then
+    printf 'AGENTSMITH_LITE_MODEL_API_KEY_%s=%s\n' "${model_suffix}" "${model_api_key}" >>"${app_secrets_file}"
+  fi
   umask "${old_umask}"
   chmod 0600 "${app_secrets_file}"
 
@@ -269,12 +318,13 @@ write_env_contract_from_config() {
   local mode app_namespace substrate_namespace kubeconfig_path kube_context kubeconfig_output skip_k3s
   mode="$(config_value "${config_file}" "mode" "self-hosted")"
   local output_env_file output_secrets_file output_app_env_file output_app_secrets_file
-  local reuse_self_hosted_secrets_file reuse_self_hosted_app_secrets_file
+  local reuse_self_hosted_secrets_file reuse_self_hosted_app_env_file reuse_self_hosted_app_secrets_file
   output_env_file="${output_dir}/substrate.env"
   output_secrets_file="${output_dir}/substrate.secrets.env"
   output_app_env_file="${output_dir}/app.env"
   output_app_secrets_file="${output_dir}/app.secrets.env"
   reuse_self_hosted_secrets_file=""
+  reuse_self_hosted_app_env_file=""
   reuse_self_hosted_app_secrets_file=""
 
   if [[ "${mode}" == "self-hosted" ]]; then
@@ -291,9 +341,14 @@ write_env_contract_from_config() {
       fi
       reuse_self_hosted_secrets_file="${output_secrets_file}"
     fi
-    if [[ "${force}" == "true" && -f "${output_app_secrets_file}" ]]; then
-      check_secret_file_mode "${output_app_secrets_file}"
-      reuse_self_hosted_app_secrets_file="${output_app_secrets_file}"
+    if [[ "${force}" == "true" ]]; then
+      if [[ -f "${output_app_env_file}" ]]; then
+        reuse_self_hosted_app_env_file="${output_app_env_file}"
+      fi
+      if [[ -f "${output_app_secrets_file}" ]]; then
+        check_secret_file_mode "${output_app_secrets_file}"
+        reuse_self_hosted_app_secrets_file="${output_app_secrets_file}"
+      fi
     fi
   elif [[ "${force}" != "true" && ( -e "${output_env_file}" || -e "${output_secrets_file}" ) ]]; then
     die "output env files already exist; rerun with --force to overwrite"
@@ -535,6 +590,6 @@ EOF_SECRETS
   info "${install_path}: wrote ${output_env_file}"
   info "${install_path}: wrote ${output_secrets_file} with owner-only permissions"
   if [[ "${mode}" == "self-hosted" ]]; then
-    write_app_overlay_contract "${output_dir}" "${app_namespace}" "${reuse_self_hosted_app_secrets_file}" "${install_path}" "${oidc_bootstrap_email}"
+    write_app_overlay_contract "${output_dir}" "${app_namespace}" "${reuse_self_hosted_app_secrets_file}" "${reuse_self_hosted_app_env_file}" "${config_file}" "${install_path}"
   fi
 }

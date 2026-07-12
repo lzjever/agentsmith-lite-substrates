@@ -124,6 +124,14 @@
         "mountRoot": { "type": "string" }
       }
     },
+    "modelProvider": {
+      "type": "object",
+      "properties": {
+        "endpointSlug": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "baseUrlFromEnv": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+        "apiKeyFromEnv": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+      }
+    },
     "auth": {
       "type": "object",
       "required": ["mode"],

@@ -27,10 +27,7 @@ Keycloak realm URL. Existing-cloud config reads OIDC values from
 `OIDC_CLIENT_SECRET` unless custom `auth.*FromEnv` names are set.
 Self-hosted Keycloak DB/bootstrap admin secrets are rendered into
 substrate-owned Kubernetes Secrets only; they are not app runtime env fields.
-For self-hosted installs, `auth.bootstrapEmail` also produces
-`OIDC_ADMIN_EMAILS` in the separate app overlay so that Keycloak bootstrap user
-is the initial product admin. `OIDC_BOOTSTRAP_EMAIL` remains substrate-only
-and is not passed to the app runtime.
+`OIDC_BOOTSTRAP_EMAIL` remains substrate-only and is not passed to the app runtime.
 `auth.keycloak.publicBaseUrl` is the browser-facing OIDC issuer identity.
 Self-hosted app runtime calls Keycloak through `OIDC_BACKCHANNEL_BASE_URL`,
 which substrates generate as the in-cluster Keycloak service realm URL.
@@ -43,9 +40,8 @@ backchannel URL.
 kubeconfig/context, S3 endpoint metadata, auth mode, JuiceFS StorageClass/PVC
 names, ingress settings, and optional registry coordinates.
 Self-hosted installs also write a separate `app.env` overlay containing the
-local OpenAI-compatible provider base URL, CA ConfigMap reference, and
-`OIDC_ADMIN_EMAILS` derived from `auth.bootstrapEmail`. App-only model keys are
-intentionally not accepted in `substrate.env`.
+local OpenAI-compatible provider base URL and CA ConfigMap reference. App-only
+model keys are intentionally not accepted in `substrate.env`.
 
 `kubernetes.kubeconfigPath` in config is normalized to an absolute path relative
 to the config file and written to `KUBECONFIG_PATH` as an existing kubeconfig.

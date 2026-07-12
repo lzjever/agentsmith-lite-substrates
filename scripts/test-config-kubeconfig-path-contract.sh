@@ -45,11 +45,17 @@ ingress:
   publicBaseUrl: https://agentsmith.localhost
   ingressClass: traefik
   tlsSecretName: agentsmith-lite-local-ingress-tls
+modelProvider:
+  endpointSlug: deepseek
+  baseUrlFromEnv: DEEPSEEK_OPENAI_BASE_URL
+  apiKeyFromEnv: DEEPSEEK_API_KEY
 EOF_CONFIG
 }
 
 path_config="${config_dir}/path.yaml"
 write_config "${path_config}" true state/../state/existing.kubeconfig generated/../generated/kubeconfig
+DEEPSEEK_OPENAI_BASE_URL='https://api.deepseek.com' \
+DEEPSEEK_API_KEY='test-deepseek-key' \
 write_env_contract_from_config "${path_config}" "${tmp_dir}/path-output" test true
 grep -Fx "KUBECONFIG_PATH=${config_dir}/state/existing.kubeconfig" "${tmp_dir}/path-output/substrate.env" >/dev/null \
   || { printf 'expected kubeconfigPath to be absolute relative to config file\n' >&2; exit 1; }
@@ -63,11 +69,15 @@ grep -Fx 'OIDC_BOOTSTRAP_EMAIL=local-admin@example.test' "${tmp_dir}/path-output
   || { printf 'expected self-hosted bootstrap email to come from config\n' >&2; exit 1; }
 grep -Fx 'AGENTSMITH_LITE_SANDBOX_MODE=live' "${tmp_dir}/path-output/app.env" >/dev/null \
   || { printf 'expected self-hosted app.env to enable live sandbox mode\n' >&2; exit 1; }
-grep -Fx 'OIDC_ADMIN_EMAILS=local-admin@example.test' "${tmp_dir}/path-output/app.env" >/dev/null \
-  || { printf 'expected self-hosted app.env to allow the Keycloak bootstrap admin\n' >&2; exit 1; }
+grep -Fx 'AGENTSMITH_LITE_MODEL_BASE_URL_DEEPSEEK=https://api.deepseek.com' "${tmp_dir}/path-output/app.env" >/dev/null \
+  || { printf 'expected configured provider base URL in app.env\n' >&2; exit 1; }
+grep -Fq 'AGENTSMITH_LITE_MODEL_API_KEY_DEEPSEEK=' "${tmp_dir}/path-output/app.secrets.env" \
+  || { printf 'expected configured provider key binding in app.secrets.env\n' >&2; exit 1; }
 
 output_config="${config_dir}/output.yaml"
 write_config "${output_config}" false '' generated/../generated/kubeconfig
+DEEPSEEK_OPENAI_BASE_URL='https://api.deepseek.com' \
+DEEPSEEK_API_KEY='test-deepseek-key' \
 write_env_contract_from_config "${output_config}" "${tmp_dir}/output-output" test true
 grep -Fx "KUBECONFIG_PATH=${config_dir}/generated/kubeconfig" "${tmp_dir}/output-output/substrate.env" >/dev/null \
   || { printf 'expected kubeconfigOutput to be absolute relative to config file\n' >&2; exit 1; }
@@ -76,12 +86,16 @@ grep -Fx 'KUBE_CONTEXT=default' "${tmp_dir}/output-output/substrate.env" >/dev/n
 
 explicit_context_config="${config_dir}/explicit-context.yaml"
 write_config "${explicit_context_config}" false '' generated/kubeconfig workstation-admin
+DEEPSEEK_OPENAI_BASE_URL='https://api.deepseek.com' \
+DEEPSEEK_API_KEY='test-deepseek-key' \
 write_env_contract_from_config "${explicit_context_config}" "${tmp_dir}/explicit-context-output" test true
 grep -Fx 'KUBE_CONTEXT=workstation-admin' "${tmp_dir}/explicit-context-output/substrate.env" >/dev/null \
   || { printf 'expected explicit self-hosted kubeconfig context to be preserved\n' >&2; exit 1; }
 
 skip_context_config="${config_dir}/skip-context.yaml"
 write_config "${skip_context_config}" true state/existing.kubeconfig ''
+DEEPSEEK_OPENAI_BASE_URL='https://api.deepseek.com' \
+DEEPSEEK_API_KEY='test-deepseek-key' \
 write_env_contract_from_config "${skip_context_config}" "${tmp_dir}/skip-context-output" test true
 grep -Fx 'KUBE_CONTEXT=' "${tmp_dir}/skip-context-output/substrate.env" >/dev/null \
   || { printf 'expected skipK3s without an explicit context to leave KUBE_CONTEXT empty\n' >&2; exit 1; }

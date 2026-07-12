@@ -148,7 +148,6 @@ spec:
                   -s "redirectUris=[\"$redirect_uri\"]" \
                   -s "webOrigins=[\"$web_origin\"]"
               fi
-
               user_id="$(
                 kcadm get users \
                   -r "$OIDC_REALM" \
