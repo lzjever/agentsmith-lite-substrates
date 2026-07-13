@@ -89,31 +89,18 @@ require_tagged_image_source() {
     || die "${label} must include a tag so the lock can be written as repo:tag@sha256:<digest>"
 }
 
-resolve_image_digest() {
-  local label="$1"
-  local source="$2"
-  local digest inspect_source repo_tag
-  require_tagged_image_source "${label}" "${source}"
-  inspect_source="${source}"
-  if [[ "${source}" == *@sha256:* ]]; then
-    repo_tag="${source%@sha256:*}"
-    inspect_source="${repo_tag%:*}@${source##*@}"
-  fi
-  if ! digest="$(skopeo inspect --override-os linux --override-arch amd64 --format '{{.Digest}}' "docker://${inspect_source}")"; then
-    die "failed to resolve digest for ${label}"
-  fi
-  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || die "skopeo returned an invalid digest for ${label}"
-  printf '%s\n' "${digest#sha256:}"
-}
-
 export_image_archive() {
   local label="$1"
-  local digest_source="$2"
+  local source="$2"
   local archive="$3"
-  local archive_tag="$4"
+  local repo_tag copy_source
+  repo_tag="${source%@sha256:*}"
+  copy_source="${source}"
+  if [[ "${source}" == *@sha256:* ]]; then
+    copy_source="${repo_tag%:*}@${source##*@}"
+  fi
   mkdir -p "$(dirname "${archive}")"
-  if ! skopeo copy --override-os linux --override-arch amd64 "docker://${digest_source}" "docker-archive:${archive}:${archive_tag}" >/dev/null; then
+  if ! skopeo copy --override-os linux --override-arch amd64 "docker://${copy_source}" "oci-archive:${archive}:offline" >/dev/null; then
     rm -f -- "${archive}"
     die "failed to export ${label} image archive"
   fi
@@ -123,12 +110,13 @@ prepare_image_artifact() {
   local label="$1"
   local source="$2"
   local archive="$3"
-  local digest repo_tag digest_source pinned_source archive_sha
-  digest="$(resolve_image_digest "${label}" "${source}")"
+  local digest repo_tag pinned_source archive_sha
+  require_tagged_image_source "${label}" "${source}"
   repo_tag="${source%@sha256:*}"
+  export_image_archive "${label}" "${source}" "${archive}"
+  digest="$(skopeo inspect --raw "oci-archive:${archive}" | sha256_file /dev/stdin)"
+  [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || die "failed to resolve archived manifest digest for ${label}"
   pinned_source="${repo_tag}@sha256:${digest}"
-  digest_source="${repo_tag%:*}@sha256:${digest}"
-  export_image_archive "${label}" "${digest_source}" "${archive}" "${repo_tag}"
   archive_sha="$(sha256_file "${archive}")"
   printf '%s\t%s\t%s\n' "${archive}" "${pinned_source}" "${archive_sha}"
 }

@@ -29,7 +29,7 @@ auth:
   keycloak:
     publicBaseUrl: https://keycloak.agentsmith.localhost
 ingress:
-  publicBaseUrl: https://agentsmith.localhost
+  publicBaseUrl: https://agentsmith.localhost/app
   ingressClass: traefik
   tlsSecretName: agentsmith-lite-local-ingress-tls
 offline:

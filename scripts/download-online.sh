@@ -346,6 +346,15 @@ mapfile -t archives < <(awk '
     print value
   }
 ' "${lock_file}")
+mapfile -t image_refs < <(awk '
+  /^[[:space:]]*image:[[:space:]]*/ {
+    value=$0
+    sub(/^[[:space:]]*image:[[:space:]]*/, "", value)
+    gsub(/^"|"$/, "", value)
+    gsub(/^\047|\047$/, "", value)
+    print value
+  }
+' "${lock_file}")
 
 archive_paths=()
 for archive in "${archives[@]}"; do
@@ -356,6 +365,10 @@ if [[ "${#archives[@]}" -eq 0 ]]; then
   printf 'No OCI archives listed in %s\n' "${lock_file}"
   exit 0
 fi
+[[ "${#archives[@]}" -eq "${#image_refs[@]}" ]] || {
+  printf 'error: images.lock image/archive entries are not paired\n' >&2
+  exit 1
+}
 
 if [[ "${dry_run}" == "true" ]]; then
   printf 'Would import %d OCI archive(s) from %s into containerd namespace %s:\n' "${#archives[@]}" "${lock_file}" "${containerd_namespace}"
@@ -371,13 +384,22 @@ cached_k3s="${cache_dir}/bin/k3s"
   exit 1
 }
 
-for archive_path in "${archive_paths[@]}"; do
+for index in "${!archive_paths[@]}"; do
+  archive_path="${archive_paths[${index}]}"
+  image_ref="${image_refs[${index}]}"
+  tagged_ref="${image_ref%@sha256:*}"
+  repository="${tagged_ref%:*}"
+  digest_ref="${repository}@${image_ref##*@}"
+  imported_ref="${repository}:offline"
   [[ -f "${archive_path}" ]] || {
     printf 'error: archive not found: %s\n' "${archive_path}" >&2
     exit 1
   }
   printf 'Importing %s into containerd namespace %s\n' "${archive_path}" "${containerd_namespace}"
-  "${cached_k3s}" ctr -n "${containerd_namespace}" images import "${archive_path}"
+  "${cached_k3s}" ctr -n "${containerd_namespace}" images import --base-name "${repository}" "${archive_path}"
+  "${cached_k3s}" ctr -n "${containerd_namespace}" images tag --force "${imported_ref}" "${digest_ref}"
+  "${cached_k3s}" ctr -n "${containerd_namespace}" images tag --force "${imported_ref}" "${tagged_ref}"
+  "${cached_k3s}" ctr -n "${containerd_namespace}" images tag --force "${imported_ref}" "${image_ref}"
 done
 EOF_IMPORT
   chmod +x "${dir}/scripts/import-images.sh"
