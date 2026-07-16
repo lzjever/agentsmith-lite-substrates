@@ -122,6 +122,7 @@ spec:
                   --noquotes 2>/dev/null
               )"
               redirect_uri="${APP_PUBLIC_BASE_URL%/}/*"
+              logout_redirect_uri="${APP_PUBLIC_BASE_URL%/}/*"
               web_origin="${APP_PUBLIC_BASE_URL%/}"
               bootstrap_email="$OIDC_BOOTSTRAP_EMAIL"
               bootstrap_first_name="Agentsmith"
@@ -136,6 +137,7 @@ spec:
                   -s standardFlowEnabled=true \
                   -s directAccessGrantsEnabled=false \
                   -s "redirectUris=[\"$redirect_uri\"]" \
+                  -s "attributes={\"post.logout.redirect.uris\":\"$logout_redirect_uri\"}" \
                   -s "webOrigins=[\"$web_origin\"]"
               else
                 kcadm update "clients/$client_uuid" \
@@ -146,6 +148,7 @@ spec:
                   -s standardFlowEnabled=true \
                   -s directAccessGrantsEnabled=false \
                   -s "redirectUris=[\"$redirect_uri\"]" \
+                  -s "attributes={\"post.logout.redirect.uris\":\"$logout_redirect_uri\"}" \
                   -s "webOrigins=[\"$web_origin\"]"
               fi
               user_id="$(
