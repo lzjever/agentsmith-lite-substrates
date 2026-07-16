@@ -136,7 +136,7 @@
       "type": "object",
       "required": ["mode"],
       "properties": {
-        "mode": { "enum": ["builtin_admin", "oidc"] },
+        "mode": { "const": "oidc" },
         "realm": { "type": "string", "minLength": 1 },
         "clientId": { "type": "string", "minLength": 1 },
         "issuerUrlFromEnv": { "type": "string", "minLength": 1 },

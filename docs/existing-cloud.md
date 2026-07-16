@@ -34,7 +34,6 @@ OIDC is the production auth path. `auth.mode: oidc` reads
 `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` by default; set
 `auth.issuerUrlFromEnv`, `auth.clientIdFromEnv`, or
 `auth.clientSecretFromEnv` only when the operator uses different env names.
-`auth.mode: builtin_admin` is still accepted for local or transitional use.
 Existing-cloud mode does not install Keycloak; the operator provides an OIDC
 issuer/client/secret in the same env/secrets contract that self-hosted emits.
 

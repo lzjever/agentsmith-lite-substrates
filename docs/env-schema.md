@@ -65,8 +65,7 @@ non-empty `APP_INGRESS_CLASS` and `APP_TLS_SECRET_NAME`. The self-hosted
 installer generates/reuses a local CA and a shared two-host certificate, then
 renders the configured TLS Secret separately in the app and substrate
 namespaces. Existing-cloud keeps its operator-provided ingress and TLS setup.
-`AUTH_MODE=builtin_admin` remains for local or transitional use and requires
-`BUILTIN_ADMIN_INITIAL_PASSWORD`; the OIDC fields must be empty in that mode.
+OIDC is the only supported auth mode.
 
 The static env contract rejects invalid resource names before any live cluster
 checks: `KUBE_NAMESPACE`, `JUICEFS_SECRET_NAME`, and `JUICEFS_PVC_NAME` must be
@@ -77,9 +76,8 @@ subdomain name; `S3_BUCKET` must follow S3 bucket-name shape rules.
 
 `substrate.secrets.env` contains:
 
-- product-secret subset: `POSTGRES_APP_URL`, `APP_SESSION_SECRET`,
-  `OIDC_CLIENT_SECRET` for OIDC, or `BUILTIN_ADMIN_INITIAL_PASSWORD` for
-  builtin admin
+- product-secret subset: `POSTGRES_APP_URL`, `APP_SESSION_SECRET`, and
+  `OIDC_CLIENT_SECRET`
 - substrate/CSI scoped values: `S3_ACCESS_KEY`, `S3_SECRET_KEY`,
   `JUICEFS_META_URL`
 - substrate-only local Keycloak login: `OIDC_BOOTSTRAP_USERNAME` and
@@ -96,3 +94,5 @@ Self-hosted installs write a separate owner-only `app.secrets.env` overlay with
 a base64url-encoded 32-byte `APP_CREDENTIAL_ENCRYPTION_KEY` for product endpoint
 credentials. Both values are generated on first install and reused from the
 existing `app.secrets.env` when reinstalling with `--force`.
+The non-secret `app.env` allowlists only the generated in-cluster provider host
+through `AGENTSMITH_LITE_PRIVATE_PROVIDER_HOSTS`.

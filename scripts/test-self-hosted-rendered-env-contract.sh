@@ -45,6 +45,13 @@ EOF_CONFIG
 write_env_contract_from_config "${config_file}" "${output_dir}" test true
 validate_env_contract "${output_dir}/substrate.env" "${output_dir}/substrate.secrets.env"
 
+builtin_config="${config_dir}/builtin.yaml"
+sed 's/mode: oidc/mode: builtin_admin/' "${config_file}" >"${builtin_config}"
+if (write_env_contract_from_config "${builtin_config}" "${tmp_dir}/builtin-output" test true) >/dev/null 2>&1; then
+  printf 'expected builtin_admin auth mode to be rejected\n' >&2
+  exit 1
+fi
+
 require_line() {
   local file="$1"
   local line="$2"
@@ -64,6 +71,7 @@ require_line "${env_file}" 'S3_ENDPOINT=http://minio.agentsmith-substrate.svc.cl
 require_line "${env_file}" 'JUICEFS_BUCKET=http://minio.agentsmith-substrate.svc.cluster.local:9000/agentsmith-lite-files'
 require_line "${env_file}" 'OIDC_ISSUER_URL=https://keycloak.agentsmith.localhost/realms/agentsmith'
 require_line "${env_file}" 'OIDC_BACKCHANNEL_BASE_URL=http://keycloak.agentsmith-substrate.svc.cluster.local:8080/realms/agentsmith'
+require_line "${app_env_file}" 'AGENTSMITH_LITE_PRIVATE_PROVIDER_HOSTS=agentsmith-lite-local-openai.agentsmith.svc.cluster.local'
 
 postgres_app_url="$(env_value "${secrets_file}" POSTGRES_APP_URL)"
 juicefs_meta_url="$(env_value "${secrets_file}" JUICEFS_META_URL)"
@@ -77,6 +85,8 @@ juicefs_meta_url="$(env_value "${secrets_file}" JUICEFS_META_URL)"
   || { printf 'expected local S3 secret key\n' >&2; exit 1; }
 [[ -n "$(env_value "${secrets_file}" OIDC_CLIENT_SECRET)" ]] \
   || { printf 'expected local OIDC client secret\n' >&2; exit 1; }
+! grep -Fq 'BUILTIN_ADMIN_INITIAL_PASSWORD=' "${secrets_file}" \
+  || { printf 'builtin admin secret must not be emitted by the OIDC-only substrate contract\n' >&2; exit 1; }
 
 credential_encryption_key="$(env_value "${app_secrets_file}" APP_CREDENTIAL_ENCRYPTION_KEY)"
 [[ "${credential_encryption_key}" =~ ^[A-Za-z0-9_-]{43}$ ]] \

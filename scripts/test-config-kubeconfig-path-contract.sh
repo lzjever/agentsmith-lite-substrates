@@ -120,7 +120,10 @@ juicefs:
   storageClass: agentsmith-lite-juicefs-rwx
   pvcName: agentsmith-lite-files
 auth:
-  mode: builtin_admin
+  mode: oidc
+  issuerUrlFromEnv: OIDC_ISSUER_URL
+  clientIdFromEnv: OIDC_CLIENT_ID
+  clientSecretFromEnv: OIDC_CLIENT_SECRET
 ingress:
   publicBaseUrl: https://agentsmith.example.com
 EOF_CONFIG
@@ -128,6 +131,9 @@ POSTGRES_APP_URL='postgresql://agentsmith:password@postgres.example.com:5432/age
 JUICEFS_META_URL='postgres://juicefs:password@postgres.example.com:5432/juicefs_meta' \
 S3_ACCESS_KEY='access-key' \
 S3_SECRET_KEY='secret-key' \
+OIDC_ISSUER_URL='https://identity.example.com/realms/agentsmith' \
+OIDC_CLIENT_ID='agentsmith-lite' \
+OIDC_CLIENT_SECRET='oidc-secret' \
 write_env_contract_from_config "${cloud_context_config}" "${tmp_dir}/cloud-context-output" test true
 grep -Fx 'KUBE_CONTEXT=production-admin' "${tmp_dir}/cloud-context-output/substrate.env" >/dev/null \
   || { printf 'expected explicit existing-cloud kubeconfig context to be preserved\n' >&2; exit 1; }

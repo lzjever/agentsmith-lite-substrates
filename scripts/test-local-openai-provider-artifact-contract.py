@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -42,6 +43,27 @@ def only_tool_call(response, name):
 
 def main():
     provider = load_provider()
+
+    assert provider.models_response() == {
+        "object": "list",
+        "data": [{
+            "id": "local-openai-dev",
+            "object": "model",
+            "created": 0,
+            "owned_by": "agentsmith-lite",
+        }],
+    }
+    previous_key = os.environ.get("LOCAL_OPENAI_API_KEY")
+    try:
+        os.environ["LOCAL_OPENAI_API_KEY"] = "local-test-key"
+        assert provider.authorized({"Authorization": "Bearer local-test-key"})
+        assert not provider.authorized({"Authorization": "Bearer wrong-key"})
+        assert not provider.authorized({})
+    finally:
+        if previous_key is None:
+            os.environ.pop("LOCAL_OPENAI_API_KEY", None)
+        else:
+            os.environ["LOCAL_OPENAI_API_KEY"] = previous_key
 
     assert provider.normalize_artifact_filename("artifact.txt") == "artifact.txt"
     assert provider.normalize_artifact_filename("resume-\u00e9.txt") == "resume-\u00e9.txt"

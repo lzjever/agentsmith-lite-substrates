@@ -150,12 +150,9 @@ validate_config_contract() {
   esac
 
   auth_mode="$(config_required_value "${config_file}" "auth.mode")"
-  case "${auth_mode}" in
-    builtin_admin|oidc) ;;
-    *) die "config contract auth.mode must be builtin_admin or oidc" ;;
-  esac
+  [[ "${auth_mode}" == "oidc" ]] || die "config contract auth.mode must be oidc"
 
-  if [[ "${auth_mode}" == "oidc" && "${mode}" == "self-hosted" ]]; then
+  if [[ "${mode}" == "self-hosted" ]]; then
     for required_key in \
       auth.realm \
       auth.clientId \
@@ -291,6 +288,7 @@ write_app_overlay_contract() {
 AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL=https://agentsmith-lite-local-openai.${namespace}.svc.cluster.local/v1
 AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP=agentsmith-lite-local-openai-ca
 AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY=ca.crt
+AGENTSMITH_LITE_PRIVATE_PROVIDER_HOSTS=agentsmith-lite-local-openai.${namespace}.svc.cluster.local
 AGENTSMITH_LITE_SANDBOX_MODE=live
 EOF_APP_ENV
   if [[ -n "${model_slug}" ]]; then
@@ -399,7 +397,7 @@ write_env_contract_from_config() {
   fi
 
   local auth_mode oidc_issuer oidc_client_id oidc_backchannel_base_url public_base_url ingress_class tls_secret registry image_pull_secret
-  auth_mode="$(config_value "${config_file}" "auth.mode" "builtin_admin")"
+  auth_mode="$(config_value "${config_file}" "auth.mode" "oidc")"
   oidc_issuer=""
   oidc_client_id=""
   oidc_backchannel_base_url=""
@@ -428,7 +426,7 @@ write_env_contract_from_config() {
   juicefs_pvc="$(config_value "${config_file}" "juicefs.pvcName" "agentsmith-lite-files")"
   juicefs_mount="$(config_value "${config_file}" "juicefs.mountRoot" "/agentsmith-lite")"
 
-  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret admin_password oidc_secret oidc_bootstrap_username oidc_bootstrap_email oidc_bootstrap_password traefik_entrypoints
+  local postgres_app_url app_session_secret juicefs_meta_url s3_access s3_secret oidc_secret oidc_bootstrap_username oidc_bootstrap_email oidc_bootstrap_password traefik_entrypoints
   local keycloak_db_user keycloak_db_password keycloak_db_database keycloak_admin_username keycloak_admin_password
   oidc_secret=""
   oidc_bootstrap_username=""
@@ -456,19 +454,17 @@ write_env_contract_from_config() {
     is_juicefs_meta_url "${juicefs_meta_url}" || die "JUICEFS_META_URL must be postgres://user:password@host:port/db"
     [[ -n "${s3_access}" ]] || die "existing-cloud requires ${access_env}"
     [[ -n "${s3_secret}" ]] || die "existing-cloud requires ${secret_env}"
-    if [[ "${auth_mode}" == "oidc" ]]; then
-      oidc_issuer_env="$(config_value "${config_file}" "auth.issuerUrlFromEnv" "OIDC_ISSUER_URL")"
-      oidc_client_id_env="$(config_value "${config_file}" "auth.clientIdFromEnv" "OIDC_CLIENT_ID")"
-      oidc_client_secret_env="$(config_value "${config_file}" "auth.clientSecretFromEnv" "OIDC_CLIENT_SECRET")"
-      oidc_backchannel_env="$(config_value "${config_file}" "auth.backchannelBaseUrlFromEnv" "OIDC_BACKCHANNEL_BASE_URL")"
-      oidc_issuer="${!oidc_issuer_env:-}"
-      oidc_client_id="${!oidc_client_id_env:-}"
-      oidc_secret="${!oidc_client_secret_env:-}"
-      oidc_backchannel_base_url="${!oidc_backchannel_env:-}"
-      [[ -n "${oidc_issuer}" ]] || die "existing-cloud OIDC requires ${oidc_issuer_env}"
-      [[ -n "${oidc_client_id}" ]] || die "existing-cloud OIDC requires ${oidc_client_id_env}"
-      [[ -n "${oidc_secret}" ]] || die "existing-cloud OIDC requires ${oidc_client_secret_env}"
-    fi
+    oidc_issuer_env="$(config_value "${config_file}" "auth.issuerUrlFromEnv" "OIDC_ISSUER_URL")"
+    oidc_client_id_env="$(config_value "${config_file}" "auth.clientIdFromEnv" "OIDC_CLIENT_ID")"
+    oidc_client_secret_env="$(config_value "${config_file}" "auth.clientSecretFromEnv" "OIDC_CLIENT_SECRET")"
+    oidc_backchannel_env="$(config_value "${config_file}" "auth.backchannelBaseUrlFromEnv" "OIDC_BACKCHANNEL_BASE_URL")"
+    oidc_issuer="${!oidc_issuer_env:-}"
+    oidc_client_id="${!oidc_client_id_env:-}"
+    oidc_secret="${!oidc_client_secret_env:-}"
+    oidc_backchannel_base_url="${!oidc_backchannel_env:-}"
+    [[ -n "${oidc_issuer}" ]] || die "existing-cloud OIDC requires ${oidc_issuer_env}"
+    [[ -n "${oidc_client_id}" ]] || die "existing-cloud OIDC requires ${oidc_client_id_env}"
+    [[ -n "${oidc_secret}" ]] || die "existing-cloud OIDC requires ${oidc_client_secret_env}"
   else
     local postgres_password juicefs_password
     if ! postgres_app_url="$(env_or_existing_secret POSTGRES_APP_URL "${reuse_self_hosted_secrets_file}")"; then
@@ -485,53 +481,42 @@ write_env_contract_from_config() {
     if ! s3_secret="$(env_or_existing_secret S3_SECRET_KEY "${reuse_self_hosted_secrets_file}")"; then
       s3_secret="$(random_secret)"
     fi
-    if [[ "${auth_mode}" == "oidc" ]]; then
-      local auth_realm auth_client_id keycloak_public_base
-      auth_realm="$(config_required_value "${config_file}" "auth.realm")"
-      auth_client_id="$(config_required_value "${config_file}" "auth.clientId")"
-      keycloak_public_base="$(config_required_value "${config_file}" "auth.keycloak.publicBaseUrl")"
-      keycloak_public_base="${keycloak_public_base%/}"
-      [[ "${public_base_url}" == https://* ]] || die "self-hosted OIDC requires ingress.publicBaseUrl to use https://"
-      [[ "${keycloak_public_base}" == https://* ]] || die "self-hosted OIDC requires auth.keycloak.publicBaseUrl to use https://"
-      [[ -n "${ingress_class}" ]] || die "self-hosted OIDC requires ingress.ingressClass"
-      [[ -n "${tls_secret}" ]] || die "self-hosted OIDC requires ingress.tlsSecretName"
-      oidc_issuer="${keycloak_public_base}/realms/${auth_realm}"
-      oidc_client_id="${auth_client_id}"
-      oidc_backchannel_base_url="http://keycloak.${substrate_namespace}.svc.cluster.local:8080/realms/${auth_realm}"
-      if ! oidc_secret="$(env_or_existing_secret OIDC_CLIENT_SECRET "${reuse_self_hosted_secrets_file}")"; then
-        oidc_secret="$(random_secret)"
-      fi
-      if ! oidc_bootstrap_username="$(env_or_existing_secret OIDC_BOOTSTRAP_USERNAME "${reuse_self_hosted_secrets_file}")"; then
-        oidc_bootstrap_username="$(config_value "${config_file}" "auth.bootstrapUsername" "agentsmith-local")"
-      fi
-      oidc_bootstrap_email="$(config_value "${config_file}" "auth.bootstrapEmail" "bootstrap@agentsmith.localhost")"
-      if ! oidc_bootstrap_password="$(env_or_existing_secret OIDC_BOOTSTRAP_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
-        oidc_bootstrap_password="$(random_secret)"
-      fi
-      if ! keycloak_db_user="$(env_or_existing_nonempty_secret KEYCLOAK_DB_USER "${reuse_self_hosted_secrets_file}")"; then
-        keycloak_db_user="keycloak"
-      fi
-      if ! keycloak_db_password="$(env_or_existing_nonempty_secret KEYCLOAK_DB_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
-        keycloak_db_password="$(random_secret)"
-      fi
-      if ! keycloak_db_database="$(env_or_existing_nonempty_secret KEYCLOAK_DB_DATABASE "${reuse_self_hosted_secrets_file}")"; then
-        keycloak_db_database="keycloak"
-      fi
-      if ! keycloak_admin_username="$(env_or_existing_nonempty_secret KEYCLOAK_ADMIN_USERNAME "${reuse_self_hosted_secrets_file}")"; then
-        keycloak_admin_username="admin"
-      fi
-      if ! keycloak_admin_password="$(env_or_existing_nonempty_secret KEYCLOAK_ADMIN_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
-        keycloak_admin_password="$(random_secret)"
-      fi
+    local auth_realm auth_client_id keycloak_public_base
+    auth_realm="$(config_required_value "${config_file}" "auth.realm")"
+    auth_client_id="$(config_required_value "${config_file}" "auth.clientId")"
+    keycloak_public_base="$(config_required_value "${config_file}" "auth.keycloak.publicBaseUrl")"
+    keycloak_public_base="${keycloak_public_base%/}"
+    [[ "${public_base_url}" == https://* ]] || die "self-hosted OIDC requires ingress.publicBaseUrl to use https://"
+    [[ "${keycloak_public_base}" == https://* ]] || die "self-hosted OIDC requires auth.keycloak.publicBaseUrl to use https://"
+    [[ -n "${ingress_class}" ]] || die "self-hosted OIDC requires ingress.ingressClass"
+    [[ -n "${tls_secret}" ]] || die "self-hosted OIDC requires ingress.tlsSecretName"
+    oidc_issuer="${keycloak_public_base}/realms/${auth_realm}"
+    oidc_client_id="${auth_client_id}"
+    oidc_backchannel_base_url="http://keycloak.${substrate_namespace}.svc.cluster.local:8080/realms/${auth_realm}"
+    if ! oidc_secret="$(env_or_existing_secret OIDC_CLIENT_SECRET "${reuse_self_hosted_secrets_file}")"; then
+      oidc_secret="$(random_secret)"
     fi
-  fi
-  if [[ "${auth_mode}" == "builtin_admin" ]]; then
-    if ! admin_password="$(env_or_existing_secret BUILTIN_ADMIN_INITIAL_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
-      admin_password="$(random_secret)"
+    if ! oidc_bootstrap_username="$(env_or_existing_secret OIDC_BOOTSTRAP_USERNAME "${reuse_self_hosted_secrets_file}")"; then
+      oidc_bootstrap_username="$(config_value "${config_file}" "auth.bootstrapUsername" "agentsmith-local")"
     fi
-  else
-    if ! admin_password="$(env_or_existing_secret BUILTIN_ADMIN_INITIAL_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
-      admin_password=""
+    oidc_bootstrap_email="$(config_value "${config_file}" "auth.bootstrapEmail" "bootstrap@agentsmith.localhost")"
+    if ! oidc_bootstrap_password="$(env_or_existing_secret OIDC_BOOTSTRAP_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+      oidc_bootstrap_password="$(random_secret)"
+    fi
+    if ! keycloak_db_user="$(env_or_existing_nonempty_secret KEYCLOAK_DB_USER "${reuse_self_hosted_secrets_file}")"; then
+      keycloak_db_user="keycloak"
+    fi
+    if ! keycloak_db_password="$(env_or_existing_nonempty_secret KEYCLOAK_DB_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+      keycloak_db_password="$(random_secret)"
+    fi
+    if ! keycloak_db_database="$(env_or_existing_nonempty_secret KEYCLOAK_DB_DATABASE "${reuse_self_hosted_secrets_file}")"; then
+      keycloak_db_database="keycloak"
+    fi
+    if ! keycloak_admin_username="$(env_or_existing_nonempty_secret KEYCLOAK_ADMIN_USERNAME "${reuse_self_hosted_secrets_file}")"; then
+      keycloak_admin_username="admin"
+    fi
+    if ! keycloak_admin_password="$(env_or_existing_nonempty_secret KEYCLOAK_ADMIN_PASSWORD "${reuse_self_hosted_secrets_file}")"; then
+      keycloak_admin_password="$(random_secret)"
     fi
   fi
   if ! app_session_secret="$(env_or_existing_secret APP_SESSION_SECRET "${reuse_self_hosted_secrets_file}")"; then
@@ -582,7 +567,6 @@ APP_SESSION_SECRET=${app_session_secret}
 S3_ACCESS_KEY=${s3_access}
 S3_SECRET_KEY=${s3_secret}
 JUICEFS_META_URL=${juicefs_meta_url}
-BUILTIN_ADMIN_INITIAL_PASSWORD=${admin_password}
 OIDC_CLIENT_SECRET=${oidc_secret}
 OIDC_BOOTSTRAP_USERNAME=${oidc_bootstrap_username}
 OIDC_BOOTSTRAP_PASSWORD=${oidc_bootstrap_password}

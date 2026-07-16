@@ -14,6 +14,7 @@ BASH_CALL_ID = "agentsmith_lite_local_bash"
 PUBLISH_CALL_ID = "agentsmith_lite_local_publish_file"
 ARTIFACT_FILENAME = "artifact.txt"
 ARTIFACT_CONTENT = "AgentSmith Lite local OpenAI provider artifact"
+MODEL_ID = "local-openai-dev"
 
 
 def tool_names(body):
@@ -205,6 +206,25 @@ def completion(model, message, finish_reason):
     }
 
 
+def models_response():
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": MODEL_ID,
+                "object": "model",
+                "created": 0,
+                "owned_by": "agentsmith-lite",
+            }
+        ],
+    }
+
+
+def authorized(headers):
+    expected = os.environ.get("LOCAL_OPENAI_API_KEY", "")
+    return bool(expected) and headers.get("Authorization") == f"Bearer {expected}"
+
+
 def completion_chunk(response):
     choice = response["choices"][0]
     message = choice["message"]
@@ -252,14 +272,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok\n")
             return
+        if self.path == "/v1/models":
+            if not authorized(self.headers):
+                self.send_json(401, {"error": {"message": "unauthorized", "type": "invalid_auth"}})
+                return
+            self.send_json(200, models_response())
+            return
         self.send_json(404, {"error": {"message": "not found", "type": "not_found"}})
 
     def do_POST(self):
         if self.path != "/v1/chat/completions":
             self.send_json(404, {"error": {"message": "not found", "type": "not_found"}})
             return
-        expected = os.environ.get("LOCAL_OPENAI_API_KEY", "")
-        if not expected or self.headers.get("Authorization") != f"Bearer {expected}":
+        if not authorized(self.headers):
             self.send_json(401, {"error": {"message": "unauthorized", "type": "invalid_auth"}})
             return
         try:

@@ -48,7 +48,6 @@ SECRET_REQUIRED_KEYS=(
   S3_ACCESS_KEY
   S3_SECRET_KEY
   JUICEFS_META_URL
-  BUILTIN_ADMIN_INITIAL_PASSWORD
   OIDC_CLIENT_SECRET
 )
 
@@ -361,38 +360,15 @@ validate_env_contract() {
   [[ "${#app_session_secret}" -ge 32 ]] || die "APP_SESSION_SECRET must be at least 32 characters"
 
   auth_mode="$(env_value_or_empty "${env_file}" "AUTH_MODE")"
-  case "${auth_mode}" in
-    builtin_admin)
-      require_key_nonempty "${secrets_file}" "BUILTIN_ADMIN_INITIAL_PASSWORD" "substrate.secrets.env"
-      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_ISSUER_URL")" ]] \
-        || die "OIDC_ISSUER_URL must be empty when AUTH_MODE=builtin_admin"
-      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_CLIENT_ID")" ]] \
-        || die "OIDC_CLIENT_ID must be empty when AUTH_MODE=builtin_admin"
-      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_BACKCHANNEL_BASE_URL")" ]] \
-        || die "OIDC_BACKCHANNEL_BASE_URL must be empty when AUTH_MODE=builtin_admin"
-      [[ -z "$(env_value_or_empty "${env_file}" "OIDC_BOOTSTRAP_EMAIL")" ]] \
-        || die "OIDC_BOOTSTRAP_EMAIL must be empty when AUTH_MODE=builtin_admin"
-      oidc_secret="$(env_value_or_empty "${secrets_file}" "OIDC_CLIENT_SECRET")"
-      [[ -z "${oidc_secret}" ]] || die "OIDC_CLIENT_SECRET must be empty when AUTH_MODE=builtin_admin"
-      [[ -z "$(env_value_or_empty "${secrets_file}" "OIDC_BOOTSTRAP_USERNAME")" ]] \
-        || die "OIDC_BOOTSTRAP_USERNAME must be empty when AUTH_MODE=builtin_admin"
-      [[ -z "$(env_value_or_empty "${secrets_file}" "OIDC_BOOTSTRAP_PASSWORD")" ]] \
-        || die "OIDC_BOOTSTRAP_PASSWORD must be empty when AUTH_MODE=builtin_admin"
-      ;;
-    oidc)
-      require_key_nonempty "${env_file}" "OIDC_ISSUER_URL" "substrate.env"
-      require_key_nonempty "${env_file}" "OIDC_CLIENT_ID" "substrate.env"
-      require_key_nonempty "${secrets_file}" "OIDC_CLIENT_SECRET" "substrate.secrets.env"
-      require_env_value_rule "${env_file}" "OIDC_ISSUER_URL" "an http(s) OIDC issuer URL without query or fragment" is_oidc_issuer_url
-      require_env_value_rule "${env_file}" "OIDC_CLIENT_ID" "an OIDC client id made of letters, digits, dot, underscore, colon, or dash" is_oidc_client_id
-      if [[ -n "$(env_value_or_empty "${env_file}" "OIDC_BACKCHANNEL_BASE_URL")" ]]; then
-        require_env_value_rule "${env_file}" "OIDC_BACKCHANNEL_BASE_URL" "an http(s) OIDC backchannel URL without query or fragment" is_oidc_issuer_url
-      fi
-      ;;
-    *)
-      die "AUTH_MODE must be builtin_admin or oidc"
-      ;;
-  esac
+  [[ "${auth_mode}" == "oidc" ]] || die "AUTH_MODE must be oidc"
+  require_key_nonempty "${env_file}" "OIDC_ISSUER_URL" "substrate.env"
+  require_key_nonempty "${env_file}" "OIDC_CLIENT_ID" "substrate.env"
+  require_key_nonempty "${secrets_file}" "OIDC_CLIENT_SECRET" "substrate.secrets.env"
+  require_env_value_rule "${env_file}" "OIDC_ISSUER_URL" "an http(s) OIDC issuer URL without query or fragment" is_oidc_issuer_url
+  require_env_value_rule "${env_file}" "OIDC_CLIENT_ID" "an OIDC client id made of letters, digits, dot, underscore, colon, or dash" is_oidc_client_id
+  if [[ -n "$(env_value_or_empty "${env_file}" "OIDC_BACKCHANNEL_BASE_URL")" ]]; then
+    require_env_value_rule "${env_file}" "OIDC_BACKCHANNEL_BASE_URL" "an http(s) OIDC backchannel URL without query or fragment" is_oidc_issuer_url
+  fi
 
   require_value_regex "$(env_value_or_empty "${secrets_file}" "POSTGRES_APP_URL")" '^postgres(ql)?://' "POSTGRES_APP_URL must start with postgres:// or postgresql://"
   require_env_value_rule "${secrets_file}" "JUICEFS_META_URL" "postgres://user:password@host:port/db" is_juicefs_meta_url
