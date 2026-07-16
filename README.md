@@ -200,9 +200,11 @@ Self-hosted installs also write `app.env` with
 `AGENTSMITH_LITE_MODEL_BASE_URL_LOCAL`,
 `AGENTSMITH_LITE_MODEL_CA_CONFIG_MAP`, and
 `AGENTSMITH_LITE_MODEL_CA_CONFIG_KEY`, plus owner-only `app.secrets.env` with
-`AGENTSMITH_LITE_MODEL_API_KEY_LOCAL`. These are app overlay files, not
-substrate env keys. `OIDC_BOOTSTRAP_EMAIL` remains substrate-only and is never
-passed to the app runtime.
+`AGENTSMITH_LITE_MODEL_API_KEY_LOCAL` and a generated
+`APP_CREDENTIAL_ENCRYPTION_KEY`. Reinstalling with `--force` preserves that
+encryption key so stored endpoint credentials remain decryptable. These are app
+overlay files, not substrate env keys. `OIDC_BOOTSTRAP_EMAIL` remains
+substrate-only and is never passed to the app runtime.
 
 ## Main Commands
 

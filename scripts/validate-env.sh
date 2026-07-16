@@ -12,7 +12,7 @@ Usage: scripts/validate-env.sh --env out/substrate.env --secrets out/substrate.s
 Validates the AgentSmith Lite substrate env contract:
   - substrate.env may contain only non-secret config
   - substrate.secrets.env may contain only substrate/CSI secret keys
-  - secret values are never printed; stable fingerprints are printed instead
+  - secret values are never printed
 EOF_USAGE
 }
 

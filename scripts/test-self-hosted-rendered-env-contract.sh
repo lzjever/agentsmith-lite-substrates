@@ -54,6 +54,8 @@ require_line() {
 
 env_file="${output_dir}/substrate.env"
 secrets_file="${output_dir}/substrate.secrets.env"
+app_env_file="${output_dir}/app.env"
+app_secrets_file="${output_dir}/app.secrets.env"
 require_line "${env_file}" "KUBECONFIG_PATH=${config_dir}/out/kubeconfig"
 require_line "${env_file}" 'KUBE_CONTEXT=default'
 require_line "${env_file}" 'KUBE_NAMESPACE=agentsmith'
@@ -75,6 +77,23 @@ juicefs_meta_url="$(env_value "${secrets_file}" JUICEFS_META_URL)"
   || { printf 'expected local S3 secret key\n' >&2; exit 1; }
 [[ -n "$(env_value "${secrets_file}" OIDC_CLIENT_SECRET)" ]] \
   || { printf 'expected local OIDC client secret\n' >&2; exit 1; }
+
+credential_encryption_key="$(env_value "${app_secrets_file}" APP_CREDENTIAL_ENCRYPTION_KEY)"
+[[ "${credential_encryption_key}" =~ ^[A-Za-z0-9_-]{43}$ ]] \
+  || { printf 'expected a base64url-encoded 32-byte app credential encryption key\n' >&2; exit 1; }
+for non_secret_file in "${env_file}" "${app_env_file}"; do
+  ! grep -Fq 'APP_CREDENTIAL_ENCRYPTION_KEY=' "${non_secret_file}" \
+    || { printf 'app credential encryption key must not be written to %s\n' "${non_secret_file}" >&2; exit 1; }
+done
+! grep -Fq 'APP_CREDENTIAL_ENCRYPTION_KEY=' "${secrets_file}" \
+  || { printf 'app credential encryption key must stay in the app-owned secrets overlay\n' >&2; exit 1; }
+
+rerender_output="$(APP_CREDENTIAL_ENCRYPTION_KEY=operator-environment-must-not-rotate-existing-key \
+  write_env_contract_from_config "${config_file}" "${output_dir}" test true 2>&1)"
+[[ "$(env_value "${app_secrets_file}" APP_CREDENTIAL_ENCRYPTION_KEY)" == "${credential_encryption_key}" ]] \
+  || { printf 'expected app credential encryption key to survive repeated rendering\n' >&2; exit 1; }
+[[ "${rerender_output}" != *"${credential_encryption_key}"* ]] \
+  || { printf 'app credential encryption key must not be printed during rendering\n' >&2; exit 1; }
 
 contract_count="$(find "${output_dir}" -maxdepth 1 -type f -name 'substrate*.env' | wc -l | tr -d ' ')"
 [[ "${contract_count}" == '2' ]] \

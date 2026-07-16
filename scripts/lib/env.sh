@@ -415,17 +415,5 @@ validate_env_contract() {
   check_no_placeholder_values "${env_file}"
   check_no_placeholder_values "${secrets_file}"
 
-  info "secret boundary: app deploy may render only product-secret subset; S3_ACCESS_KEY, S3_SECRET_KEY, JUICEFS_META_URL, and KEYCLOAK_* are substrate scoped"
-  for key in POSTGRES_APP_URL APP_SESSION_SECRET S3_ACCESS_KEY S3_SECRET_KEY JUICEFS_META_URL BUILTIN_ADMIN_INITIAL_PASSWORD OIDC_CLIENT_SECRET OIDC_BOOTSTRAP_USERNAME OIDC_BOOTSTRAP_PASSWORD KEYCLOAK_DB_USER KEYCLOAK_DB_PASSWORD KEYCLOAK_DB_DATABASE KEYCLOAK_ADMIN_USERNAME KEYCLOAK_ADMIN_PASSWORD; do
-    if env_has_key "${secrets_file}" "${key}"; then
-      local value
-      value="$(env_value_or_empty "${secrets_file}" "${key}")"
-      if [[ -n "${value}" ]]; then
-        info "secret ${key} fingerprint=$(fingerprint_value "${value}")"
-      else
-        info "secret ${key} fingerprint=empty"
-      fi
-    fi
-  done
   info "validated substrate env contract: env=${env_file} secrets=${secrets_file}"
 }

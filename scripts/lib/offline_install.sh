@@ -110,17 +110,28 @@ offline_install_run_k3s_installer() {
   local cache_dir="$1"
   local env_file="$2"
   local output_dir="$3"
-  local install_script k3s_bin airgap_images bin_dir airgap_dir kubeconfig_path install_exec
+  local install_script cached_k3s_bin airgap_images cache_root stable_bin_dir stable_bin_root stable_k3s_bin staged_k3s_bin airgap_dir kubeconfig_path install_exec
   install_script="$(cache_relative_path "${cache_dir}" "scripts/install-k3s.sh" "k3s install script")"
-  k3s_bin="$(cache_relative_path "${cache_dir}" "bin/k3s" "k3s binary")"
+  cached_k3s_bin="$(cache_relative_path "${cache_dir}" "bin/k3s" "k3s binary")"
   airgap_images="$(cache_relative_path "${cache_dir}" "images/k3s/k3s-airgap-images-amd64.tar.zst" "k3s airgap images")"
-  bin_dir="$(dirname "${k3s_bin}")"
+  stable_bin_dir="${K3S_STABLE_BIN_DIR:-/usr/local/bin}"
+  [[ "${stable_bin_dir}" == /* ]] || die "K3S_STABLE_BIN_DIR must be an absolute path"
+  stable_k3s_bin="${stable_bin_dir}/k3s"
   airgap_dir="${K3S_AIRGAP_DIR:-/var/lib/rancher/k3s/agent/images}"
   kubeconfig_path="$(env_value_or_empty "${env_file}" KUBECONFIG_PATH)"
   [[ -n "${kubeconfig_path}" ]] || die "KUBECONFIG_PATH must be set for p1-real offline install; configure kubernetes.kubeconfigOutput or kubernetes.kubeconfigPath"
   install_exec="${INSTALL_K3S_EXEC:-server --write-kubeconfig ${kubeconfig_path} --write-kubeconfig-mode 600}"
 
   k3s_host_firewall_prepare
+  install -d -m 0755 "${stable_bin_dir}"
+  cache_root="$(cd "${cache_dir}" && pwd -P)"
+  stable_bin_root="$(cd "${stable_bin_dir}" && pwd -P)"
+  case "${stable_bin_root}" in
+    "${cache_root}"|"${cache_root}/"*) die "K3S_STABLE_BIN_DIR must not be inside the offline cache" ;;
+  esac
+  staged_k3s_bin="$(mktemp "${stable_bin_dir}/.k3s.XXXXXX")"
+  install -m 0755 "${cached_k3s_bin}" "${staged_k3s_bin}"
+  mv -f -- "${staged_k3s_bin}" "${stable_k3s_bin}"
   mkdir -p "${airgap_dir}"
   mkdir -p "$(dirname "${kubeconfig_path}")"
   cp -- "${airgap_images}" "${airgap_dir}/$(basename "${airgap_images}")"
@@ -128,9 +139,8 @@ offline_install_run_k3s_installer() {
   info "install-offline: running cached k3s installer"
   INSTALL_K3S_SKIP_DOWNLOAD=true \
     INSTALL_K3S_SKIP_SELINUX_RPM=true \
-    INSTALL_K3S_BIN_DIR="${bin_dir}" \
+    INSTALL_K3S_BIN_DIR="${stable_bin_dir}" \
     INSTALL_K3S_BIN_DIR_READ_ONLY=true \
-    K3S_BINARY_PATH="${k3s_bin}" \
     INSTALL_K3S_EXEC="${install_exec}" \
     "${install_script}"
 }

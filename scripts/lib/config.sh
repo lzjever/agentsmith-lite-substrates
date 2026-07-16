@@ -260,10 +260,17 @@ write_app_overlay_contract() {
   local install_path="$6"
   local app_env_file="${output_dir}/app.env"
   local app_secrets_file="${output_dir}/app.secrets.env"
-  local local_provider_api_key model_slug model_suffix model_base_url_env model_api_key_env model_base_url model_api_key old_umask
+  local local_provider_api_key credential_encryption_key model_slug model_suffix model_base_url_env model_api_key_env model_base_url model_api_key old_umask
 
   if ! local_provider_api_key="$(env_or_existing_nonempty_secret AGENTSMITH_LITE_MODEL_API_KEY_LOCAL "${existing_app_secrets_file}")"; then
     local_provider_api_key="$(random_secret)"
+  fi
+  credential_encryption_key=""
+  if [[ -n "${existing_app_secrets_file}" ]] && env_has_key "${existing_app_secrets_file}" APP_CREDENTIAL_ENCRYPTION_KEY; then
+    credential_encryption_key="$(env_value_or_empty "${existing_app_secrets_file}" APP_CREDENTIAL_ENCRYPTION_KEY)"
+  fi
+  if [[ -z "${credential_encryption_key}" ]]; then
+    credential_encryption_key="$(random_base64url_key)"
   fi
 
   model_slug="$(config_value "${config_file}" "modelProvider.endpointSlug" "")"
@@ -294,6 +301,7 @@ EOF_APP_ENV
   umask 077
   cat >"${app_secrets_file}" <<EOF_APP_SECRETS
 AGENTSMITH_LITE_MODEL_API_KEY_LOCAL=${local_provider_api_key}
+APP_CREDENTIAL_ENCRYPTION_KEY=${credential_encryption_key}
 EOF_APP_SECRETS
   if [[ -n "${model_slug}" ]]; then
     printf 'AGENTSMITH_LITE_MODEL_API_KEY_%s=%s\n' "${model_suffix}" "${model_api_key}" >>"${app_secrets_file}"

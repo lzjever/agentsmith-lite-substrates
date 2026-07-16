@@ -34,23 +34,6 @@ sha256_file() {
   fi
 }
 
-sha256_text() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    printf '%s' "$1" | sha256sum | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
-  else
-    die "sha256sum or shasum is required"
-  fi
-}
-
-fingerprint_value() {
-  local value="$1"
-  local digest
-  digest="$(sha256_text "${value}")"
-  printf 'sha256:%s' "${digest:0:12}"
-}
-
 file_mode() {
   local file="$1"
   if stat -c '%a' "${file}" >/dev/null 2>&1; then
@@ -67,6 +50,16 @@ random_secret() {
     openssl rand -hex 24
   else
     LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 48
+  fi
+}
+
+random_base64url_key() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
+  else
+    od -An -N32 -tu1 /dev/urandom \
+      | awk '{ for (i = 1; i <= NF; i++) printf "%c", $i }' \
+      | base64 | tr '+/' '-_' | tr -d '=\n'
   fi
 }
 

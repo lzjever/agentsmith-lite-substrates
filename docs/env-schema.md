@@ -92,6 +92,7 @@ permissions, requires `APP_SESSION_SECRET` to be at least 32 characters, and
 prints fingerprints only.
 
 Self-hosted installs write a separate owner-only `app.secrets.env` overlay with
-`AGENTSMITH_LITE_MODEL_API_KEY_LOCAL` for the substrate-owned local provider.
-The key is generated or reused from an existing `app.secrets.env` when
-reinstalling with `--force`.
+`AGENTSMITH_LITE_MODEL_API_KEY_LOCAL` for the substrate-owned local provider and
+a base64url-encoded 32-byte `APP_CREDENTIAL_ENCRYPTION_KEY` for product endpoint
+credentials. Both values are generated on first install and reused from the
+existing `app.secrets.env` when reinstalling with `--force`.

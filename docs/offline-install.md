@@ -205,7 +205,10 @@ split contract, and clearly skips cluster mutation in `--dry-run`.
 
 Without `--dry-run`, a P0 skeleton fails immediately as not installable. A
 p1-real cache normally runs the cached `scripts/install-k3s.sh` with offline
-download guards, runs the cached `scripts/import-images.sh`, renders the namespace
+download guards. Before invoking it, the installer copies the cached k3s binary
+to `/usr/local/bin/k3s`; the generated systemd service therefore remains valid
+after the offline cache is removed. It then runs the cached
+`scripts/import-images.sh`, renders the namespace
 bootstrap to `${output}/rendered/offline-install/namespace.yaml` with
 `metadata.name` set from `KUBE_NAMESPACE`, applies it with `bin/kubectl`,
 renders the JuiceFS CSI Secret plus StorageClass/PVC contract, renders
