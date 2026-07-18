@@ -121,6 +121,13 @@ render_local_ingress_tls_secret "${keycloak_tls_rendered}" "agentsmith-substrate
 render_keycloak_secret_manifest "${secret_rendered}"
 render_keycloak_deployment_manifest "${ROOT_DIR}/manifests/keycloak" "${tmp_dir}/keycloak.yaml" "quay.io/keycloak/keycloak@sha256:$(printf 'a%.0s' {1..64})"
 
+grep -A1 -F '          args:' "${tmp_dir}/keycloak.yaml" | grep -Fx '            - start' >/dev/null \
+  || die "Keycloak must run in production mode"
+grep -A5 -F '          resources:' "${tmp_dir}/keycloak.yaml" | grep -Fx '              memory: 2Gi' >/dev/null \
+  || die "Keycloak must have a 2Gi memory limit"
+grep -A1 -F '            - name: KC_CACHE' "${tmp_dir}/keycloak.yaml" | grep -Fx '              value: local' >/dev/null \
+  || die "single-node Keycloak must use its local cache"
+
 grep -Fx '    traefik.ingress.kubernetes.io/router.entrypoints: websecure' "${tmp_dir}/keycloak.yaml" >/dev/null \
   || die "self-hosted Keycloak Traefik ingress must only bind websecure"
 

@@ -31,7 +31,7 @@ spec:
           image: ${KEYCLOAK_IMAGE}
           imagePullPolicy: IfNotPresent
           args:
-            - start-dev
+            - start
           ports:
             - containerPort: 8080
               name: http
@@ -67,6 +67,8 @@ spec:
                   key: adminPassword
             - name: KC_HEALTH_ENABLED
               value: "true"
+            - name: KC_CACHE
+              value: local
             - name: KC_HTTP_ENABLED
               value: "true"
             - name: KC_HOSTNAME
@@ -78,6 +80,11 @@ spec:
               value: "true"
             - name: KC_PROXY_HEADERS
               value: xforwarded
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 2Gi
           readinessProbe:
             httpGet:
               path: /health/ready
